@@ -273,9 +273,10 @@ class AniBridgeConfig(BaseSettings):
         default=LogLevel.INFO, description="Logging level for the application"
     )
     mappings_url: str | None = Field(
-        default="https://raw.githubusercontent.com/anibridge/anibridge-mappings-staging/v3/mappings.json",
+        default="https://github.com/anibridge/anibridge-mappings/releases/latest/download/mappings.json.zst",
         description=(
             "URL to JSON or YAML file to use as the upstream mappings source. "
+            "Additionally accepts Zstandard compressed (.zst) files. "
             "If not set, no upstream mappings will be used."
         ),
     )

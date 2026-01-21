@@ -402,7 +402,7 @@ class AnimapClient:
         mappings = await self.mappings_client.load_mappings()
         provenance_by_descriptor = self.mappings_client.get_provenance()
 
-        descriptors, edges, provenance, invalid_count = self._build_edges(
+        descriptors, edges, provenance, _invalid_count = self._build_edges(
             mappings, provenance_by_descriptor
         )
         edge_list = tuple(edges.values())
@@ -573,10 +573,21 @@ class AnimapClient:
 
             self._build_cache_from_edges(edge_list, curr_mappings_hash)
 
+            existing_pairs = {
+                (src_id, dst_id) for src_id, dst_id, _, _ in existing_keys
+            }
+            new_pairs = {(src_id, dst_id) for src_id, dst_id, _, _ in new_keys}
+            removed_pairs = existing_pairs - new_pairs
+            created_pairs = new_pairs - existing_pairs
+            changed_pairs = {
+                (src_id, dst_id)
+                for src_id, dst_id, _, _ in (to_delete_mappings | to_insert_mappings)
+            }
+            updated_pairs = changed_pairs - removed_pairs - created_pairs
+
             log.success(
-                "Database sync complete: "
-                f"{len(to_delete_entries)} entries removed, "
-                f"{len(to_delete_mappings)} mappings removed, "
-                f"{invalid_count} invalid, "
-                f"{len(to_insert_entries)} inserted"
+                "Mappings database sync complete: "
+                f"{len(removed_pairs)} removed, "
+                f"{len(updated_pairs)} updated, "
+                f"{len(created_pairs)} created"
             )

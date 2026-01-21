@@ -20,6 +20,7 @@ from src.core.sync.base import BaseSyncClient, diff_snapshots
 from src.core.sync.stats import EntrySnapshot, ItemIdentifier
 from src.models.db.pin import Pin
 from src.models.db.sync_history import SyncHistory, SyncOutcome
+from src.utils.terminal import ARROW
 from tests.core.sync.fakes import (
     FakeAnimapClient,
     FakeLibraryMovie,
@@ -210,9 +211,10 @@ def test_format_diff_serializes_status_and_datetimes(
         ),
     }
     result = stub_client._format_diff(diff)
-    assert "status: current -> completed" in result
+    assert f"status: current {ARROW} completed" in result
     assert (
-        "finished_at: 2025-02-01T00:00:00+00:00 -> 2025-02-01T00:00:00+00:00" in result
+        "finished_at: 2025-02-01T00:00:00+00:00 "
+        f"{ARROW} 2025-02-01T00:00:00+00:00" in result
     )
 
 

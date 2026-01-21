@@ -55,6 +55,7 @@ dependencies = [
     "requests>=2.32.5",
     "ruamel-yaml>=0.18.16",
     "sqlalchemy>=2.0.45",
+    "zstandard>=0.25.0",
 ]
 
 [project.scripts]

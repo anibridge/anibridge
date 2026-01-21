@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import orjson
 import yaml
+import zstandard
 from yaml import CSafeLoader as YamlLoader
 
 from src import __version__, log
@@ -108,7 +109,25 @@ class MappingsClient:
 
     def _decode_mappings(self, payload: bytes, src: str) -> AnimapDict:
         """Decode a raw JSON/YAML payload from a given source."""
-        suffix = Path(src).suffix.lower()
+        suffixes = [suffix.lower() for suffix in Path(src).suffixes]
+        if suffixes and suffixes[-1] == ".zst":
+            try:
+                payload = zstandard.ZstdDecompressor().decompress(payload)
+                suffixes = suffixes[:-1]
+            except zstandard.ZstdError:
+                log.error(
+                    f"Error decompressing Zstandard payload $$'{src}'$$",
+                    exc_info=True,
+                )
+                return {}
+            except Exception:
+                log.error(
+                    f"Unexpected error decompressing Zstandard payload $$'{src}'$$",
+                    exc_info=True,
+                )
+                return {}
+
+        suffix = suffixes[-1] if suffixes else ""
         try:
             if suffix in {".yaml", ".yml"}:
                 return self._dict_str_keys(

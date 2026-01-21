@@ -296,3 +296,43 @@ def test_sync_db_skips_invalid_range_strings(
         ("1-6|2", "1-3|2,4-6|2"),
         ("2", "1,2"),
     }
+
+
+def test_sync_db_logs_distinct_mapping_changes(
+    animap_client: AnimapClient,
+    in_memory_db: AniBridgeDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sync log summarizes distinct mapping changes by source/target."""
+    initial_mappings = {
+        "anilist:1": {"tmdb:10": {"1": None}},
+        "anilist:2": {"tvdb:20": {"1-12": "1-12"}},
+        "anilist:3": {"tmdb:30": {"1": None}},
+    }
+    updated_mappings = {
+        "anilist:2": {"tvdb:20": {"1-13": "1-13"}},
+        "anilist:3": {"tmdb:30": {"1": None}},
+        "anilist:4": {"tmdb:40": {"1": None}},
+    }
+
+    fake_client = FakeMappingsClient(mappings=initial_mappings, provenance={})
+    animap_client.mappings_client = cast(MappingsClient, fake_client)
+
+    messages: list[str] = []
+
+    def _capture_success(*args, **kwargs) -> None:
+        if args:
+            messages.append(str(args[0]))
+
+    animap_module = importlib.import_module("src.core.animap")
+    monkeypatch.setattr(animap_module.log, "success", _capture_success)
+
+    asyncio.run(animap_client.sync_db())
+
+    fake_client.mappings = updated_mappings
+    asyncio.run(animap_client.sync_db())
+
+    assert messages
+    assert "1 removed" in messages[-1]
+    assert "1 updated" in messages[-1]
+    assert "1 created" in messages[-1]

@@ -119,7 +119,6 @@ def stub_client() -> StubSyncClient:
         library_provider=library_provider,
         list_provider=provider,
         animap_client=animap,
-        excluded_sync_fields=[],
         full_scan=False,
         destructive_sync=False,
         search_fallback_threshold=70,
@@ -166,47 +165,122 @@ def test_diff_snapshots_returns_changed_fields() -> None:
     }
 
 
-def test_comparison_helpers_cover_all_ops() -> None:
-    """Comparison helpers should evaluate each operator correctly."""
-    cmp_ne = BaseSyncClient._comparison("ne")
-    cmp_gt = BaseSyncClient._comparison("gt")
-    cmp_gte = BaseSyncClient._comparison("gte")
-    cmp_lt = BaseSyncClient._comparison("lt")
-    cmp_lte = BaseSyncClient._comparison("lte")
-
-    assert cmp_ne(1, 2) is True
-    assert cmp_gt(1, 2) is True
-    assert cmp_gte(2, 2) is True
-    assert cmp_lt(2, 1) is True
-    assert cmp_lte(2, 2) is True
-    assert cmp_ne(1, 1) is False
-
-    cmp_unknown = BaseSyncClient._comparison("noop")
-    assert cmp_unknown(1, 2) is False
-
-
 def test_should_update_field_respects_comparison_rules(
     stub_client: StubSyncClient,
 ) -> None:
-    """Field updates honor skip lists, comparison operators, and destructive mode."""
+    """Field updates honor skip lists and sync-field comparison rules."""
     skip_fields = {SyncField.STATUS.value}
-    status_rule = stub_client._FIELD_RULES[SyncField.STATUS]
-    progress_rule = stub_client._FIELD_RULES[SyncField.PROGRESS]
+    stub_client.sync_fields = {"progress": {"_lt": False}}
+
+    assert not stub_client._should_apply_field(SyncField.STATUS, 5, 4, skip_fields)
+
+    assert stub_client._should_apply_field(SyncField.PROGRESS, 5, 4, set())
+    assert not stub_client._should_apply_field(SyncField.PROGRESS, 3, 4, set())
+
+    stub_client.destructive_sync = True
+    assert stub_client._should_apply_field(SyncField.PROGRESS, 1, None, set())
+
+
+def test_should_update_field_blocks_status_value_via_sync_fields(
+    stub_client: StubSyncClient,
+) -> None:
+    """`sync_fields.status.<value>: false` should block that target status."""
+    stub_client.sync_fields = {"status": {"dropped": False}}
 
     assert not stub_client._should_apply_field(
-        SyncField.STATUS, status_rule, 5, 4, skip_fields
+        SyncField.STATUS,
+        ListStatus.DROPPED,
+        ListStatus.CURRENT,
+        set(),
     )
+
+
+def test_should_update_field_blocks_operator_via_sync_fields(
+    stub_client: StubSyncClient,
+) -> None:
+    """`sync_fields.<field>._lt: false` should block decreasing updates."""
+    stub_client.sync_fields = {"started_at": {"_gt": False}}
+
+    assert not stub_client._should_apply_field(
+        SyncField.STARTED_AT,
+        datetime(2025, 1, 2, tzinfo=UTC),
+        datetime(2025, 1, 1, tzinfo=UTC),
+        set(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rule_key", "new_value", "current_value"),
+    [
+        ("_lte", 4, 4),
+        ("_gte", 4, 4),
+        ("_eq", 4, 4),
+        ("_ne", 5, 4),
+    ],
+)
+def test_should_update_field_blocks_additional_operators(
+    stub_client: StubSyncClient,
+    rule_key: str,
+    new_value: int,
+    current_value: int,
+) -> None:
+    """Operator toggles should block updates that match their condition."""
+    stub_client.sync_fields = {"progress": {rule_key: False}}
+
+    assert not stub_client._should_apply_field(
+        SyncField.PROGRESS,
+        new_value,
+        current_value,
+        set(),
+    )
+
+
+def test_should_update_field_respects_boolean_field_disable(
+    stub_client: StubSyncClient,
+) -> None:
+    """`sync_fields.<field>: false` should block all writes for that field."""
+    stub_client.sync_fields = {"progress": False}
+
+    assert not stub_client._should_apply_field(
+        SyncField.PROGRESS,
+        10,
+        2,
+        set(),
+    )
+
+
+def test_should_update_field_operator_checks_ignore_none_comparisons(
+    stub_client: StubSyncClient,
+) -> None:
+    """Range operators should not block initial writes when one side is None."""
+    stub_client.sync_fields = {"progress": {"_lt": False, "_gt": False}}
 
     assert stub_client._should_apply_field(
-        SyncField.PROGRESS, progress_rule, 5, 4, set()
+        SyncField.PROGRESS,
+        1,
+        None,
+        set(),
     )
+
+
+def test_should_update_field_blocks_nulling_when_not_destructive(
+    stub_client: StubSyncClient,
+) -> None:
+    """Nulling an existing field should require destructive_sync."""
+    stub_client.destructive_sync = False
     assert not stub_client._should_apply_field(
-        SyncField.PROGRESS, progress_rule, 3, 4, set()
+        SyncField.REVIEW,
+        None,
+        "existing review",
+        set(),
     )
 
     stub_client.destructive_sync = True
     assert stub_client._should_apply_field(
-        SyncField.PROGRESS, progress_rule, 1, None, set()
+        SyncField.REVIEW,
+        None,
+        "existing review",
+        set(),
     )
 
 
@@ -277,6 +351,39 @@ async def test_sync_media_deletes_entry_when_destructive(
 
     assert outcome is SyncOutcome.DELETED
     assert provider.deleted_keys == ["200"]
+
+
+@pytest.mark.asyncio
+async def test_sync_media_skips_disabled_field_calculator(
+    stub_client: StubSyncClient,
+) -> None:
+    """Disabled sync_fields should skip invoking that field calculator."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    entry = FakeListEntry(
+        provider=provider,
+        key="205",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+        total_units=1,
+    )
+    entry.status = ListStatus.CURRENT
+    stub_client.sync_fields = {"review": False}
+
+    async def _boom_review(**kwargs):
+        raise AssertionError("review calculator should not be called")
+
+    stub_client._field_calculators[SyncField.REVIEW] = _boom_review
+
+    outcome = await stub_client.sync_media(
+        item=make_movie(),
+        child_item=make_movie(),
+        grandchild_items=(),
+        entry=cast(ListEntryProtocol, entry),
+        list_media_key="205",
+        mapping_descriptors=None,
+    )
+
+    assert outcome in (SyncOutcome.SKIPPED, SyncOutcome.SYNCED)
 
 
 @pytest.mark.asyncio

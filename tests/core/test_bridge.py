@@ -212,7 +212,7 @@ def _make_profile_config(**overrides: Any) -> SimpleNamespace:
         "list_provider": "fake",
         "library_provider_config": {},
         "list_provider_config": {},
-        "excluded_sync_fields": [],
+        "sync_fields": {},
         "full_scan": False,
         "destructive_sync": False,
         "search_fallback_threshold": -1,

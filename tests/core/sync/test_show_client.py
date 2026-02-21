@@ -43,7 +43,6 @@ def show_client() -> ShowSyncClient:
         library_provider=cast(Any, FakeLibraryProvider()),
         list_provider=cast(Any, FakeListProvider()),
         animap_client=cast(Any, FakeAnimapClient()),
-        excluded_sync_fields=[],
         full_scan=False,
         destructive_sync=False,
         search_fallback_threshold=80,

@@ -140,3 +140,9 @@ def test_get_profile_raises_for_unknown_name(
 
     with pytest.raises(ProfileNotFoundError):
         config.get_profile("missing")
+
+
+def test_sync_fields_rejects_unknown_operator() -> None:
+    """Unknown sync field operators should fail validation."""
+    with pytest.raises(ValueError):
+        AniBridgeProfileConfig(sync_fields={"status": {"_between": False}})

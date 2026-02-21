@@ -32,7 +32,6 @@ def movie_client() -> MovieSyncClient:
         library_provider=cast(LibraryProvider, FakeLibraryProvider()),
         list_provider=cast(ListProvider, FakeListProvider()),
         animap_client=cast(Any, FakeAnimapClient()),
-        excluded_sync_fields=[],
         full_scan=False,
         destructive_sync=False,
         search_fallback_threshold=75,

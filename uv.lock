@@ -209,7 +209,7 @@ wheels = [
 
 [[package]]
 name = "anibridge-plex-provider"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -219,9 +219,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "tzlocal" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/38/3e64d81abefc293cc92e44db4e3eceb05f3596542c01025c328d3539f5ff/anibridge_plex_provider-0.2.0b3.tar.gz", hash = "sha256:7e36216bc5f3c3d0e2841d51b04ef08a7f4edcdddc15adcf6c51e4b5d55ddf96", size = 14727, upload-time = "2026-02-21T00:27:46.798Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/2c/a903938be9b1801e400c989c7d111c720e4c19a4a2c81b420602d94a1dda/anibridge_plex_provider-0.2.0b4.tar.gz", hash = "sha256:47ac70805a72b0ada1a2ea08a5d3952edf4ab04b6f70a3e255acf84ef6fc826a", size = 14729, upload-time = "2026-02-21T01:11:59.739Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/36/c8ed71b1fa60c4b29960b265dbb029f9b8e1080a6e8043f92c9482c5530e/anibridge_plex_provider-0.2.0b3-py3-none-any.whl", hash = "sha256:d21445713b0b991c3f293dd072699f62fa7cf72bf23627247423c190dc76daf5", size = 17433, upload-time = "2026-02-21T00:27:45.707Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/aa/a90fd60bb18d844217ef2c53c08a0ab7423d079d11c32822b8fdf7d2f586/anibridge_plex_provider-0.2.0b4-py3-none-any.whl", hash = "sha256:46a872c3a6668e9d7b1dead433dca1f0f099f34d52bac7873604c5a5e95142cb", size = 17435, upload-time = "2026-02-21T01:11:58.914Z" },
 ]
 
 [[package]]

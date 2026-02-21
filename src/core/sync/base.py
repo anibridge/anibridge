@@ -1,10 +1,10 @@
 """Provider-agnostic base class for library/list synchronization."""
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from anibridge.library import LibraryEntry, LibraryProvider
 from anibridge.list import ListEntry, ListProvider, ListStatus, MappingDescriptor
@@ -49,14 +49,6 @@ def diff_snapshots(
 
 
 @dataclass(frozen=True)
-class FieldRule:
-    """Rule describing how to compare and write a specific sync field."""
-
-    attr: str
-    comparator: Callable[[Comparable | None, Comparable | None], bool]
-
-
-@dataclass(frozen=True, slots=True)
 class SyncTarget:
     """Resolved list target for a library media item."""
 
@@ -95,57 +87,32 @@ class BaseSyncClient[
 ](ABC):
     """Provider-agnostic base class for media synchronization."""
 
-    @staticmethod
-    def _comparison(op: str) -> Callable[[Comparable | None, Comparable | None], bool]:
-        def _compare(current: Comparable | None, new_value: Comparable | None) -> bool:
-            if current is None:
-                return new_value is not None
-            if new_value is None:
-                return False
-            match op:
-                case "ne":
-                    return new_value != current
-                case "gt":
-                    return new_value > current
-                case "gte":
-                    return new_value >= current
-                case "lt":
-                    return new_value < current
-                case "lte":
-                    return new_value <= current
-            return False
-
-        return _compare
-
-    _FIELD_RULES: ClassVar[dict[SyncField, FieldRule]] = {
-        SyncField.STATUS: FieldRule("status", _comparison("gte")),
-        SyncField.PROGRESS: FieldRule("progress", _comparison("gt")),
-        SyncField.REPEATS: FieldRule("repeats", _comparison("gt")),
-        SyncField.REVIEW: FieldRule("review", _comparison("ne")),
-        SyncField.USER_RATING: FieldRule("user_rating", _comparison("ne")),
-        SyncField.STARTED_AT: FieldRule("started_at", _comparison("lt")),
-        SyncField.FINISHED_AT: FieldRule("finished_at", _comparison("lt")),
-    }
-
     def __init__(
         self,
         *,
         library_provider: LibraryProvider,
         list_provider: ListProvider,
         animap_client: AnimapClient,
-        excluded_sync_fields: Sequence[SyncField],
         full_scan: bool,
         destructive_sync: bool,
         search_fallback_threshold: int,
         batch_requests: bool,
         dry_run: bool,
         profile_name: str,
+        sync_fields: Mapping[str, bool | Mapping[str, bool]] | None = None,
     ) -> None:
         """Initialize the base synchronisation client."""
         self.library_provider: LibraryProvider = library_provider
         self.list_provider: ListProvider = list_provider
         self.animap_client: AnimapClient = animap_client
-        self.excluded_sync_fields = {field.value for field in excluded_sync_fields}
+        self.sync_fields: dict[str, bool | dict[str, bool]] = {
+            str(field): (
+                bool(rules)
+                if isinstance(rules, bool)
+                else {str(rule): bool(enabled) for rule, enabled in rules.items()}
+            )
+            for field, rules in (sync_fields or {}).items()
+        }
         self.full_scan: bool = full_scan
         self.destructive_sync: bool = destructive_sync
         self.search_fallback_threshold: int = search_fallback_threshold
@@ -602,7 +569,7 @@ class BaseSyncClient[
         pinned_fields = self._get_pinned_fields(
             self.list_provider.NAMESPACE, resolved_list_key
         )
-        skip_fields = set(self.excluded_sync_fields) | set(pinned_fields)
+        skip_fields = set(pinned_fields)
 
         calc_kwargs = {
             "item": item,
@@ -662,25 +629,24 @@ class BaseSyncClient[
 
         considered_attrs: set[str] = set()
 
-        status_rule = self._FIELD_RULES[SyncField.STATUS]
         if self._should_apply_field(
             SyncField.STATUS,
-            status_rule,
             status_value,
             before_snapshot.status,
             skip_fields,
         ):
             entry.status = status_value
-        considered_attrs.add(status_rule.attr)
+        considered_attrs.add(SyncField.STATUS.value)
         final_status = entry.status
 
         for field in SyncField:
             if field == SyncField.STATUS:
                 continue
-
-            rule = self._FIELD_RULES[field]
             if field.value in skip_fields:
                 continue
+            if self.sync_fields.get(field.value) is False:
+                continue
+
             if final_status is None:
                 continue
             if (
@@ -693,14 +659,12 @@ class BaseSyncClient[
                 continue
 
             value = await self._field_calculators[field](**calc_kwargs)
-            current_value = getattr(entry, rule.attr)
-            if not self._should_apply_field(
-                field, rule, value, current_value, skip_fields
-            ):
+            current_value = getattr(entry, field.value)
+            if not self._should_apply_field(field, value, current_value, skip_fields):
                 continue
 
-            setattr(entry, rule.attr, value)
-            considered_attrs.add(rule.attr)
+            setattr(entry, field.value, value)
+            considered_attrs.add(field.value)
 
         after_snapshot = EntrySnapshot.from_entry(entry)
         diff = diff_snapshots(before_snapshot, after_snapshot, considered_attrs)
@@ -1097,19 +1061,50 @@ class BaseSyncClient[
     def _should_apply_field(
         self,
         field: SyncField,
-        rule: FieldRule,
         new_value: Comparable | None,
         current_value: Comparable | None,
         skip_fields: set[str],
     ) -> bool:
         """Determine whether a field should be updated based on its rule."""
-        if field.value in skip_fields:
+        if field.value in skip_fields or current_value == new_value:
             return False
-        if self.destructive_sync and new_value is not None:
+        if (
+            not self.destructive_sync
+            and current_value is not None
+            and new_value is None
+        ):
+            return False
+        return self._is_sync_field_allowed(field, current_value, new_value)
+
+    def _is_sync_field_allowed(
+        self,
+        field: SyncField,
+        current_value: Comparable | None,
+        new_value: Comparable | None,
+    ) -> bool:
+        """Check if syncing a field is allowed based on the sync_fields rules."""
+        rules = self.sync_fields.get(field.value)
+        if rules is None:
             return True
-        if current_value == new_value:
+        if isinstance(rules, bool):
+            return rules
+
+        if isinstance(new_value, ListStatus) and rules.get(new_value.value) is False:
             return False
-        return rule.comparator(current_value, new_value)
+
+        if current_value is not None and new_value is not None:
+            for key, blocked in (
+                ("_lt", new_value < current_value),
+                ("_lte", new_value <= current_value),
+                ("_gt", new_value > current_value),
+                ("_gte", new_value >= current_value),
+            ):
+                if rules.get(key, True) is False and blocked:
+                    return False
+
+        if rules.get("_eq", True) is False and new_value == current_value:
+            return False
+        return not (rules.get("_ne", True) is False and new_value != current_value)
 
     def _format_diff(self, diff: dict[str, tuple[Any, Any]]) -> str:
         """Format a diff dictionary for logging."""

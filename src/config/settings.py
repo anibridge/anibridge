@@ -194,9 +194,15 @@ class AniBridgeProfileConfig(BaseModel):
         default=False,
         description="Allow decreasing watch progress and removing list entries",
     )
-    excluded_sync_fields: list[SyncField] = Field(
-        default_factory=lambda: [SyncField.REVIEW, SyncField.USER_RATING],
-        description="Fields to exclude from synchronization",
+    sync_fields: dict[str, bool | dict[str, bool]] = Field(
+        default_factory=lambda: {
+            SyncField.REVIEW.value: False,
+            SyncField.USER_RATING.value: False,
+        },
+        description=(
+            "Per-field sync rules. Set a field to false to disable syncing it, "
+            "or define operator/value rules with a mapping."
+        ),
     )
     dry_run: bool = Field(
         default=False, description="Log changes without applying them"
@@ -212,8 +218,6 @@ class AniBridgeProfileConfig(BaseModel):
         ge=0,
         description=("Days to retain list backups before cleanup (0 disables cleanup)"),
     )
-
-    _parent: AniBridgeConfig | None = None
 
     @property
     def parent(self) -> AniBridgeConfig:
@@ -262,6 +266,47 @@ class AniBridgeProfileConfig(BaseModel):
                 global_value = getattr(self._parent.global_config, field)
                 setattr(self, field, global_value)
         return self
+
+    @model_validator(mode="after")
+    def normalize_sync_fields(self) -> AniBridgeProfileConfig:
+        """Normalize/validate `sync_fields` and absorb deprecated exclusions.
+
+        Returns:
+            AniBridgeProfileConfig: Self with normalized `sync_fields`.
+        """
+        normalized: dict[str, bool | dict[str, bool]] = {}
+        allowed_fields = {field.value for field in SyncField}
+        allowed_ops = {"_lt", "_lte", "_gt", "_gte", "_eq", "_ne"}
+
+        for field, raw_rules in self.sync_fields.items():
+            if field not in allowed_fields:
+                raise ValueError(f"sync_fields contains unknown field: '{field}'")
+
+            if isinstance(raw_rules, bool):
+                normalized[field] = raw_rules
+                continue
+
+            if not isinstance(raw_rules, dict):
+                raise ValueError(
+                    "sync_fields entries must be either booleans or mappings"
+                )
+
+            field_rules: dict[str, bool] = {}
+            for rule_key, rule_value in raw_rules.items():
+                if not isinstance(rule_value, bool):
+                    raise ValueError("sync_fields nested rules must be booleans")
+                if rule_key.startswith("_") and rule_key not in allowed_ops:
+                    raise ValueError(
+                        f"sync_fields.{field} contains unknown operator: '{rule_key}'"
+                    )
+                field_rules[str(rule_key)] = rule_value
+
+            normalized[field] = field_rules
+
+        self.sync_fields = normalized
+        return self
+
+    _parent: AniBridgeConfig | None = None
 
 
 class AniBridgeConfig(BaseSettings):

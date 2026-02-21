@@ -194,10 +194,10 @@ class AniBridgeProfileConfig(BaseModel):
         default=False,
         description="Allow decreasing watch progress and removing list entries",
     )
-    sync_fields: dict[str, bool | dict[str, bool]] = Field(
+    sync_fields: dict[SyncField, bool | dict[str, bool]] = Field(
         default_factory=lambda: {
-            SyncField.REVIEW.value: False,
-            SyncField.USER_RATING.value: False,
+            SyncField.REVIEW: False,
+            SyncField.USER_RATING: False,
         },
         description=(
             "Per-field sync rules. Set a field to false to disable syncing it, "
@@ -274,7 +274,7 @@ class AniBridgeProfileConfig(BaseModel):
         Returns:
             AniBridgeProfileConfig: Self with normalized `sync_fields`.
         """
-        normalized: dict[str, bool | dict[str, bool]] = {}
+        normalized: dict[SyncField, bool | dict[str, bool]] = {}
         allowed_fields = {field.value for field in SyncField}
         allowed_ops = {"_lt", "_lte", "_gt", "_gte", "_eq", "_ne"}
 

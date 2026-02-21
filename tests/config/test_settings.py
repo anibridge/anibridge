@@ -8,6 +8,7 @@ from pydantic import SecretStr
 from src.config.settings import (
     AniBridgeConfig,
     AniBridgeProfileConfig,
+    SyncField,
     find_yaml_config_file,
 )
 from src.exceptions import (
@@ -145,4 +146,4 @@ def test_get_profile_raises_for_unknown_name(
 def test_sync_fields_rejects_unknown_operator() -> None:
     """Unknown sync field operators should fail validation."""
     with pytest.raises(ValueError):
-        AniBridgeProfileConfig(sync_fields={"status": {"_between": False}})
+        AniBridgeProfileConfig(sync_fields={SyncField.STATUS: {"_between": False}})

@@ -470,6 +470,9 @@ class BaseSyncClient[
                 self.sync_stats.track_item(item_identifier, SyncOutcome.FAILED)
 
         if not found_match:
+            attempted_descriptors = tuple(
+                sorted(item.mapping_descriptors(), key=descriptor_key)
+            )
             log.warning(
                 "[%s] No list entries found for %s %s %s",
                 self.profile_name,
@@ -484,6 +487,17 @@ class BaseSyncClient[
                 snapshots=(None, None),
                 list_media_key=None,
                 outcome=SyncOutcome.NOT_FOUND,
+                info={
+                    "operation": "resolve_target",
+                    "reason": "no_matching_list_entry",
+                    "trackable_items": str(len(trackable)),
+                    "mapping_descriptor_count": str(len(attempted_descriptors)),
+                    "mapping_descriptors": ", ".join(
+                        descriptor_key(descriptor)
+                        for descriptor in attempted_descriptors
+                    ),
+                    "search_fallback_threshold": str(self.search_fallback_threshold),
+                },
             )
             if trackable:
                 self.sync_stats.track_items(trackable, SyncOutcome.NOT_FOUND)
@@ -570,6 +584,32 @@ class BaseSyncClient[
             self.list_provider.NAMESPACE, resolved_list_key
         )
         skip_fields = set(pinned_fields)
+        sync_fields_disabled = {
+            field_name
+            for field_name, rules in self.sync_fields.items()
+            if rules is False
+        }
+        pinned_blocked_fields: set[str] = set(skip_fields)
+        sync_rules_blocked: dict[str, str] = {}
+        status_gate_blocked: dict[str, str] = {}
+        destructive_blocked_fields: set[str] = set()
+        unchanged_fields: set[str] = set()
+
+        def mark_field_block(field_name: str, reason: str | None) -> None:
+            if reason is None:
+                return
+            if reason == "pinned":
+                pinned_blocked_fields.add(field_name)
+                return
+            if reason == "unchanged":
+                unchanged_fields.add(field_name)
+                return
+            if reason == "destructive_disabled":
+                destructive_blocked_fields.add(field_name)
+                return
+            if reason.startswith("sync_rules"):
+                _, _, detail = reason.partition(":")
+                sync_rules_blocked[field_name] = detail
 
         calc_kwargs = {
             "item": item,
@@ -615,6 +655,16 @@ class BaseSyncClient[
                     list_media_key=resolved_list_key,
                     mapping_descriptors=mapping_descriptors,
                     outcome=SyncOutcome.DELETED,
+                    info={
+                        "operation": "delete_entry",
+                        "reason": "status_resolved_to_none",
+                        "destructive_sync": self.destructive_sync,
+                        "sync_fields_disabled": sorted(sync_fields_disabled),
+                        "pinned_fields": ", ".join(sorted(skip_fields))
+                        if skip_fields
+                        else "",
+                        "mapping_descriptor_count": len(mapping_descriptors or ()),
+                    },
                 )
                 return SyncOutcome.DELETED
 
@@ -629,13 +679,16 @@ class BaseSyncClient[
 
         considered_attrs: set[str] = set()
 
-        if self._should_apply_field(
+        status_should_apply, status_reason = self._should_apply_field_with_reason(
             SyncField.STATUS,
             status_value,
             before_snapshot.status,
             skip_fields,
-        ):
+        )
+        if status_should_apply:
             entry.status = status_value
+        else:
+            mark_field_block(SyncField.STATUS.value, status_reason)
         considered_attrs.add(SyncField.STATUS.value)
         final_status = entry.status
 
@@ -643,24 +696,36 @@ class BaseSyncClient[
             if field == SyncField.STATUS:
                 continue
             if field.value in skip_fields:
+                pinned_blocked_fields.add(field.value)
                 continue
             if self.sync_fields.get(field.value) is False:
+                sync_fields_disabled.add(field.value)
                 continue
 
             if final_status is None:
+                status_gate_blocked[field.value] = "status_unset"
                 continue
             if (
                 field
                 in (SyncField.USER_RATING, SyncField.REPEATS, SyncField.FINISHED_AT)
                 and final_status < ListStatus.COMPLETED
             ):
+                status_gate_blocked[field.value] = "requires_completed"
                 continue
             if field == SyncField.STARTED_AT and final_status <= ListStatus.PLANNING:
+                status_gate_blocked[field.value] = "requires_active_status"
                 continue
 
             value = await self._field_calculators[field](**calc_kwargs)
             current_value = getattr(entry, field.value)
-            if not self._should_apply_field(field, value, current_value, skip_fields):
+            should_apply, apply_reason = self._should_apply_field_with_reason(
+                field,
+                value,
+                current_value,
+                skip_fields,
+            )
+            if not should_apply:
+                mark_field_block(field.value, apply_reason)
                 continue
 
             setattr(entry, field.value, value)
@@ -668,6 +733,30 @@ class BaseSyncClient[
 
         after_snapshot = EntrySnapshot.from_entry(entry)
         diff = diff_snapshots(before_snapshot, after_snapshot, considered_attrs)
+        sync_diagnostics = self._normalize_history_info(
+            {
+                "computed_status": status_value,
+                "final_status": final_status,
+                "sync_fields_disabled": sorted(sync_fields_disabled),
+                "pinned_blocked": sorted(pinned_blocked_fields),
+                "sync_rules_blocked": [
+                    f"{field_name}({rule_name})"
+                    if rule_name
+                    else field_name
+                    for field_name, rule_name in sorted(sync_rules_blocked.items())
+                ],
+                "status_gate_blocked": [
+                    f"{field_name}({rule_name})"
+                    if rule_name
+                    else field_name
+                    for field_name, rule_name in sorted(status_gate_blocked.items())
+                ],
+                "destructive_blocked": sorted(destructive_blocked_fields),
+                "unchanged_fields": sorted(unchanged_fields),
+                "considered_fields": sorted(considered_attrs),
+                "applied_fields": sorted(diff.keys()),
+            }
+        )
 
         if not diff:
             log.info(
@@ -693,15 +782,24 @@ class BaseSyncClient[
             entry=entry,
             list_media_key=resolved_list_key,
             mapping_descriptors=tuple(mapping_descriptors or ()),
+            diagnostics=sync_diagnostics,
         )
 
         diff_str = self._format_diff(diff)
-        return await self._apply_update(plan, diff_str, debug_title, debug_ids)
+        diff_fields = tuple(sorted(diff.keys()))
+        return await self._apply_update(
+            plan,
+            diff_str,
+            diff_fields,
+            debug_title,
+            debug_ids,
+        )
 
     async def _apply_update(
         self,
         plan: BatchUpdate[ParentMediaT, ChildMediaT],
         diff_str: str,
+        diff_fields: Sequence[str],
         debug_title: str,
         debug_ids: str,
     ) -> SyncOutcome:
@@ -747,6 +845,14 @@ class BaseSyncClient[
                 list_media_key=plan.list_media_key,
                 mapping_descriptors=plan.mapping_descriptors,
                 outcome=SyncOutcome.SYNCED,
+                info={
+                    **plan.diagnostics,
+                    "operation": "update_entry",
+                    "mode": "single",
+                    "changed_fields": ", ".join(diff_fields),
+                    "change_count": str(len(diff_fields)),
+                    "diff": diff_str,
+                },
             )
             return SyncOutcome.SYNCED
         except Exception as exc:
@@ -771,6 +877,15 @@ class BaseSyncClient[
                 mapping_descriptors=plan.mapping_descriptors,
                 outcome=SyncOutcome.FAILED,
                 error_message=str(exc),
+                info={
+                    **plan.diagnostics,
+                    "operation": "update_entry",
+                    "mode": "single",
+                    "changed_fields": ", ".join(diff_fields),
+                    "change_count": str(len(diff_fields)),
+                    "diff": diff_str,
+                    "error_type": type(exc).__name__,
+                },
             )
             raise
 
@@ -830,6 +945,18 @@ class BaseSyncClient[
                 entry.media().key for entry in updated if entry is not None
             }
             for update in self._pending_updates:
+                diff = diff_snapshots(
+                    update.before,
+                    update.after,
+                    set(update.after.to_dict().keys()),
+                )
+                diff_fields = tuple(sorted(diff.keys()))
+                diff_str = self._format_diff(diff)
+                outcome = (
+                    SyncOutcome.SYNCED
+                    if update.after.media_key in updated_list_keys
+                    else SyncOutcome.FAILED
+                )
                 await self._create_sync_history(
                     item=update.item,
                     child_item=update.child,
@@ -837,9 +964,15 @@ class BaseSyncClient[
                     snapshots=(update.before, update.after),
                     list_media_key=update.list_media_key,
                     mapping_descriptors=update.mapping_descriptors,
-                    outcome=SyncOutcome.SYNCED
-                    if update.after.media_key in updated_list_keys
-                    else SyncOutcome.FAILED,
+                    outcome=outcome,
+                    info={
+                        **update.diagnostics,
+                        "operation": "update_entry",
+                        "mode": "batch",
+                        "changed_fields": ", ".join(diff_fields),
+                        "change_count": str(len(diff_fields)),
+                        "diff": diff_str,
+                    },
                 )
             log.success(
                 "[%s] Batch sync completed for %s items with %s failures",
@@ -851,6 +984,13 @@ class BaseSyncClient[
             log.error("Batch sync failed: %s", exc)
             log.exception("Batch sync error details")
             for update in self._pending_updates:
+                diff = diff_snapshots(
+                    update.before,
+                    update.after,
+                    set(update.after.to_dict().keys()),
+                )
+                diff_fields = tuple(sorted(diff.keys()))
+                diff_str = self._format_diff(diff)
                 await self._create_sync_history(
                     item=update.item,
                     child_item=update.child,
@@ -860,10 +1000,63 @@ class BaseSyncClient[
                     mapping_descriptors=update.mapping_descriptors,
                     outcome=SyncOutcome.FAILED,
                     error_message=str(exc),
+                    info={
+                        **update.diagnostics,
+                        "operation": "update_entry",
+                        "mode": "batch",
+                        "changed_fields": ", ".join(diff_fields),
+                        "change_count": str(len(diff_fields)),
+                        "diff": diff_str,
+                        "error_type": type(exc).__name__,
+                    },
                 )
             raise
         finally:
             self._pending_updates.clear()
+
+    @staticmethod
+    def _stringify_history_info_value(value: Any) -> str | None:
+        """Convert supported values into non-empty strings."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, datetime):
+            dt = value
+            dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+            return dt.isoformat()
+        if isinstance(value, ListStatus):
+            return value.value
+        if isinstance(value, (list, tuple, set)):
+            values = [
+                serialized
+                for serialized in (
+                    BaseSyncClient._stringify_history_info_value(item)
+                    for item in value
+                )
+                if serialized
+            ]
+            return ", ".join(values) if values else None
+        text = str(value).strip()
+        return text or None
+
+    def _normalize_history_info(
+        self,
+        payload: Mapping[str, Any] | None,
+    ) -> dict[str, str]:
+        """Normalize history metadata to a flat string dictionary."""
+        if not payload:
+            return {}
+        normalized: dict[str, str] = {}
+        for key, value in payload.items():
+            normalized_key = str(key).strip()
+            if not normalized_key:
+                continue
+            normalized_value = self._stringify_history_info_value(value)
+            if normalized_value is None:
+                continue
+            normalized[normalized_key] = normalized_value
+        return normalized
 
     async def _create_sync_history(
         self,
@@ -876,6 +1069,7 @@ class BaseSyncClient[
         mapping_descriptors: Sequence[MappingDescriptor] | None = None,
         outcome: SyncOutcome,
         error_message: str | None = None,
+        info: Mapping[str, Any] | None = None,
     ) -> None:
         """Record the outcome of a sync attempt."""
         before_snapshot, after_snapshot = snapshots
@@ -898,6 +1092,50 @@ class BaseSyncClient[
         library_media_key = str(library_target.key)
         list_namespace = self.list_provider.NAMESPACE
         media_kind = library_target.media_kind
+        mapping_target_descriptors = sorted(
+            set(mapping_descriptors or ()),
+            key=descriptor_key,
+        )
+
+        changed_fields: tuple[str, ...] = tuple()
+        if before_snapshot or after_snapshot:
+            candidate_fields = set()
+            if before_snapshot:
+                candidate_fields.update(before_snapshot.to_dict().keys())
+            if after_snapshot:
+                candidate_fields.update(after_snapshot.to_dict().keys())
+            changed_fields = tuple(
+                sorted(
+                    diff_snapshots(
+                        before_snapshot,
+                        after_snapshot,
+                        candidate_fields,
+                    )
+                )
+            )
+
+        base_info = self._normalize_history_info(
+            {
+                "outcome": outcome.value,
+                "library_section_key": library_section_key,
+                "library_media_key": library_media_key,
+                "list_media_key": resolved_list_media_key,
+                "mapping_targets": [
+                    descriptor_key(descriptor)
+                    for descriptor in mapping_target_descriptors
+                ],
+                "mapping_count": len(mapping_target_descriptors),
+                "grandchild_count": len(grandchild_items or ()),
+                "before_status": before_snapshot.status if before_snapshot else None,
+                "after_status": after_snapshot.status if after_snapshot else None,
+                "changed_fields": changed_fields,
+            }
+        )
+        extra_info = self._normalize_history_info(info)
+        history_info = {
+            **base_info,
+            **extra_info,
+        }
 
         with db() as ctx:
             if outcome == SyncOutcome.SYNCED:
@@ -949,12 +1187,16 @@ class BaseSyncClient[
                     )
                 existing = ctx.session.query(SyncHistory).filter(*filters).first()
                 if existing:
-                    if existing.error_message == error_message:
+                    if (
+                        existing.error_message == error_message
+                        and (existing.info or {}) == history_info
+                    ):
                         # If we're just seeing the same error, don't bring the record
                         # forward by updating the timestamp
                         return
                     existing.before_state = before_state
                     existing.after_state = after_state
+                    existing.info = history_info
                     existing.error_message = error_message
                     existing.timestamp = datetime.now(UTC)
                     existing.animap_entry_id = mapping_entry_id
@@ -973,6 +1215,7 @@ class BaseSyncClient[
                 outcome=outcome,
                 before_state=before_state,
                 after_state=after_state,
+                info=history_info,
                 error_message=error_message,
             )
             ctx.session.add(history_record)
@@ -1072,15 +1315,42 @@ class BaseSyncClient[
         skip_fields: set[str],
     ) -> bool:
         """Determine whether a field should be updated based on its rule."""
-        if field.value in skip_fields or current_value == new_value:
-            return False
+        should_apply, _ = self._should_apply_field_with_reason(
+            field,
+            new_value,
+            current_value,
+            skip_fields,
+        )
+        return should_apply
+
+    def _should_apply_field_with_reason(
+        self,
+        field: SyncField,
+        new_value: Comparable | None,
+        current_value: Comparable | None,
+        skip_fields: set[str],
+    ) -> tuple[bool, str | None]:
+        """Return whether field should be applied and a diagnostic reason."""
+        if field.value in skip_fields:
+            return False, "pinned"
+        if current_value == new_value:
+            return False, "unchanged"
         if (
             not self.destructive_sync
             and current_value is not None
             and new_value is None
         ):
-            return False
-        return self._is_sync_field_allowed(field, current_value, new_value)
+            return False, "destructive_disabled"
+        allowed, rule_reason = self._is_sync_field_allowed_with_reason(
+            field,
+            current_value,
+            new_value,
+        )
+        if allowed:
+            return True, "applied"
+        return False, (
+            f"sync_rules:{rule_reason}" if rule_reason is not None else "sync_rules"
+        )
 
     def _is_sync_field_allowed(
         self,
@@ -1089,14 +1359,28 @@ class BaseSyncClient[
         new_value: Comparable | None,
     ) -> bool:
         """Check if syncing a field is allowed based on the sync_fields rules."""
+        allowed, _ = self._is_sync_field_allowed_with_reason(
+            field,
+            current_value,
+            new_value,
+        )
+        return allowed
+
+    def _is_sync_field_allowed_with_reason(
+        self,
+        field: SyncField,
+        current_value: Comparable | None,
+        new_value: Comparable | None,
+    ) -> tuple[bool, str | None]:
+        """Check if sync_fields allows this update and return blocking rule."""
         rules = self.sync_fields.get(field.value)
         if rules is None:
-            return True
+            return True, None
         if isinstance(rules, bool):
-            return rules
+            return rules, "disabled" if not rules else None
 
         if isinstance(new_value, ListStatus) and rules.get(new_value.value) is False:
-            return False
+            return False, new_value.value
 
         if current_value is not None and new_value is not None:
             for key, blocked in (
@@ -1106,11 +1390,13 @@ class BaseSyncClient[
                 ("_gte", new_value >= current_value),
             ):
                 if rules.get(key, True) is False and blocked:
-                    return False
+                    return False, key
 
         if rules.get("_eq", True) is False and new_value == current_value:
-            return False
-        return not (rules.get("_ne", True) is False and new_value != current_value)
+            return False, "_eq"
+        if rules.get("_ne", True) is False and new_value != current_value:
+            return False, "_ne"
+        return True, None
 
     def _format_diff(self, diff: dict[str, tuple[Any, Any]]) -> str:
         """Format a diff dictionary for logging."""

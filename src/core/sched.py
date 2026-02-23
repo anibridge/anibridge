@@ -53,17 +53,18 @@ class ProfileScheduler:
         self._sync_lock = asyncio.Lock()
         self._current_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()  # Prevents early GC
+        self._worker_task: asyncio.Task | None = None
 
-    async def sync(
+        self._pending_lock = asyncio.Lock()
+        self._pending_poll = False
+        self._pending_library_keys: set[str] | None = set()
+        self._pending_waiters: list[asyncio.Future[None]] = []
+        self._pending_event = asyncio.Event()
+
+    async def _execute_sync(
         self, poll: bool = False, library_keys: Sequence[str] | None = None
     ) -> None:
-        """Execute a single synchronization cycle with error handling.
-
-        Args:
-            poll (bool): Flag to enable polling-based sync.
-            library_keys (Sequence[str] | None): Sequence of library media keys to
-                restrict the sync scope.
-        """
+        """Execute a single synchronization cycle with error handling."""
         async with self._sync_lock:
             try:
                 self._current_task = asyncio.create_task(
@@ -89,12 +90,124 @@ class ProfileScheduler:
             finally:
                 self._current_task = None
 
+    async def _enqueue_sync(
+        self, poll: bool = False, library_keys: Sequence[str] | None = None
+    ) -> asyncio.Future[None]:
+        """Queue a sync request for the profile worker."""
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        normalized_keys = None if library_keys is None else set(library_keys)
+        async with self._pending_lock:
+            if not self._pending_waiters:
+                self._pending_poll = poll
+            else:
+                self._pending_poll = self._pending_poll and poll
+
+            if normalized_keys is None:
+                self._pending_library_keys = None
+            elif self._pending_library_keys is not None:
+                self._pending_library_keys.update(normalized_keys)
+            self._pending_waiters.append(future)
+            self._pending_event.set()
+
+        return future
+
+    async def _drain_pending(
+        self,
+    ) -> tuple[bool, list[str] | None, list[asyncio.Future[None]]]:
+        """Take a snapshot of pending sync requests and clear state."""
+        async with self._pending_lock:
+            poll = self._pending_poll
+            pending_keys = self._pending_library_keys
+            waiters = self._pending_waiters
+
+            self._pending_poll = False
+            self._pending_library_keys = set()
+            self._pending_waiters = []
+            self._pending_event.clear()
+
+        library_keys = None if pending_keys is None else list(pending_keys)
+        return poll, library_keys, waiters
+
+    async def _fail_pending(self, exc: Exception | BaseException) -> None:
+        """Fail all pending sync futures with an exception."""
+        async with self._pending_lock:
+            waiters = self._pending_waiters
+            self._pending_waiters = []
+            self._pending_poll = False
+            self._pending_library_keys = set()
+            self._pending_event.clear()
+
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_exception(exc)
+
+    async def _sync_worker(self) -> None:
+        """Process sync requests sequentially for this profile."""
+        try:
+            while self._running and not self.stop_event.is_set():
+                wait_task = asyncio.create_task(self.stop_event.wait())
+                event_task = asyncio.create_task(self._pending_event.wait())
+                done, pending = await asyncio.wait(
+                    {wait_task, event_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+                if wait_task in done and self.stop_event.is_set():
+                    break
+                if event_task not in done:
+                    continue
+
+                poll, library_keys, waiters = await self._drain_pending()
+                try:
+                    await self._execute_sync(poll=poll, library_keys=library_keys)
+                except asyncio.CancelledError:
+                    for waiter in waiters:
+                        if not waiter.done():
+                            waiter.cancel()
+                    raise
+                except Exception as exc:
+                    for waiter in waiters:
+                        if not waiter.done():
+                            waiter.set_exception(exc)
+                else:
+                    for waiter in waiters:
+                        if not waiter.done():
+                            waiter.set_result(None)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await self._fail_pending(asyncio.CancelledError())
+
+    async def sync(
+        self, poll: bool = False, library_keys: Sequence[str] | None = None
+    ) -> None:
+        """Execute a single synchronization cycle with error handling.
+
+        Args:
+            poll (bool): Flag to enable polling-based sync.
+            library_keys (Sequence[str] | None): Sequence of library media keys to
+                restrict the sync scope.
+        """
+        if not self._running or self._worker_task is None:
+            await self._execute_sync(poll=poll, library_keys=library_keys)
+            return
+
+        future = await self._enqueue_sync(poll=poll, library_keys=library_keys)
+        await future
+
     async def start(self) -> None:
         """Start the profile scheduler."""
         if self._running:
             return
 
         self._running = True
+        self._worker_task = asyncio.create_task(self._sync_worker())
+
         if ScanMode.PERIODIC in self.scan_modes:
             self._spawn_loop(
                 name="periodic",
@@ -120,6 +233,13 @@ class ProfileScheduler:
 
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        worker_task = self._worker_task
+        if worker_task and not worker_task.done():
+            worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker_task
+        self._worker_task = None
 
         current_task = self._current_task
         if current_task and not current_task.done():
@@ -258,6 +378,9 @@ class SchedulerClient:
         """Start all profile schedulers and global tasks."""
         if self._running:
             return
+
+        if self.stop_event.is_set():
+            self.stop_event = asyncio.Event()
 
         self._running = True
 

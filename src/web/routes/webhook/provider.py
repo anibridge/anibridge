@@ -52,6 +52,7 @@ async def provider_webhook(
                     profile_name=profile_name,
                     poll=False,
                     library_keys=library_keys,
+                    source="webhook:provider",
                 ),
                 name=f"webhook_sync:{profile_name}",
             )

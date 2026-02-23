@@ -1,6 +1,7 @@
 """Tests for scheduler components."""
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -344,10 +345,16 @@ async def test_scheduler_trigger_sync(
 
     class StubScheduler:
         def __init__(self) -> None:
-            self.calls: list[tuple[bool, list[str] | None]] = []
+            self.calls: list[tuple[bool, list[str] | None, str]] = []
 
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            self.calls.append((poll, library_keys))
+        async def sync(
+            self,
+            *,
+            poll: bool = False,
+            library_keys=None,
+            source: str = "manual",
+        ) -> None:
+            self.calls.append((poll, library_keys, source))
 
     cast(dict[str, Any], scheduler.profile_schedulers)["one"] = StubScheduler()
     cast(dict[str, Any], scheduler.profile_schedulers)["two"] = StubScheduler()
@@ -355,17 +362,75 @@ async def test_scheduler_trigger_sync(
     await scheduler.trigger_sync(profile_name="one", poll=True, library_keys=["x"])
 
     assert cast(StubScheduler, scheduler.profile_schedulers["one"]).calls == [
-        (True, ["x"])
+        (True, ["x"], "manual")
     ]
 
     await scheduler.trigger_sync(poll=False, library_keys=None)
 
     assert cast(StubScheduler, scheduler.profile_schedulers["two"]).calls == [
-        (False, None)
+        (False, None, "manual")
     ]
 
     with pytest.raises(ProfileNotFoundError):
         await scheduler.trigger_sync(profile_name="missing")
+
+
+@pytest.mark.asyncio
+async def test_profile_scheduler_metrics_include_pending_and_last_sources() -> None:
+    """Runtime metrics should expose mailbox state and source attribution."""
+
+    class Bridge:
+        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
+            return None
+
+    scheduler = ProfileScheduler(
+        profile_name="default",
+        bridge_client=cast("sched_module.BridgeClient", Bridge()),
+        scan_interval=1,
+        scan_modes=[],
+        poll_interval=1,
+    )
+
+    await scheduler.sync(source="test:manual")
+    metrics = await scheduler.get_runtime_metrics()
+
+    assert metrics["last_sync_sources"] == ["test:manual"]
+    assert metrics["requests_total"] == 0
+    assert metrics["requests_rejected"] == 0
+
+
+@pytest.mark.asyncio
+async def test_profile_scheduler_rejects_when_pending_waiters_full() -> None:
+    """Enqueue should reject when pending waiters exceed configured limit."""
+
+    class Bridge:
+        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
+            return None
+
+    scheduler = ProfileScheduler(
+        profile_name="default",
+        bridge_client=cast("sched_module.BridgeClient", Bridge()),
+        scan_interval=1,
+        scan_modes=[],
+        poll_interval=1,
+        max_pending_waiters=1,
+    )
+    scheduler._running = True
+    scheduler._worker_task = asyncio.create_task(asyncio.sleep(10))
+
+    first = await scheduler._enqueue_sync(source="test:first")
+    assert not first.done()
+
+    with pytest.raises(sched_module.SchedulerUnavailableError):
+        await scheduler._enqueue_sync(source="test:second")
+
+    metrics = await scheduler.get_runtime_metrics()
+    assert metrics["requests_total"] == 1
+    assert metrics["requests_rejected"] == 1
+
+    scheduler._worker_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await scheduler._worker_task
 
 
 def test_scheduler_get_next_database_sync_at(tmp_path: Path) -> None:

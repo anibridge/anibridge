@@ -536,7 +536,10 @@ class HistoryService:
 
         schedule_task(
             scheduler.trigger_sync(
-                profile, poll=False, library_keys=[row.library_media_key]
+                profile,
+                poll=False,
+                library_keys=[row.library_media_key],
+                source="history:retry_item",
             ),
             name=f"retry_history_item:{profile}:{item_id}",
         )

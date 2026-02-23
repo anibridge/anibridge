@@ -45,6 +45,7 @@ class HistoryItem(BaseModel):
     outcome: str
     before_state: dict | None = None
     after_state: dict | None = None
+    info: dict[str, str] | None = None
     error_message: str | None = None
     timestamp: str
     library_media: ProviderMediaMetadata | None = None
@@ -161,6 +162,7 @@ class HistoryService:
                     outcome=str(row.outcome),
                     before_state=row.before_state,
                     after_state=row.after_state,
+                    info=row.info,
                     error_message=row.error_message,
                     timestamp=row.timestamp.isoformat(),
                     library_media=library_metadata,
@@ -476,6 +478,11 @@ class HistoryService:
                 await list_provider.update_entry(before_snapshot.media_key, entry)
 
         with db() as ctx:
+            source_info = {
+                str(key): str(value)
+                for key, value in (row.info or {}).items()
+                if str(key).strip() and value is not None
+            }
             undo_row = SyncHistory(
                 profile_name=row.profile_name,
                 library_namespace=row.library_namespace,
@@ -488,6 +495,12 @@ class HistoryService:
                 outcome=SyncOutcome.UNDONE,
                 before_state=row.after_state,
                 after_state=row.before_state,
+                info={
+                    **source_info,
+                    "operation": "undo",
+                    "source_history_id": str(row.id),
+                    "source_outcome": str(row.outcome),
+                },
             )
             ctx.session.add(undo_row)
             ctx.session.commit()

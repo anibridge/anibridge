@@ -59,6 +59,9 @@ class SyncHistory(Base):
     after_state: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, default=dict, nullable=True
     )
+    info: Mapped[dict[str, str] | None] = mapped_column(
+        JSON, default=dict, nullable=True
+    )
 
     error_message: Mapped[str | None] = mapped_column(
         String, default=None, nullable=True

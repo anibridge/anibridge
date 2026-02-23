@@ -43,6 +43,7 @@ class ProfileStatusModel(BaseModel):
 
 class StatusResponse(BaseModel):
     profiles: dict[str, ProfileStatusModel]
+    scheduler: dict | None = None
 
 
 router = APIRouter()
@@ -57,8 +58,9 @@ async def status() -> StatusResponse:
     """
     scheduler = get_app_state().scheduler
     if not scheduler:
-        return StatusResponse(profiles={})
+        return StatusResponse(profiles={}, scheduler=None)
     raw = await scheduler.get_status()
+    runtime_metrics = await scheduler.get_runtime_metrics()
     converted: dict[str, ProfileStatusModel] = {}
     for name, data in raw.items():
         cfg = data.get("config", {})
@@ -66,4 +68,4 @@ async def status() -> StatusResponse:
         converted[name] = ProfileStatusModel(
             config=ProfileConfigModel(**cfg), status=ProfileRuntimeStatusModel(**st)
         )
-    return StatusResponse(profiles=converted)
+    return StatusResponse(profiles=converted, scheduler=runtime_metrics)

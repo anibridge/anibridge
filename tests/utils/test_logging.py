@@ -76,13 +76,13 @@ def test_logger_prefixes_class_name():
 
     Sample(logger).run()
 
-    assert captured and captured[0] == "Sample: hello"
+    assert captured and captured[0] == "Sample - hello"
 
 
 def test_logger_prefixes_classmethod_calls():
-    """Logger should prefix classmethod calls using the cls variable."""
+    """Logger should prefix classmethod calls using the cls variable when debug."""
     logger = Logger("test")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     captured: list[str] = []
 
     class CaptureHandler(logging.Handler):
@@ -100,7 +100,7 @@ def test_logger_prefixes_classmethod_calls():
 
     Sample.run()
 
-    assert captured and captured[0] == "Sample: clazz"
+    assert captured and captured[0] == "Sample - clazz"
 
 
 def test_logger_success_level_records_message():

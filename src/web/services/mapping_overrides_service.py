@@ -345,7 +345,7 @@ class MappingOverridesService:
     async def _sync_database(self) -> None:
         """Trigger a synchronization of the AniMap database."""
         scheduler = self._ensure_scheduler()
-        await scheduler.shared_animap_client.sync_db()
+        await scheduler.trigger_database_sync(source="service:mapping_overrides")
 
     async def save_override(
         self,

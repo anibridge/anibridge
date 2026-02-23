@@ -2,13 +2,13 @@
 
 import base64
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from pytest import MonkeyPatch
 
+from src.config.settings import AniBridgeConfig, BasicAuthConfig, WebConfig
 from src.web import app as app_module
 from src.web.middlewares.basic_auth import BasicAuthMiddleware
 
@@ -127,17 +127,15 @@ def test_create_app_registers_basic_auth_middleware_when_configured(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     """create_app should attach BasicAuthMiddleware when credentials are configured."""
-    basic_auth_ns = SimpleNamespace(
+    web_config = WebConfig(
+        basic_auth=BasicAuthConfig(
         username="admin",
         password=SecretStr("secret"),
         htpasswd_path=None,
         realm="Realm",
+        )
     )
-    web_ns = SimpleNamespace(
-        basic_auth=basic_auth_ns,
-        has_auth=True,
-    )
-    test_config = SimpleNamespace(web=web_ns)
+    test_config = AniBridgeConfig(web=web_config)
     monkeypatch.setattr(app_module, "config", test_config, raising=False)
 
     # Ensure the SPA assets check passes
@@ -155,17 +153,15 @@ def test_create_app_skips_basic_auth_without_complete_credentials(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     """create_app should skip BasicAuthMiddleware if either credential is missing."""
-    basic_auth_ns = SimpleNamespace(
-        username="admin",
-        password=None,
-        htpasswd_path=None,
-        realm="Realm",
+    web_config = WebConfig(
+        basic_auth=BasicAuthConfig(
+            username="admin",
+            password=None,
+            htpasswd_path=None,
+            realm="Realm",
+        )
     )
-    web_ns = SimpleNamespace(
-        basic_auth=basic_auth_ns,
-        has_auth=True,
-    )
-    incomplete_config = SimpleNamespace(web=web_ns)
+    incomplete_config = AniBridgeConfig(web=web_config)
     monkeypatch.setattr(app_module, "config", incomplete_config, raising=False)
 
     index_file = tmp_path / "index.html"
@@ -188,17 +184,15 @@ def test_create_app_registers_basic_auth_middleware_with_htpasswd(
         encoding="utf-8",
     )  # bcrypt hash for "test"
 
-    basic_auth_ns = SimpleNamespace(
-        username=None,
-        password=None,
-        htpasswd_path=htpasswd_file,
-        realm="Realm",
+    web_config = WebConfig(
+        basic_auth=BasicAuthConfig(
+            username=None,
+            password=None,
+            htpasswd_path=htpasswd_file,
+            realm="Realm",
+        )
     )
-    web_ns = SimpleNamespace(
-        basic_auth=basic_auth_ns,
-        has_auth=True,
-    )
-    test_config = SimpleNamespace(web=web_ns)
+    test_config = AniBridgeConfig(web=web_config)
     monkeypatch.setattr(app_module, "config", test_config, raising=False)
 
     # Ensure the SPA assets check passes

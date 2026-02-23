@@ -535,7 +535,7 @@ class HistoryService:
             )
 
         schedule_task(
-            scheduler.trigger_sync(
+            scheduler.trigger_profile_sync(
                 profile,
                 poll=False,
                 library_keys=[row.library_media_key],

@@ -10,10 +10,10 @@ from typing import Any, cast
 
 import pytest
 
-import src.core.sched as sched_module
+import src.core.sched.client as sched_module
 from src.config.settings import ScanMode
 from src.core.sched import ProfileScheduler, SchedulerClient
-from src.exceptions import ProfileNotFoundError
+from src.exceptions import ProfileNotFoundError, SchedulerUnavailableError
 
 
 @dataclass
@@ -359,20 +359,68 @@ async def test_scheduler_trigger_sync(
     cast(dict[str, Any], scheduler.profile_schedulers)["one"] = StubScheduler()
     cast(dict[str, Any], scheduler.profile_schedulers)["two"] = StubScheduler()
 
-    await scheduler.trigger_sync(profile_name="one", poll=True, library_keys=["x"])
+    await scheduler.trigger_profile_sync("one", poll=True, library_keys=["x"])
 
     assert cast(StubScheduler, scheduler.profile_schedulers["one"]).calls == [
         (True, ["x"], "manual")
     ]
 
-    await scheduler.trigger_sync(poll=False, library_keys=None)
+    await scheduler.trigger_all_profiles_sync(poll=False, library_keys=None)
 
     assert cast(StubScheduler, scheduler.profile_schedulers["two"]).calls == [
         (False, None, "manual")
     ]
 
     with pytest.raises(ProfileNotFoundError):
-        await scheduler.trigger_sync(profile_name="missing")
+        await scheduler.trigger_profile_sync("missing")
+
+
+@pytest.mark.asyncio
+async def test_scheduler_trigger_profile_sync_without_running_scheduler(
+    tmp_path: Path,
+) -> None:
+    """Manual trigger should fall back to a one-off bridge sync when not started."""
+    profiles = {"one": FakeProfileConfig(scan_modes=[])}
+    config = FakeConfig(profiles=profiles, data_path=tmp_path)
+    scheduler = SchedulerClient(cast("sched_module.AniBridgeConfig", config))
+
+    bridge = FakeBridgeClient("one")
+    cast(dict[str, Any], scheduler.bridge_clients)["one"] = bridge
+
+    await scheduler.trigger_profile_sync("one", poll=True, library_keys=["k1"])
+
+    assert bridge.sync_calls == [(True, ["k1"])]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_trigger_all_profiles_sync_raises_on_failures(
+    tmp_path: Path,
+) -> None:
+    """Aggregated trigger should raise if any profile sync fails."""
+    profiles = {
+        "good": FakeProfileConfig(scan_modes=[]),
+        "bad": FakeProfileConfig(scan_modes=[]),
+    }
+    config = FakeConfig(profiles=profiles, data_path=tmp_path)
+    scheduler = SchedulerClient(cast("sched_module.AniBridgeConfig", config))
+
+    class GoodBridge(FakeBridgeClient):
+        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
+            self.sync_calls.append((poll, library_keys))
+
+    class BadBridge(FakeBridgeClient):
+        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
+            raise RuntimeError("boom")
+
+    cast(dict[str, Any], scheduler.bridge_clients)["good"] = GoodBridge("good")
+    cast(dict[str, Any], scheduler.bridge_clients)["bad"] = BadBridge("bad")
+
+    with pytest.raises(ExceptionGroup):
+        await scheduler.trigger_all_profiles_sync(source="test:all")
+
+    assert cast(GoodBridge, scheduler.bridge_clients["good"]).sync_calls == [
+        (False, None)
+    ]
 
 
 @pytest.mark.asyncio
@@ -421,7 +469,7 @@ async def test_profile_scheduler_rejects_when_pending_waiters_full() -> None:
     first = await scheduler._enqueue_sync(source="test:first")
     assert not first.done()
 
-    with pytest.raises(sched_module.SchedulerUnavailableError):
+    with pytest.raises(SchedulerUnavailableError):
         await scheduler._enqueue_sync(source="test:second")
 
     metrics = await scheduler.get_runtime_metrics()
@@ -456,8 +504,14 @@ async def test_scheduler_get_status(tmp_path: Path) -> None:
     bridge.last_synced = datetime(2025, 1, 1, tzinfo=UTC)
     cast(dict[str, Any], scheduler.bridge_clients)["one"] = bridge
 
+    class SchedulerStub:
+        _running = True
+
+        async def get_runtime_metrics(self) -> dict[str, Any]:
+            return {"requests_total": 0}
+
     scheduler.profile_schedulers["one"] = cast(
-        "sched_module.ProfileScheduler", SimpleNamespace(_running=True)
+        "sched_module.ProfileScheduler", SchedulerStub()
     )
 
     status = await scheduler.get_status()
@@ -498,6 +552,42 @@ async def test_daily_db_sync_loop_runs(
 
     assert scheduler.shared_animap_client.synced is True
     assert cast(FakeBridgeClient, scheduler.bridge_clients["one"]).backed_up is True
+
+
+@pytest.mark.asyncio
+async def test_trigger_database_sync_runs_refresh(tmp_path: Path) -> None:
+    """Database sync entrypoint should sync mappings and refresh profile providers."""
+    config = FakeConfig(profiles={}, data_path=tmp_path)
+    scheduler = SchedulerClient(cast("sched_module.AniBridgeConfig", config))
+    scheduler.shared_animap_client = FakeAnimapClient()
+
+    bridge = FakeBridgeClient("one")
+    cast(dict[str, Any], scheduler.bridge_clients)["one"] = bridge
+
+    await scheduler.trigger_database_sync(source="test:database")
+
+    assert scheduler.shared_animap_client.synced is True
+    assert bridge.list_provider.cleared is True
+    assert bridge.backed_up is True
+
+
+@pytest.mark.asyncio
+async def test_scheduler_runtime_metrics_include_coordinator(tmp_path: Path) -> None:
+    """Scheduler runtime metrics should include global coordinator counters."""
+    config = FakeConfig(profiles={}, data_path=tmp_path)
+    scheduler = SchedulerClient(cast("sched_module.AniBridgeConfig", config))
+
+    metrics = await scheduler.get_runtime_metrics()
+
+    assert metrics["running"] is False
+    assert metrics["profile_count"] == 0
+    assert metrics["bridge_count"] == 0
+    assert metrics["daily_sync_active"] is False
+
+    coordinator = metrics["coordinator"]
+    assert coordinator["active_profile_syncs"] == 0
+    assert coordinator["maintenance_active"] is False
+    assert coordinator["maintenance_waiting"] == 0
 
 
 def test_get_profiles_for_library_provider(tmp_path: Path) -> None:

@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -19,9 +18,10 @@ class DummyScheduler:
     def __init__(self) -> None:
         """Initialize the dummy scheduler."""
         self.synced = False
-        self.shared_animap_client = SimpleNamespace(sync_db=self._sync_db)
+        self.sync_sources: list[str] = []
 
-    async def _sync_db(self) -> None:
+    async def trigger_database_sync(self, source: str = "manual:database") -> None:
+        self.sync_sources.append(source)
         self.synced = True
 
 
@@ -65,6 +65,7 @@ async def test_save_override_writes_file_and_syncs_db(
     data = json.loads((tmp_path / "mappings.json").read_text(encoding="utf-8"))
     assert data["anilist:101"] == {"tmdb:202": {"1": None}}
     assert scheduler.synced is True
+    assert scheduler.sync_sources == ["service:mapping_overrides"]
 
 
 @pytest.mark.asyncio

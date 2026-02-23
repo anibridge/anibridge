@@ -168,7 +168,11 @@ class WebConfig(BaseModel):
             bool: True if authentication is configured, False otherwise.
         """
         return bool(
-            (self.basic_auth.username and self.basic_auth.password)
+            (
+                self.basic_auth.username
+                and self.basic_auth.password is not None
+                and self.basic_auth.password.get_secret_value()
+            )
             or self.basic_auth.htpasswd_path
         )
 

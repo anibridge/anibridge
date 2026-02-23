@@ -4,6 +4,7 @@
     import {
         ExternalLink,
         Hash,
+        Info,
         LoaderCircle,
         RefreshCcw,
         RotateCw,
@@ -122,6 +123,22 @@
     }
 
     const timestampLabel = $derived(formatTimestamp(item.timestamp));
+    let openInfo = $state(false);
+    const infoEntries = $derived.by(() =>
+        Object.entries(item.info ?? {})
+            .map(([key, value]) => [key.trim(), String(value ?? "").trim()] as const)
+            .filter(([key, value]) => key.length > 0 && value.length > 0)
+            .sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const hasInfo = $derived(infoEntries.length > 0);
+
+    $effect(() => {
+        if (!hasInfo) openInfo = false;
+    });
+
+    function formatInfoKey(key: string): string {
+        return titleCase(key.replaceAll("_", " ").replaceAll("-", " "));
+    }
 </script>
 
 {#snippet DefaultPins(props: PinsPanelContext)}
@@ -321,6 +338,25 @@
                                     {/if}
                                 </button>
                             {/if}
+                            {#if hasInfo}
+                                <button
+                                    type="button"
+                                    class={`diff-toggle inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 ${
+                                        openInfo ? "open" : ""
+                                    }`}
+                                    onclick={() => (openInfo = !openInfo)}
+                                    aria-expanded={openInfo}
+                                    title="Show sync details">
+                                    <Info
+                                        class="diff-icon inline h-4 w-4 text-[14px]" />
+                                    <span class="diff-label relative"
+                                        >{openInfo ? "Hide debug" : "Debug"}</span>
+                                    <span
+                                        class="rounded bg-slate-800/70 px-1 text-[10px] font-semibold text-slate-200">
+                                        {infoEntries.length}
+                                    </span>
+                                </button>
+                            {/if}
                             {#if item.error_message}
                                 <div class="text-[11px] whitespace-nowrap text-red-400">
                                     {item.error_message}
@@ -377,6 +413,22 @@
     <TimelineDiffViewer
         {item}
         ui={ui()} />
+{/if}
+{#if openInfo && hasInfo}
+    <div class="ml-4 rounded-md border border-slate-800 bg-slate-900/40 p-3">
+        <dl class="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {#each infoEntries as [key, value] (key)}
+                <div
+                    class="rounded-md border border-slate-700/70 bg-slate-800/55 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                    <dt
+                        class="mb-1 text-[10px] font-semibold tracking-[0.08em] text-slate-400 uppercase">
+                        {formatInfoKey(key)}
+                    </dt>
+                    <dd class="leading-relaxed wrap-break-word text-slate-100">{value}</dd>
+                </div>
+            {/each}
+        </dl>
+    </div>
 {/if}
 {#if openPins && hasPins}
     {@render (pinsPanel ?? DefaultPins)({

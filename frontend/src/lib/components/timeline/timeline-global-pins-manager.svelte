@@ -131,6 +131,7 @@
             outcome,
             before_state: null,
             after_state: null,
+            info: null,
             error_message: null,
             timestamp,
             library_media: null,

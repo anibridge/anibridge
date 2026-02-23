@@ -35,6 +35,7 @@ def require_config_api_access() -> None:
     """Ensure configuration API access is not exposed without explicit opt-in."""
     # Use runtime_config if present (for test overrides), else get_config()
     from src.web.routes.api import config as config_api_module
+
     web_config = None
     if hasattr(config_api_module, "runtime_config"):
         web_config = getattr(config_api_module.runtime_config, "web", None)

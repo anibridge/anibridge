@@ -161,7 +161,7 @@ class MappingsService:
         """Safely convert a string to integer if possible."""
         try:
             return int(raw_value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     @staticmethod
@@ -299,7 +299,7 @@ class MappingsService:
             ids = await client.search_media_ids(
                 filters=filters, max_results=self._ANILIST_MAX_RESULTS
             )
-        except (AniListFilterError, AniListSearchError):
+        except AniListFilterError, AniListSearchError:
             raise
         except Exception as exc:
             if isinstance(exc, asyncio.CancelledError):
@@ -597,7 +597,7 @@ class MappingsService:
             ids = await client.search_media_ids(
                 filters={"search": text}, max_results=self._ANILIST_MAX_RESULTS
             )
-        except (AniListFilterError, AniListSearchError):
+        except AniListFilterError, AniListSearchError:
             raise
         except Exception as exc:
             if isinstance(exc, asyncio.CancelledError):
@@ -700,7 +700,7 @@ class MappingsService:
         def _to_int(value: str | None) -> int | None:
             try:
                 return int(value) if value is not None else None
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return None
 
         if entry.provider == "anilist":
@@ -946,7 +946,7 @@ class MappingsService:
         if q and q.strip():
             try:
                 ordered_ids, _ = await self._evaluate_query(q, custom_only)
-            except (BooruQuerySyntaxError, AniListFilterError, AniListSearchError):
+            except BooruQuerySyntaxError, AniListFilterError, AniListSearchError:
                 raise
             except asyncio.CancelledError:
                 raise

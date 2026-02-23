@@ -47,9 +47,7 @@
         saveError = null;
         configAccessBlocked = false;
         try {
-            const response = await apiFetch("/api/config", undefined, {
-                silent: true,
-            });
+            const response = await apiFetch("/api/config", undefined, { silent: true });
             const payload = await response.json();
 
             if (!response.ok) {
@@ -217,7 +215,8 @@
             class="rounded border border-amber-900/70 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
             <p class="font-medium">Configuration editor is blocked.</p>
             <p class="mt-1 text-amber-200/90">
-                Configure <code class="rounded bg-amber-900/40 px-1">web.basic_auth</code>
+                Configure <code class="rounded bg-amber-900/40 px-1"
+                    >web.basic_auth</code>
                 or explicitly set
                 <code class="rounded bg-amber-900/40 px-1"
                     >web.allow_config_without_auth: true</code>

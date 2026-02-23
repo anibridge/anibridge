@@ -456,7 +456,9 @@
                     <Box class="h-6 w-6" />
                 </div>
                 <div class="flex flex-1 flex-col justify-center text-left">
-                    <div class="text-sm font-semibold text-slate-100">Docker Repository</div>
+                    <div class="text-sm font-semibold text-slate-100">
+                        Docker Repository
+                    </div>
                     <p class="mt-1 text-xs text-slate-400">
                         Prebuilt container images.
                     </p>

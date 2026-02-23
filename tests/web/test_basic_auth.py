@@ -129,10 +129,10 @@ def test_create_app_registers_basic_auth_middleware_when_configured(
     """create_app should attach BasicAuthMiddleware when credentials are configured."""
     web_config = WebConfig(
         basic_auth=BasicAuthConfig(
-        username="admin",
-        password=SecretStr("secret"),
-        htpasswd_path=None,
-        realm="Realm",
+            username="admin",
+            password=SecretStr("secret"),
+            htpasswd_path=None,
+            realm="Realm",
         )
     )
     test_config = AniBridgeConfig(web=web_config)

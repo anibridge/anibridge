@@ -143,7 +143,7 @@ class MappingsClient:
                 src,
             )
             return orjson.loads(payload)
-        except (json.JSONDecodeError, yaml.YAMLError):
+        except json.JSONDecodeError, yaml.YAMLError:
             log.error("Error decoding file $$'%s'$$", src)
             log.exception("Decode error details")
         except Exception:
@@ -317,7 +317,7 @@ class MappingsClient:
             async with session.get(url) as response:
                 response.raise_for_status()
                 mappings_raw = await response.read()
-        except (TimeoutError, aiohttp.ClientError):
+        except TimeoutError, aiohttp.ClientError:
             if retry_count < 2:
                 log.warning(
                     "Error reaching mappings URL $$'%s'$$, retrying...",

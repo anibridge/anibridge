@@ -167,6 +167,7 @@ def _seed_history_row(*, clear: bool = True, **overrides) -> int:
             "outcome": SyncOutcome.SYNCED,
             "before_state": {"progress": 0},
             "after_state": {"progress": 1},
+            "info": {"source": "test-seed"},
             "error_message": None,
         }
         payload.update(overrides)
@@ -205,6 +206,7 @@ async def test_history_service_get_page_enriches_metadata(history_env):
     assert item.list_media is not None
     assert item.list_media.title == "List lst1"
     assert item.pinned_fields == ["status"]
+    assert item.info == {"source": "test-seed"}
 
     cache_info = service.get_cache_info()
     assert cache_info["list_cache"].hits >= 0
@@ -299,6 +301,22 @@ async def test_history_service_undo_item_deletes_entry_and_fails(history_env):
         await service.undo_item("profile", row_id)
 
     assert history_env.list_provider.deleted_entries == []
+
+
+@pytest.mark.asyncio
+async def test_history_service_undo_item_records_info(history_env):
+    """Undo entries keep an audit trail in the info payload."""
+    history_env.bridge.profile_config.destructive_sync = True
+    row_id = _seed_history_row(before_state=None)
+    service = HistoryService()
+
+    item = await service.undo_item("profile", row_id)
+
+    assert item.info is not None
+    assert item.info.get("operation") == "undo"
+    assert item.info.get("source_history_id") == str(row_id)
+    assert item.info.get("source_outcome") == SyncOutcome.SYNCED.value
+    assert history_env.list_provider.deleted_entries == ["lst1"]
 
 
 @pytest.mark.asyncio

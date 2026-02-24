@@ -446,7 +446,6 @@ async def test_apply_update_dry_run_returns_skipped(
     outcome = await stub_client._apply_update(
         plan,
         diff_str="progress: 0 → 1",
-        diff_fields=("progress",),
         debug_title="Movie",
         debug_ids="id",
     )
@@ -635,7 +634,6 @@ async def test_apply_update_raises_on_provider_error(
         await stub_client._apply_update(
             plan,
             diff_str="progress: 0 → 1",
-            diff_fields=("progress",),
             debug_title="Movie",
             debug_ids="id",
         )
@@ -763,8 +761,6 @@ async def test_sync_media_updates_entry_and_history(
         assert history[0].info is not None
         assert history[0].info.get("operation") == "update_entry"
         assert history[0].info.get("mode") == "single"
-        assert history[0].info.get("change_count") == "2"
-        assert history[0].info.get("changed_fields") == "progress, status"
 
 
 @pytest.mark.asyncio
@@ -989,6 +985,7 @@ async def test_process_media_marks_not_found(
         assert record.info is not None
         assert record.info.get("operation") == "resolve_target"
         assert record.info.get("reason") == "no_matching_list_entry"
+        assert record.info.get("grandchild_count") is None
 
 
 @pytest.mark.asyncio

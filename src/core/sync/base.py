@@ -496,7 +496,6 @@ class BaseSyncClient[
                         descriptor_key(descriptor)
                         for descriptor in attempted_descriptors
                     ),
-                    "search_fallback_threshold": str(self.search_fallback_threshold),
                 },
             )
             if trackable:
@@ -740,15 +739,11 @@ class BaseSyncClient[
                 "sync_fields_disabled": sorted(sync_fields_disabled),
                 "pinned_blocked": sorted(pinned_blocked_fields),
                 "sync_rules_blocked": [
-                    f"{field_name}({rule_name})"
-                    if rule_name
-                    else field_name
+                    f"{field_name}({rule_name})" if rule_name else field_name
                     for field_name, rule_name in sorted(sync_rules_blocked.items())
                 ],
                 "status_gate_blocked": [
-                    f"{field_name}({rule_name})"
-                    if rule_name
-                    else field_name
+                    f"{field_name}({rule_name})" if rule_name else field_name
                     for field_name, rule_name in sorted(status_gate_blocked.items())
                 ],
                 "destructive_blocked": sorted(destructive_blocked_fields),
@@ -786,11 +781,9 @@ class BaseSyncClient[
         )
 
         diff_str = self._format_diff(diff)
-        diff_fields = tuple(sorted(diff.keys()))
         return await self._apply_update(
             plan,
             diff_str,
-            diff_fields,
             debug_title,
             debug_ids,
         )
@@ -799,7 +792,6 @@ class BaseSyncClient[
         self,
         plan: BatchUpdate[ParentMediaT, ChildMediaT],
         diff_str: str,
-        diff_fields: Sequence[str],
         debug_title: str,
         debug_ids: str,
     ) -> SyncOutcome:
@@ -849,9 +841,6 @@ class BaseSyncClient[
                     **plan.diagnostics,
                     "operation": "update_entry",
                     "mode": "single",
-                    "changed_fields": ", ".join(diff_fields),
-                    "change_count": str(len(diff_fields)),
-                    "diff": diff_str,
                 },
             )
             return SyncOutcome.SYNCED
@@ -881,9 +870,6 @@ class BaseSyncClient[
                     **plan.diagnostics,
                     "operation": "update_entry",
                     "mode": "single",
-                    "changed_fields": ", ".join(diff_fields),
-                    "change_count": str(len(diff_fields)),
-                    "diff": diff_str,
                     "error_type": type(exc).__name__,
                 },
             )
@@ -945,13 +931,6 @@ class BaseSyncClient[
                 entry.media().key for entry in updated if entry is not None
             }
             for update in self._pending_updates:
-                diff = diff_snapshots(
-                    update.before,
-                    update.after,
-                    set(update.after.to_dict().keys()),
-                )
-                diff_fields = tuple(sorted(diff.keys()))
-                diff_str = self._format_diff(diff)
                 outcome = (
                     SyncOutcome.SYNCED
                     if update.after.media_key in updated_list_keys
@@ -969,9 +948,6 @@ class BaseSyncClient[
                         **update.diagnostics,
                         "operation": "update_entry",
                         "mode": "batch",
-                        "changed_fields": ", ".join(diff_fields),
-                        "change_count": str(len(diff_fields)),
-                        "diff": diff_str,
                     },
                 )
             log.success(
@@ -984,13 +960,6 @@ class BaseSyncClient[
             log.error("Batch sync failed: %s", exc)
             log.exception("Batch sync error details")
             for update in self._pending_updates:
-                diff = diff_snapshots(
-                    update.before,
-                    update.after,
-                    set(update.after.to_dict().keys()),
-                )
-                diff_fields = tuple(sorted(diff.keys()))
-                diff_str = self._format_diff(diff)
                 await self._create_sync_history(
                     item=update.item,
                     child_item=update.child,
@@ -1004,9 +973,6 @@ class BaseSyncClient[
                         **update.diagnostics,
                         "operation": "update_entry",
                         "mode": "batch",
-                        "changed_fields": ", ".join(diff_fields),
-                        "change_count": str(len(diff_fields)),
-                        "diff": diff_str,
                         "error_type": type(exc).__name__,
                     },
                 )
@@ -1031,8 +997,7 @@ class BaseSyncClient[
             values = [
                 serialized
                 for serialized in (
-                    BaseSyncClient._stringify_history_info_value(item)
-                    for item in value
+                    BaseSyncClient._stringify_history_info_value(item) for item in value
                 )
                 if serialized
             ]
@@ -1097,23 +1062,6 @@ class BaseSyncClient[
             key=descriptor_key,
         )
 
-        changed_fields: tuple[str, ...] = tuple()
-        if before_snapshot or after_snapshot:
-            candidate_fields = set()
-            if before_snapshot:
-                candidate_fields.update(before_snapshot.to_dict().keys())
-            if after_snapshot:
-                candidate_fields.update(after_snapshot.to_dict().keys())
-            changed_fields = tuple(
-                sorted(
-                    diff_snapshots(
-                        before_snapshot,
-                        after_snapshot,
-                        candidate_fields,
-                    )
-                )
-            )
-
         base_info = self._normalize_history_info(
             {
                 "outcome": outcome.value,
@@ -1125,10 +1073,9 @@ class BaseSyncClient[
                     for descriptor in mapping_target_descriptors
                 ],
                 "mapping_count": len(mapping_target_descriptors),
-                "grandchild_count": len(grandchild_items or ()),
-                "before_status": before_snapshot.status if before_snapshot else None,
-                "after_status": after_snapshot.status if after_snapshot else None,
-                "changed_fields": changed_fields,
+                "grandchild_count": (
+                    len(grandchild_items) if grandchild_items is not None else None
+                ),
             }
         )
         extra_info = self._normalize_history_info(info)

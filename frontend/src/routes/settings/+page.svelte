@@ -27,6 +27,8 @@
 
     let loading = $state(true);
     let saving = $state(false);
+    let restarting = $state(false);
+    let restartNotice: string | null = $state(null);
     let loadError: string | null = $state(null);
     let saveError: string | null = $state(null);
     let configAccessBlocked = $state(false);
@@ -39,7 +41,43 @@
 
     const hasChanges = $derived(editorValue !== initialValue);
 
-    onMount(loadConfig);
+    let restartPollGeneration = 0;
+
+    onMount(() => {
+        void loadConfig();
+        return () => {
+            restartPollGeneration += 1;
+        };
+    });
+
+    async function waitForServerAndRefresh() {
+        const generation = ++restartPollGeneration;
+        const deadline = Date.now() + 90_000;
+
+        while (Date.now() < deadline) {
+            if (generation !== restartPollGeneration) return;
+
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+            if (generation !== restartPollGeneration) return;
+
+            try {
+                const response = await apiFetch("/api/system/meta", undefined, {
+                    silent: true,
+                });
+                if (!response.ok) continue;
+
+                restarting = false;
+                restartNotice = null;
+                toast("AniBridge is back online.", "success");
+                await loadConfig();
+                return;
+            } catch {}
+        }
+
+        restarting = false;
+        restartNotice = "Restart is taking longer than expected. Use Reload to retry.";
+    }
 
     async function loadConfig() {
         loading = true;
@@ -104,6 +142,44 @@
         }
     }
 
+    async function restartServer() {
+        if (restarting || saving || loading) return;
+
+        const confirmed = window.confirm(
+            "Restart AniBridge now? The web UI will be briefly unavailable.",
+        );
+        if (!confirmed) return;
+
+        restarting = true;
+        saveError = null;
+        restartNotice = "Restart requested. Waiting for AniBridge to come back...";
+        try {
+            const response = await apiFetch("/api/system/restart", { method: "POST" });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                saveError = formatApiError(payload, response.status);
+                restarting = false;
+                restartNotice = null;
+                return;
+            }
+
+            toast("Restart requested. AniBridge will return in a few.", "success");
+            void waitForServerAndRefresh();
+        } catch (error) {
+            const msg = formatError(error);
+            if (/network|failed to fetch|load failed/i.test(msg)) {
+                toast("Restart in progress. Waiting for server to come back.", "info");
+                void waitForServerAndRefresh();
+                return;
+            }
+
+            saveError = msg;
+            restarting = false;
+            restartNotice = null;
+        }
+    }
+
     function revertChanges() {
         editorValue = initialValue;
         saveError = null;
@@ -157,7 +233,7 @@
                 type="button"
                 class="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/60 px-3 py-1 text-slate-100 hover:bg-slate-800/60"
                 onclick={loadConfig}
-                disabled={loading || saving}>
+                disabled={loading || saving || restarting}>
                 <RefreshCw class="h-3.5 w-3.5" /> Reload
             </button>
             <a
@@ -171,14 +247,30 @@
                 type="button"
                 class="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/60 px-3 py-1 text-slate-100 hover:bg-slate-800/60 disabled:opacity-50"
                 onclick={revertChanges}
-                disabled={loading || saving || configAccessBlocked || !hasChanges}>
+                disabled={loading ||
+                    saving ||
+                    restarting ||
+                    configAccessBlocked ||
+                    !hasChanges}>
                 Revert
+            </button>
+            <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded border border-amber-500 bg-amber-600 px-4 py-1 font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                onclick={restartServer}
+                disabled={loading || saving || restarting}>
+                <RefreshCw class={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`} />
+                {restarting ? "Restarting…" : "Restart Server"}
             </button>
             <button
                 type="button"
                 class="inline-flex items-center gap-1 rounded border border-blue-500 bg-blue-600 px-4 py-1 font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
                 onclick={saveConfig}
-                disabled={loading || saving || configAccessBlocked || !hasChanges}>
+                disabled={loading ||
+                    saving ||
+                    restarting ||
+                    configAccessBlocked ||
+                    !hasChanges}>
                 <Save class="h-3.5 w-3.5" />
                 {saving ? "Saving…" : "Save"}
             </button>
@@ -230,6 +322,14 @@
             class="flex items-center gap-2 rounded border border-rose-900/60 bg-rose-950/60 px-3 py-2 text-xs text-rose-100">
             <TriangleAlert class="h-3.5 w-3.5" />
             {saveError}
+        </div>
+    {/if}
+
+    {#if restarting || restartNotice}
+        <div
+            class="flex items-center gap-2 rounded border border-amber-900/70 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
+            <LoaderCircle class={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`} />
+            {restartNotice ?? "Restarting AniBridge..."}
         </div>
     {/if}
 

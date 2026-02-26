@@ -246,6 +246,11 @@ export interface MetaResponse {
     git_hash: string;
 }
 
+export interface RestartResponse {
+    ok: boolean;
+    message: string;
+}
+
 // --- History API ---
 export interface HistoryItem {
     id: number;

@@ -418,24 +418,40 @@ class BridgeClient:
             section.title,
         )
 
-        min_last_modified = (self.last_synced or datetime.now(UTC)) - timedelta(
-            seconds=15
+        min_last_modified = (
+            (self.last_synced or datetime.now(UTC)) - timedelta(seconds=15)
+            if poll
+            else None
         )
 
+        parts = []
+        if poll:
+            parts.append("poll=True")
+        if min_last_modified:
+            parts.append(f"min_last_modified={min_last_modified.isoformat()}")
+        if keys is not None:
+            parts.append(f"keys={list(keys)}")
+        debug_log_args = f" ({', '.join(parts)})" if parts else ""
+
+        log.debug(
+            "[%s] Fetching items in section $$'%s'$$%s",
+            self.profile_name,
+            section.title,
+            debug_log_args,
+        )
         items = list(
             await self.library_provider.list_items(
                 section,
-                min_last_modified=min_last_modified if poll else None,
+                min_last_modified=min_last_modified,
                 require_watched=not self.profile_config.full_scan,
                 keys=keys,
             )
         )
         log.debug(
-            "[%s] Found %s items in section $$'%s'$$ (poll=%s)",
+            "[%s] Found %s items in section $$'%s'$$",
             self.profile_name,
             len(items),
             section.title,
-            poll,
         )
 
         if self.current_sync is not None:

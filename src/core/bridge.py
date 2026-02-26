@@ -425,10 +425,10 @@ class BridgeClient:
         )
 
         parts = []
-        if poll:
-            parts.append("poll=True")
         if min_last_modified:
             parts.append(f"min_last_modified={min_last_modified.isoformat()}")
+        if self.profile_config.full_scan:
+            parts.append("require_watched=False")
         if keys is not None:
             parts.append(f"keys={list(keys)}")
         debug_log_args = f" ({', '.join(parts)})" if parts else ""

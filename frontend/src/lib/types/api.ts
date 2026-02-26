@@ -140,6 +140,7 @@ export interface ProfileConfig {
     library_user?: string | null;
     list_user?: string | null;
     scan_interval?: number | null;
+    poll_interval?: number | null;
     scan_modes?: string[];
     full_scan?: boolean | null;
     destructive_sync?: boolean | null;

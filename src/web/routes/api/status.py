@@ -20,6 +20,7 @@ class ProfileConfigModel(BaseModel):
     list_namespace: str
     library_user: str | None = None
     list_user: str | None = None
+    poll_interval: int | None = None
     scan_interval: int | None = None
     scan_modes: list[str] = []
     full_scan: bool | None = None

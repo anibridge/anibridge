@@ -29,9 +29,9 @@ class ProfileScheduler:
         self,
         profile_name: str,
         bridge_client: BridgeClient,
+        poll_interval: int,
         scan_interval: int,
         scan_modes: list[ScanMode],
-        poll_interval: int = 30,
         max_pending_waiters: int = DEFAULT_MAX_PENDING_WAITERS,
         before_sync: Callable[[str], Awaitable[None]] | None = None,
         after_sync: Callable[[str], Awaitable[None]] | None = None,
@@ -42,9 +42,9 @@ class ProfileScheduler:
         Args:
             profile_name (str): The name of the profile this scheduler manages.
             bridge_client (BridgeClient): The bridge client used to perform syncs.
+            poll_interval (int): The interval in seconds for poll scans.
             scan_interval (int): The interval in seconds for periodic scans.
             scan_modes (list[ScanMode]): The scan modes enabled for this profile.
-            poll_interval (int): The interval in seconds for poll scans.
             max_pending_waiters (int): The maximum number of sync requests to queue.
             before_sync (Callable[[str], Awaitable[None]] | None): Optional callback to
                 run before each sync, receiving the profile name.
@@ -55,9 +55,9 @@ class ProfileScheduler:
         """
         self.profile_name = profile_name
         self.bridge_client = bridge_client
+        self.poll_interval = poll_interval
         self.scan_interval = scan_interval
         self.scan_modes = scan_modes
-        self.poll_interval = poll_interval
         self.max_pending_waiters = max_pending_waiters
         self._before_sync = before_sync
         self._after_sync = after_sync

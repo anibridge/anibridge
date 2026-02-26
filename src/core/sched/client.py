@@ -124,9 +124,10 @@ class SchedulerClient:
             profile_config = self.global_config.get_profile(profile_name)
 
             log.info(
-                "[%s] Starting scheduler: interval=%ss, modes=%s, full_scan=%s, "
-                "destructive=%s",
+                "[%s] Starting scheduler: poll_interval=%ss, scan_interval=%ss, "
+                "modes=%s, full_scan=%s, destructive=%s",
                 profile_name,
+                profile_config.poll_interval,
                 profile_config.scan_interval,
                 profile_config.scan_modes,
                 "enabled" if profile_config.full_scan else "disabled",
@@ -136,9 +137,9 @@ class SchedulerClient:
             scheduler = ProfileScheduler(
                 profile_name=profile_name,
                 bridge_client=bridge_client,
+                poll_interval=profile_config.poll_interval,
                 scan_interval=profile_config.scan_interval,
                 scan_modes=profile_config.scan_modes,
-                poll_interval=30,
                 before_sync=self._sync_coordinator.acquire_profile_slot,
                 after_sync=self._sync_coordinator.release_profile_slot,
                 stop_event=self.stop_event,
@@ -352,6 +353,7 @@ class SchedulerClient:
                     "library_user": library_user_title,
                     "list_user": list_user_title,
                     "scan_interval": profile_config.scan_interval,
+                    "poll_interval": profile_config.poll_interval,
                     "scan_modes": [m.value for m in profile_config.scan_modes],
                     "full_scan": profile_config.full_scan,
                     "destructive_sync": profile_config.destructive_sync,

@@ -20,6 +20,7 @@ from src.exceptions import ProfileNotFoundError, SchedulerUnavailableError
 class FakeProfileConfig:
     """Minimal profile config stub."""
 
+    poll_interval: int = 60
     scan_interval: int = 10
     scan_modes: list[Any] = None  # type: ignore[assignment]
     full_scan: bool = False

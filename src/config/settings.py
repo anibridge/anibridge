@@ -115,7 +115,7 @@ class ScanMode(BaseStrEnum):
     Multiple modes can be enabled simultaneously by specifying a list.
 
     periodic: Periodic scans every `scan_interval` seconds
-    poll: Poll for incremental changes every 30 seconds
+    poll: Poll for incremental changes every `poll_interval` seconds
     webhook: External webhook-triggered syncs, dependent on `ab_web_enabled`
     """
 
@@ -204,6 +204,9 @@ class AniBridgeProfileConfig(BaseModel):
 
     scan_interval: int = Field(
         default=86400, ge=0, description="Scan interval in seconds"
+    )
+    poll_interval: int = Field(
+        default=60, ge=0, description="Poll scan interval in seconds"
     )
     scan_modes: list[ScanMode] = Field(
         default_factory=lambda: [ScanMode.PERIODIC, ScanMode.POLL, ScanMode.WEBHOOK],

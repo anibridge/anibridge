@@ -1,8 +1,13 @@
 """Tests for system API endpoints."""
 
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pytest import raises
 
 from src.exceptions import SchedulerUnavailableError
+from src.web.routes.api import config as config_api_module
 from src.web.routes.api import system as system_api_module
 
 
@@ -21,6 +26,12 @@ class _DummyAppState:
 
     def request_restart(self) -> None:
         self.restart_requested = True
+
+
+def _build_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(system_api_module.router, prefix="/api/system")
+    return app
 
 
 def test_api_restart_requests_scheduler_shutdown(monkeypatch) -> None:
@@ -44,3 +55,54 @@ def test_api_restart_requires_scheduler(monkeypatch) -> None:
 
     with raises(SchedulerUnavailableError):
         system_api_module.api_restart()
+
+
+def test_restart_api_blocked_without_auth_or_override(monkeypatch) -> None:
+    """Restart API should be blocked when config API access is blocked."""
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(
+            web=SimpleNamespace(
+                has_auth=False,
+                allow_config_without_auth=False,
+            )
+        ),
+        raising=False,
+    )
+
+    state = _DummyAppState(scheduler=_DummyScheduler())
+    monkeypatch.setattr(system_api_module, "get_app_state", lambda: state)
+
+    client = TestClient(_build_app())
+    response = client.post("/api/system/restart")
+
+    assert response.status_code == 403
+    assert "Configuration API is disabled" in response.json()["detail"]
+    assert state.restart_requested is False
+
+
+def test_restart_api_allowed_with_unauthenticated_override(monkeypatch) -> None:
+    """Restart API should be available when unauthenticated override is enabled."""
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(
+            web=SimpleNamespace(
+                has_auth=False,
+                allow_config_without_auth=True,
+            )
+        ),
+        raising=False,
+    )
+
+    scheduler = _DummyScheduler()
+    state = _DummyAppState(scheduler=scheduler)
+    monkeypatch.setattr(system_api_module, "get_app_state", lambda: state)
+
+    client = TestClient(_build_app())
+    response = client.post("/api/system/restart")
+
+    assert response.status_code == 202
+    assert state.restart_requested is True
+    assert scheduler.shutdown_requested is True

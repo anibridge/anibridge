@@ -12,11 +12,13 @@ try:
 except ImportError:  # Windows does not have resource module
     resource = None  # ty:ignore[invalid-assignment]
 
+from fastapi import Depends
 from fastapi.routing import APIRouter
 from pydantic import BaseModel
 
 from src import __git_hash__, __version__
 from src.exceptions import AniBridgeError, SchedulerUnavailableError
+from src.web.routes.api.config import require_config_api_access
 from src.web.routes.api.status import (
     ProfileConfigModel,
     ProfileRuntimeStatusModel,
@@ -279,6 +281,7 @@ def meta() -> MetaResponse:
 @router.post(
     "/restart",
     summary="Request graceful server restart",
+    dependencies=[Depends(require_config_api_access)],
     response_model=RestartResponse,
     status_code=202,
 )

@@ -81,6 +81,11 @@ class MetaResponse(BaseModel):
     git_hash: str
 
 
+class RestartResponse(BaseModel):
+    ok: bool
+    message: str
+
+
 router = APIRouter()
 
 
@@ -269,3 +274,34 @@ def meta() -> MetaResponse:
         dict[str, str]: The application metadata.
     """
     return MetaResponse(version=__version__, git_hash=__git_hash__)
+
+
+@router.post(
+    "/restart",
+    summary="Request graceful server restart",
+    response_model=RestartResponse,
+    status_code=202,
+)
+def api_restart() -> RestartResponse:
+    """Request a graceful scheduler shutdown and process restart.
+
+    Returns:
+        RestartResponse: Accepted restart request status.
+
+    Raises:
+        SchedulerUnavailableError: If scheduler is unavailable.
+    """
+    app_state = get_app_state()
+    scheduler = app_state.scheduler
+    if not scheduler:
+        raise SchedulerUnavailableError(
+            "Scheduler not available; restart unsupported in this mode"
+        )
+
+    app_state.request_restart()
+    scheduler.request_shutdown()
+
+    return RestartResponse(
+        ok=True,
+        message="Restart requested. AniBridge will restart shortly.",
+    )

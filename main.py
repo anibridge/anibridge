@@ -1,6 +1,7 @@
 """AniBridge Main Application."""
 
 import asyncio
+import os
 import signal
 import sys
 
@@ -11,6 +12,7 @@ from src import ANIBDRIGE_HEADER, log
 from src.config.settings import get_config
 from src.core.sched import SchedulerClient
 from src.web.app import create_app
+from src.web.state import get_app_state
 
 
 def _setup_signal_handlers_for_scheduler(scheduler: SchedulerClient) -> None:
@@ -181,6 +183,17 @@ async def run() -> int:
             except Exception as e:
                 log.error(f"AniBridge: Error during shutdown: {e}", exc_info=True)
                 ret = 1
+
+    app_state = get_app_state()
+    if app_state.restart_requested:
+        log.info("AniBridge: Restart requested, re-executing process...")
+        app_state.restart_requested = False
+        try:
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+        except Exception as e:
+            log.error(f"AniBridge: Failed to restart process: {e}", exc_info=True)
+            ret = 1
+
     return ret
 
 

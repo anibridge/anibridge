@@ -29,6 +29,7 @@ class AppState:
         self.public_anilist: AniListClient | None = None
         self.on_shutdown_callbacks: list[Callable[[], Any]] = []
         self.started_at: datetime = datetime.now(UTC)
+        self.restart_requested: bool = False
 
     def set_scheduler(self, scheduler: SchedulerClient) -> None:
         """Set the scheduler client.
@@ -45,6 +46,10 @@ class AppState:
             cb (Callable[[], Any]): The callback function to register.
         """
         self.on_shutdown_callbacks.append(cb)
+
+    def request_restart(self) -> None:
+        """Mark that a full process restart was requested."""
+        self.restart_requested = True
 
     async def ensure_public_anilist(self) -> AniListClient:
         """Get or create the shared public AniList client.

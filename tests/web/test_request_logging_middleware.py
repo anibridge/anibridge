@@ -7,8 +7,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
-from src.web.middlewares import request_logging
-from src.web.middlewares.request_logging import RequestLoggingMiddleware
+from anibridge.app.web.middlewares import request_logging
+from anibridge.app.web.middlewares.request_logging import RequestLoggingMiddleware
 
 
 class _DummyLogger:

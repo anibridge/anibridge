@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.web.services.configuration_service import ConfigurationService
+from anibridge.app.web.services.configuration_service import ConfigurationService
 
 
 def test_load_document_text_reports_missing_file(tmp_path: Path):

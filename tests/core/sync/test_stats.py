@@ -1,4 +1,4 @@
-"""Unit tests for `src.core.sync.stats` components."""
+"""Unit tests for `anibridge.app.core.sync.stats` components."""
 
 from datetime import UTC, datetime
 from typing import cast
@@ -11,7 +11,12 @@ from anibridge.list import (
     ListStatus,
 )
 
-from src.core.sync.stats import EntrySnapshot, ItemIdentifier, SyncOutcome, SyncStats
+from anibridge.app.core.sync.stats import (
+    EntrySnapshot,
+    ItemIdentifier,
+    SyncOutcome,
+    SyncStats,
+)
 from tests.core.sync.fakes import (
     FakeLibraryEpisode,
     FakeLibrarySeason,

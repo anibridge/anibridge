@@ -6,9 +6,9 @@ from logging.handlers import RotatingFileHandler
 import colorama
 import pytest
 
-import src.utils.logging as logging_module
-import src.utils.terminal as terminal_module
-from src.utils.logging import CleanFormatter, ColorFormatter, Logger
+import anibridge.app.utils.logging as logging_module
+import anibridge.app.utils.terminal as terminal_module
+from anibridge.app.utils.logging import CleanFormatter, ColorFormatter, Logger
 
 
 def test_color_formatter_applies_color_codes():

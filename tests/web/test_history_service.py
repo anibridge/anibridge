@@ -7,17 +7,20 @@ from typing import Any, cast
 import pytest
 from anibridge.library import MediaKind
 
-from src.config.database import db
-from src.exceptions import (
+from anibridge.app.config.database import db
+from anibridge.app.exceptions import (
     HistoryItemNotFoundError,
     HistoryPermissionError,
     ProfileNotFoundError,
     SchedulerNotInitializedError,
 )
-from src.models.db.pin import Pin
-from src.models.db.sync_history import SyncHistory, SyncOutcome
-from src.web.services.history_service import HistoryService, get_history_service
-from src.web.state import get_app_state, get_bridge
+from anibridge.app.models.db.pin import Pin
+from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
+from anibridge.app.web.services.history_service import (
+    HistoryService,
+    get_history_service,
+)
+from anibridge.app.web.state import get_app_state, get_bridge
 
 
 @dataclass

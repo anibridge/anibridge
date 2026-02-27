@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import colorama
 import pytest
 
-from src.utils.terminal import supports_color, supports_utf8
+from anibridge.app.utils.terminal import supports_color, supports_utf8
 
 
 @pytest.fixture(autouse=True)

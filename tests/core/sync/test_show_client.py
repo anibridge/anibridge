@@ -1,4 +1,4 @@
-"""Unit tests for `src.core.sync.show`."""
+"""Unit tests for `anibridge.app.core.sync.show`."""
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -17,10 +17,10 @@ from anibridge.library import (
 from anibridge.list import ListEntry as ListEntryProtocol
 from anibridge.list import ListMediaType, ListStatus
 
-from src.core.sync.base import ResolvedListTarget, SourceRangeMapping
-from src.core.sync.show import ShowSyncClient
-from src.models.db.sync_history import SyncHistory
-from src.utils.mapping_ranges import SourceRange
+from anibridge.app.core.sync.base import ResolvedListTarget, SourceRangeMapping
+from anibridge.app.core.sync.show import ShowSyncClient
+from anibridge.app.models.db.sync_history import SyncHistory
+from anibridge.app.utils.mapping_ranges import SourceRange
 from tests.core.sync.fakes import (
     FakeAnimapClient,
     FakeLibraryEpisode,
@@ -33,7 +33,7 @@ from tests.core.sync.fakes import (
 )
 
 if TYPE_CHECKING:
-    from src.config.database import AniBridgeDB
+    from anibridge.app.config.database import AniBridgeDB
 
 
 @pytest.fixture

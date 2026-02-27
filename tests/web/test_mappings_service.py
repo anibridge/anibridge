@@ -4,12 +4,12 @@ from contextlib import contextmanager
 
 import pytest
 
-from src.config.database import db
-from src.exceptions import AniListFilterError
-from src.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
-from src.models.schemas.anilist import Media, MediaTitle
-from src.utils.booru_query import KeyTerm, parse_query
-from src.web.services.mappings_service import MappingItem, MappingsService
+from anibridge.app.config.database import db
+from anibridge.app.exceptions import AniListFilterError
+from anibridge.app.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
+from anibridge.app.models.schemas.anilist import Media, MediaTitle
+from anibridge.app.utils.booru_query import KeyTerm, parse_query
+from anibridge.app.web.services.mappings_service import MappingItem, MappingsService
 
 
 @contextmanager
@@ -379,7 +379,8 @@ async def test_attach_anilist_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
             return DummyClient()
 
     monkeypatch.setattr(
-        "src.web.services.mappings_service.get_app_state", lambda: DummyState()
+        "anibridge.app.web.services.mappings_service.get_app_state",
+        lambda: DummyState(),
     )
 
     items = [

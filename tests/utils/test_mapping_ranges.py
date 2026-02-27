@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.utils.mapping_ranges import (
+from anibridge.app.utils.mapping_ranges import (
     SourceRange,
     is_valid_source_range,
     is_valid_target_range,

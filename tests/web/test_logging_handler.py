@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from src.web.services.logging_handler import WebsocketLogHandler
+from anibridge.app.web.services.logging_handler import WebsocketLogHandler
 
 
 class DummyWebSocket:

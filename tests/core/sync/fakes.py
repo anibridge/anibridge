@@ -15,7 +15,7 @@ from anibridge.library import (
 )
 from anibridge.list import ListMediaType, ListStatus, ListTarget, MappingDescriptor
 
-from src.core.animap import AnimapEdge
+from anibridge.app.core.animap import AnimapEdge
 
 
 class FakeLibraryProvider:

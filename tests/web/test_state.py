@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from src.web.state import get_app_state
+from anibridge.app.web.state import get_app_state
 
 
 class DummyAniListClient:
@@ -28,7 +28,9 @@ class DummyAniListClient:
 async def test_app_state_public_anilist_lifecycle(monkeypatch: pytest.MonkeyPatch):
     """ensure_public_anilist caches the client and shutdown closes it."""
     dummy = DummyAniListClient()
-    monkeypatch.setattr("src.web.state.AniListClient", lambda anilist_token=None: dummy)
+    monkeypatch.setattr(
+        "anibridge.app.web.state.AniListClient", lambda anilist_token=None: dummy
+    )
 
     get_app_state.cache_clear()
     state = get_app_state()

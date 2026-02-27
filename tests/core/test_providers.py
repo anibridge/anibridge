@@ -6,8 +6,8 @@ from typing import cast
 
 import pytest
 
-import src.core.providers as providers_module
-from src.exceptions import ProfileConfigError
+import anibridge.app.core.providers as providers_module
+from anibridge.app.exceptions import ProfileConfigError
 
 
 class DummyConfig(SimpleNamespace):

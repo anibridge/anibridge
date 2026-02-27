@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
-from src.web.routes.api import config as config_api_module
+from anibridge.app.web.routes.api import config as config_api_module
 
 
 def _build_app() -> FastAPI:

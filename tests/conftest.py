@@ -32,11 +32,11 @@ _TEST_CONFIG_FILE.write_text(
     encoding="utf-8",
 )
 
-from src.config import settings as settings_module  # noqa: E402
-from src.config.database import db as db_factory  # noqa: E402
-from src.utils import logging as logging_module  # noqa: E402
-from src.utils.limiter import Limiter  # noqa: E402
-from src.web.state import get_app_state  # noqa: E402
+from anibridge.app.config import settings as settings_module  # noqa: E402
+from anibridge.app.config.database import db as db_factory  # noqa: E402
+from anibridge.app.utils import logging as logging_module  # noqa: E402
+from anibridge.app.utils.limiter import Limiter  # noqa: E402
+from anibridge.app.web.state import get_app_state  # noqa: E402
 
 settings_module.get_config.cache_clear()
 logging_module.get_logger.cache_clear()

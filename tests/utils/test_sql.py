@@ -6,7 +6,7 @@ from sqlalchemy.dialects import sqlite
 from sqlalchemy.orm import Mapped
 from sqlalchemy.sql import column, false
 
-from src.utils.sql import (
+from anibridge.app.utils.sql import (
     _to_like_pattern,
     json_array_between,
     json_array_compare,

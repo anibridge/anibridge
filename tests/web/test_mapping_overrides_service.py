@@ -6,10 +6,10 @@ from typing import Any, cast
 
 import pytest
 
-from src import config as app_config
-from src.exceptions import MappingError
-from src.web.services.mapping_overrides_service import MappingOverridesService
-from src.web.state import get_app_state
+from anibridge.app import config as app_config
+from anibridge.app.exceptions import MappingError
+from anibridge.app.web.services.mapping_overrides_service import MappingOverridesService
+from anibridge.app.web.state import get_app_state
 
 
 class DummyScheduler:

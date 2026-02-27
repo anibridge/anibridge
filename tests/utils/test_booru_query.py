@@ -2,8 +2,8 @@
 
 import pytest
 
-from src.exceptions import BooruQuerySyntaxError
-from src.utils import booru_query as bq
+from anibridge.app.exceptions import BooruQuerySyntaxError
+from anibridge.app.utils import booru_query as bq
 
 
 def test_parse_query_returns_empty_and_for_blank_string():

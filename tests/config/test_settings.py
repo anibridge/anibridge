@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from src.config.settings import (
+from anibridge.app.config.settings import (
     AniBridgeConfig,
     AniBridgeProfileConfig,
     BasicAuthConfig,
@@ -13,7 +13,7 @@ from src.config.settings import (
     WebConfig,
     find_yaml_config_file,
 )
-from src.exceptions import (
+from anibridge.app.exceptions import (
     ProfileConfigError,
     ProfileNotFoundError,
 )

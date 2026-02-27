@@ -6,12 +6,12 @@ import pytest
 from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.models.db.base import Base
+from anibridge.app.models.db.base import Base
 
 
 @pytest.fixture
 def sync_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[object]:
-    """Patch `src.core.sync.base.db` with an in-memory SQLite database."""
+    """Patch `anibridge.app.core.sync.base.db` with an in-memory SQLite database."""
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, future=True, autoflush=False)
@@ -42,7 +42,7 @@ def sync_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[object]:
 
     db_instance = _DB()
 
-    import src.core.sync.base as base_module
+    import anibridge.app.core.sync.base as base_module
 
     monkeypatch.setattr(base_module, "db", lambda: db_instance)
 

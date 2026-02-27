@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.utils import version as version_module
+from anibridge.app.utils import version as version_module
 
 
 def test_get_pyproject_version_matches_pyproject() -> None:

@@ -10,10 +10,10 @@ from typing import Any, cast
 
 import pytest
 
-import src.core.sched.client as sched_module
-from src.config.settings import ScanMode
-from src.core.sched import ProfileScheduler, SchedulerClient
-from src.exceptions import ProfileNotFoundError, SchedulerUnavailableError
+import anibridge.app.core.sched.client as sched_module
+from anibridge.app.config.settings import ScanMode
+from anibridge.app.core.sched import ProfileScheduler, SchedulerClient
+from anibridge.app.exceptions import ProfileNotFoundError, SchedulerUnavailableError
 
 
 @dataclass

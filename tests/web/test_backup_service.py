@@ -7,13 +7,13 @@ from typing import Any, cast
 
 import pytest
 
-from src.web.services.backup_service import (
+from anibridge.app.web.services.backup_service import (
     BackupService,
     InvalidBackupFilenameError,
     ProfileNotFoundError,
     SchedulerNotInitializedError,
 )
-from src.web.state import get_app_state
+from anibridge.app.web.state import get_app_state
 
 
 class DummyListProvider:

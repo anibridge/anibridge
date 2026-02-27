@@ -8,8 +8,8 @@ import aiohttp
 import pytest
 import zstandard
 
-import src.core.mappings as mappings_module
-from src.core.mappings import MappingsClient
+import anibridge.app.core.mappings as mappings_module
+from anibridge.app.core.mappings import MappingsClient
 
 
 def _make_client(tmp_path: Path) -> MappingsClient:
@@ -238,7 +238,7 @@ async def test_load_mappings_url_retries(
         return None
 
     monkeypatch.setattr(client, "_get_session", _get_session)
-    monkeypatch.setattr("src.core.mappings.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("anibridge.app.core.mappings.asyncio.sleep", _fast_sleep)
 
     result = await client._load_mappings_url("http://example", set())
 

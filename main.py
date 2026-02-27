@@ -8,11 +8,11 @@ import sys
 import uvicorn
 from pydantic import ValidationError
 
-from src import ANIBDRIGE_HEADER, log
-from src.config.settings import get_config
-from src.core.sched import SchedulerClient
-from src.web.app import create_app
-from src.web.state import get_app_state
+from anibridge.app import ANIBDRIGE_HEADER, log
+from anibridge.app.config.settings import get_config
+from anibridge.app.core.sched import SchedulerClient
+from anibridge.app.web.app import create_app
+from anibridge.app.web.state import get_app_state
 
 
 def _setup_signal_handlers_for_scheduler(scheduler: SchedulerClient) -> None:

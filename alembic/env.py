@@ -8,17 +8,15 @@ from sqlalchemy.engine import create_engine
 
 from alembic import context
 
-sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-
-import src.models.db
-from src.config.settings import get_config
+import anibridge.app.models.db
+from anibridge.app.config.settings import get_config
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = src.models.db.Base.metadata
+target_metadata = anibridge.app.models.db.Base.metadata
 
 db_url = f"sqlite:///{get_config().data_path / 'anibridge.db'}"
 config.set_main_option("sqlalchemy.url", db_url)

@@ -6,9 +6,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest import raises
 
-from src.exceptions import SchedulerUnavailableError
-from src.web.routes.api import config as config_api_module
-from src.web.routes.api import system as system_api_module
+from anibridge.app.exceptions import SchedulerUnavailableError
+from anibridge.app.web.routes.api import config as config_api_module
+from anibridge.app.web.routes.api import system as system_api_module
 
 
 class _DummyScheduler:

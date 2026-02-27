@@ -7,9 +7,9 @@ import pytest
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from src.core.anilist import AniListClient
-from src.exceptions import AniListFilterError
-from src.models.schemas.anilist import Media, MediaFormat, MediaStatus
+from anibridge.app.core.anilist import AniListClient
+from anibridge.app.exceptions import AniListFilterError
+from anibridge.app.models.schemas.anilist import Media, MediaFormat, MediaStatus
 
 
 @pytest.mark.asyncio
@@ -291,7 +291,7 @@ async def test_make_request_retries_on_rate_limit(
         return None
 
     monkeypatch.setattr(client, "_get_session", _get_session)
-    monkeypatch.setattr("src.core.anilist.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("anibridge.app.core.anilist.asyncio.sleep", _fast_sleep)
 
     result = await client._make_request("query")
 
@@ -349,7 +349,7 @@ async def test_make_request_retries_on_bad_gateway(
         return None
 
     monkeypatch.setattr(client, "_get_session", _get_session)
-    monkeypatch.setattr("src.core.anilist.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("anibridge.app.core.anilist.asyncio.sleep", _fast_sleep)
 
     result = await client._make_request("query")
 
@@ -381,7 +381,7 @@ async def test_make_request_retries_until_failure(
         return None
 
     monkeypatch.setattr(client, "_get_session", _get_session)
-    monkeypatch.setattr("src.core.anilist.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("anibridge.app.core.anilist.asyncio.sleep", _fast_sleep)
 
     with pytest.raises(aiohttp.ClientError):
         await client._make_request("query")
@@ -452,7 +452,7 @@ async def test_make_request_logs_response_errors(
         return None
 
     monkeypatch.setattr(client, "_get_session", _get_session)
-    monkeypatch.setattr("src.core.anilist.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("anibridge.app.core.anilist.asyncio.sleep", _fast_sleep)
 
     result = await client._make_request("query")
 
@@ -476,7 +476,9 @@ def test_get_session_sets_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
         headers_seen.update(headers)
         return DummySession(headers)
 
-    monkeypatch.setattr("src.core.anilist.aiohttp.ClientSession", _client_session)
+    monkeypatch.setattr(
+        "anibridge.app.core.anilist.aiohttp.ClientSession", _client_session
+    )
 
     client = AniListClient(anilist_token="token")
     session = asyncio.run(client._get_session())

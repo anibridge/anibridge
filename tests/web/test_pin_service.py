@@ -6,12 +6,12 @@ from typing import cast
 
 import pytest
 
-from src.config.database import db
-from src.config.settings import SyncField
-from src.core.sched import SchedulerClient
-from src.models.db.pin import Pin
-from src.web.services.pin_service import PinService, UpdatePinPayload
-from src.web.state import get_app_state
+from anibridge.app.config.database import db
+from anibridge.app.config.settings import SyncField
+from anibridge.app.core.sched import SchedulerClient
+from anibridge.app.models.db.pin import Pin
+from anibridge.app.web.services.pin_service import PinService, UpdatePinPayload
+from anibridge.app.web.state import get_app_state
 
 
 class DummyListProvider:

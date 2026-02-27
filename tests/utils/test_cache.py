@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from src.utils.cache import _generic_hash, file_cache, lru_cache, ttl_cache
+from anibridge.app.utils.cache import _generic_hash, file_cache, lru_cache, ttl_cache
 
 
 def test_generic_hash_order_insensitive_for_dicts():

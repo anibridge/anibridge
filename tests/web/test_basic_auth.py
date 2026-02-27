@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from pytest import MonkeyPatch
 
-from src.config.settings import AniBridgeConfig, BasicAuthConfig, WebConfig
-from src.web import app as app_module
-from src.web.middlewares.basic_auth import BasicAuthMiddleware
+from anibridge.app.config.settings import AniBridgeConfig, BasicAuthConfig, WebConfig
+from anibridge.app.web import app as app_module
+from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
 
 
 def _basic_auth_header(username: str, password: str) -> dict[str, str]:

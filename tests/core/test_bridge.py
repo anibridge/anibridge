@@ -11,12 +11,12 @@ import pytest
 from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import sessionmaker
 
-import src.core.bridge as bridge_module
-from src.core.bridge import BridgeClient
-from src.core.sync.stats import ItemIdentifier, SyncStats
-from src.exceptions import MediaTypeError
-from src.models.db.base import Base
-from src.models.db.sync_history import SyncOutcome
+import anibridge.app.core.bridge as bridge_module
+from anibridge.app.core.bridge import BridgeClient
+from anibridge.app.core.sync.stats import ItemIdentifier, SyncStats
+from anibridge.app.exceptions import MediaTypeError
+from anibridge.app.models.db.base import Base
+from anibridge.app.models.db.sync_history import SyncOutcome
 
 
 @dataclass

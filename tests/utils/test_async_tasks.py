@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from src.utils.async_tasks import schedule_task
+from anibridge.app.utils.async_tasks import schedule_task
 
 
 @pytest.mark.asyncio

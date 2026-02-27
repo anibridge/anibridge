@@ -1,4 +1,4 @@
-"""Unit tests for `src.core.sync.movie` field calculations."""
+"""Unit tests for `anibridge.app.core.sync.movie` field calculations."""
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -10,8 +10,8 @@ from anibridge.library import LibraryProvider
 from anibridge.list import ListEntry as ListEntryProtocol
 from anibridge.list import ListMediaType, ListProvider, ListStatus
 
-from src.core.sync.movie import MovieSyncClient
-from src.models.db.sync_history import SyncHistory
+from anibridge.app.core.sync.movie import MovieSyncClient
+from anibridge.app.models.db.sync_history import SyncHistory
 from tests.core.sync.fakes import (
     FakeAnimapClient,
     FakeLibraryMovie,
@@ -22,7 +22,7 @@ from tests.core.sync.fakes import (
 )
 
 if TYPE_CHECKING:
-    from src.config.database import AniBridgeDB
+    from anibridge.app.config.database import AniBridgeDB
 
 
 @pytest.fixture

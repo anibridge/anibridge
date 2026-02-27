@@ -2,7 +2,7 @@
 
 import logging
 
-from src.web.routes.api import logs as logs_api
+from anibridge.app.web.routes.api import logs as logs_api
 
 
 def test_list_log_files_case_insensitive_filename_match(tmp_path, monkeypatch):

@@ -13,12 +13,12 @@ from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import select
 
-from src.config.database import AniBridgeDB
-from src.core.animap import AnimapClient, AnimapEdge
-from src.core.mappings import MappingsClient
-from src.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
-from src.models.db.base import Base
-from src.models.db.housekeeping import Housekeeping
+from anibridge.app.config.database import AniBridgeDB
+from anibridge.app.core.animap import AnimapClient, AnimapEdge
+from anibridge.app.core.mappings import MappingsClient
+from anibridge.app.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
+from anibridge.app.models.db.base import Base
+from anibridge.app.models.db.housekeeping import Housekeeping
 
 
 class FakeMappingsClient:
@@ -83,8 +83,8 @@ def in_memory_db(monkeypatch: pytest.MonkeyPatch):
 
     db_instance = _DB()
 
-    database_module = importlib.import_module("src.config.database")
-    animap_module = importlib.import_module("src.core.animap")
+    database_module = importlib.import_module("anibridge.app.config.database")
+    animap_module = importlib.import_module("anibridge.app.core.animap")
 
     monkeypatch.setattr(database_module, "db", lambda: db_instance)
     monkeypatch.setattr(animap_module, "db", lambda: db_instance)
@@ -150,7 +150,7 @@ def test_descriptor_key_and_parse_mapping_descriptor_roundtrip() -> None:
     descriptor = ("anilist", "1", None)
     scoped = ("tmdb", "2", "s1")
 
-    from src.core.animap import descriptor_key, parse_mapping_descriptor
+    from anibridge.app.core.animap import descriptor_key, parse_mapping_descriptor
 
     assert parse_mapping_descriptor(descriptor_key(descriptor)) == descriptor
     assert parse_mapping_descriptor(descriptor_key(scoped)) == scoped
@@ -158,7 +158,7 @@ def test_descriptor_key_and_parse_mapping_descriptor_roundtrip() -> None:
 
 def test_parse_mapping_descriptor_rejects_invalid() -> None:
     """Invalid mapping descriptors should raise a ValueError."""
-    from src.core.animap import parse_mapping_descriptor
+    from anibridge.app.core.animap import parse_mapping_descriptor
 
     with pytest.raises(ValueError):
         parse_mapping_descriptor("bad-descriptor!")
@@ -411,7 +411,7 @@ def test_sync_db_logs_distinct_mapping_changes(
                 pass
         messages.append(template)
 
-    animap_module = importlib.import_module("src.core.animap")
+    animap_module = importlib.import_module("anibridge.app.core.animap")
     monkeypatch.setattr(animap_module.log, "success", _capture_success)
 
     asyncio.run(animap_client.sync_db())

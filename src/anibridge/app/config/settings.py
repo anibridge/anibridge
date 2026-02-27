@@ -248,8 +248,8 @@ class AniBridgeProfileConfig(BaseModel):
     auto_rewatch: bool = Field(
         default=False,
         description=(
-            "When enabled, automatically set status to rewatching on the list provider "
-            "if the entry is already marked as completed or rewatching and new watch "
+            "When enabled, automatically set status to repeating on the list provider "
+            "if the entry is already marked as completed or repeating and new watch "
             "activity is detected in the library"
         ),
     )

@@ -101,7 +101,7 @@ class BaseSyncClient[
         dry_run: bool,
         profile_name: str,
         sync_fields: Mapping[SyncField, bool | Mapping[str, bool]] | None = None,
-        auto_rewatch: bool = False,
+        promote_rewatch: bool = False,
     ) -> None:
         """Initialize the base synchronisation client."""
         self.library_provider: LibraryProvider = library_provider
@@ -121,7 +121,7 @@ class BaseSyncClient[
         self.search_fallback_threshold: int = search_fallback_threshold
         self.batch_requests: bool = batch_requests
         self.dry_run: bool = dry_run
-        self.auto_rewatch: bool = auto_rewatch
+        self.promote_rewatch: bool = promote_rewatch
         self.profile_name: str = profile_name
 
         self.sync_stats: SyncStats = SyncStats()
@@ -680,13 +680,20 @@ class BaseSyncClient[
             )
             return SyncOutcome.SKIPPED
 
+        promoted_current_to_repeating = False
         if (
-            self.auto_rewatch
+            self.promote_rewatch
             and status_value == ListStatus.CURRENT
-            and before_snapshot.status
-            in (ListStatus.COMPLETED, ListStatus.REPEATING)
+            and before_snapshot.status in (ListStatus.COMPLETED, ListStatus.REPEATING)
         ):
+            promoted_current_to_repeating = True
             status_value = ListStatus.REPEATING
+            log.debug(
+                "[%s] Promoting status CURRENT -> REPEATING (promote_rewatch) %s %s",
+                self.profile_name,
+                debug_title,
+                debug_ids,
+            )
 
         considered_attrs: set[str] = set()
 
@@ -748,6 +755,7 @@ class BaseSyncClient[
             {
                 "computed_status": status_value,
                 "final_status": final_status,
+                "promoted_current_to_repeating": promoted_current_to_repeating,
                 "sync_fields_disabled": sorted(sync_fields_disabled),
                 "pinned_blocked": sorted(pinned_blocked_fields),
                 "sync_rules_blocked": [

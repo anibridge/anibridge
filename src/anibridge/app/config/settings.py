@@ -245,7 +245,7 @@ class AniBridgeProfileConfig(BaseModel):
     search_fallback_threshold: int = Field(
         default=-1, ge=-1, le=100, description="Fuzzy search threshold"
     )
-    auto_rewatch: bool = Field(
+    promote_rewatch: bool = Field(
         default=False,
         description=(
             "When enabled, automatically set status to repeating on the list provider "

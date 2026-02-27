@@ -220,7 +220,7 @@ def _make_profile_config(**overrides: Any) -> SimpleNamespace:
         "batch_requests": False,
         "backup_retention_days": -1,
         "dry_run": False,
-        "auto_rewatch": False,
+        "promote_rewatch": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-__all__ = ["find_project_root"]
+from anibridge.app import __file__ as src_file
+
+__all__ = ["PROJECT_ROOT", "find_project_root"]
 
 
 def find_project_root(anchor: Path, marker: str = "pyproject.toml") -> Path | None:
@@ -22,3 +24,8 @@ def find_project_root(anchor: Path, marker: str = "pyproject.toml") -> Path | No
             return candidate
 
     return None
+
+
+PROJECT_ROOT = (
+    find_project_root(Path(src_file).resolve()) or Path(src_file).resolve().parents[3]
+)

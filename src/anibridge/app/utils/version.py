@@ -1,19 +1,11 @@
 """Version Utilities Module."""
 
-import tomllib
+import importlib.metadata
 from pathlib import Path
 
-from anibridge.app import __file__ as src_file
-from anibridge.app.utils.paths import find_project_root
+from anibridge.app.utils.paths import PROJECT_ROOT
 
 __all__ = ["get_docker_status", "get_git_hash", "get_pyproject_version"]
-
-
-def _get_project_root() -> Path | None:
-    """Resolve project root from package file location."""
-    if src_file is None:
-        return None
-    return find_project_root(Path(src_file).resolve())
 
 
 def get_pyproject_version() -> str:
@@ -22,27 +14,9 @@ def get_pyproject_version() -> str:
     Returns:
         str: AniBridge's version
     """
-    if src_file is None:
-        return "unknown"
-
     try:
-        project_root = _get_project_root()
-        if project_root is None:
-            return "unknown"
-
-        toml_file = project_root / "pyproject.toml"
-
-        if not toml_file.exists() or not toml_file.is_file():
-            return "unknown"
-
-        with toml_file.open("rb") as f:
-            toml_data = tomllib.load(f)
-
-        project_data = toml_data.get("project") or {}
-        if isinstance(project_data, dict) and "version" in project_data:
-            return project_data["version"]
-        return "unknown"
-    except Exception:
+        return importlib.metadata.version("anibridge")
+    except importlib.metadata.PackageNotFoundError:
         return "unknown"
 
 
@@ -52,15 +26,11 @@ def get_git_hash() -> str:
     Returns:
         str: AniBridge's current commit hash
     """
-    if src_file is None:
-        return "unknown"
-
     try:
-        project_root = _get_project_root()
-        if project_root is None:
+        if PROJECT_ROOT is None:
             return "unknown"
 
-        git_dir_path = project_root / ".git"
+        git_dir_path = PROJECT_ROOT / ".git"
         if not git_dir_path.exists() or not git_dir_path.is_dir():
             return "unknown"
 

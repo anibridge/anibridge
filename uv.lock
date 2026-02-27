@@ -114,9 +114,7 @@ dependencies = [
     { name = "anibridge-mal-provider" },
     { name = "anibridge-plex-provider" },
     { name = "bcrypt" },
-    { name = "cachetools" },
     { name = "colorama" },
-    { name = "diskcache" },
     { name = "fastapi", extra = ["standard-no-fastapi-cloud-cli"] },
     { name = "orjson" },
     { name = "pydantic" },
@@ -140,7 +138,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.13.3" },
-    { name = "alembic", specifier = ">=1.18.3" },
+    { name = "alembic", specifier = ">=1.18.4" },
     { name = "anibridge-anilist-provider", specifier = ">=0.2.0b8,<0.3.0" },
     { name = "anibridge-jellyfin-provider", specifier = ">=0.2.0b5,<0.3.0" },
     { name = "anibridge-library-base", specifier = ">=0.2.0b5" },
@@ -148,16 +146,14 @@ requires-dist = [
     { name = "anibridge-mal-provider", specifier = ">=0.2.0b6,<0.3.0" },
     { name = "anibridge-plex-provider", specifier = ">=0.2.0b6,<0.3.0" },
     { name = "bcrypt", specifier = ">=5.0.0" },
-    { name = "cachetools", specifier = ">=5.5.2" },
     { name = "colorama", specifier = ">=0.4.6" },
-    { name = "diskcache", specifier = ">=5.6.3" },
-    { name = "fastapi", extras = ["standard-no-fastapi-cloud-cli"], specifier = ">=0.128.0" },
-    { name = "orjson", specifier = ">=3.11.6" },
+    { name = "fastapi", extras = ["standard-no-fastapi-cloud-cli"], specifier = ">=0.133.1" },
+    { name = "orjson", specifier = ">=3.11.7" },
     { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pydantic-settings", specifier = ">=2.12.0" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pyparsing", specifier = ">=3.3.2" },
     { name = "rapidfuzz", specifier = ">=3.14.3" },
-    { name = "sqlalchemy", specifier = ">=2.0.46" },
+    { name = "sqlalchemy", specifier = ">=2.0.47" },
 ]
 
 [package.metadata.requires-dev]

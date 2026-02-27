@@ -4,8 +4,6 @@ import string
 import tomllib
 from pathlib import Path
 
-import pytest
-
 from anibridge.app.utils import version as version_module
 
 
@@ -27,12 +25,3 @@ def test_get_git_hash_returns_hex_or_unknown() -> None:
     if git_hash != "unknown":
         assert len(git_hash) in {7, 40}
         assert all(char in string.hexdigits for char in git_hash)
-
-
-def test_get_git_hash_returns_unknown_when_git_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Git helper should return 'unknown' when .git is missing."""
-    monkeypatch.setattr(version_module, "src_file", None)
-
-    assert version_module.get_git_hash() == "unknown"

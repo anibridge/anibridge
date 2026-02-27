@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import DEBUG
-from pathlib import Path
 from typing import Any, cast
 
 from fastapi.applications import FastAPI
@@ -17,6 +16,7 @@ from starlette.requests import Request
 from anibridge.app import __version__, config, log
 from anibridge.app.core.sched import SchedulerClient
 from anibridge.app.exceptions import AniBridgeError
+from anibridge.app.utils.paths import PROJECT_ROOT
 from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
 from anibridge.app.web.middlewares.request_logging import RequestLoggingMiddleware
 from anibridge.app.web.routes import router
@@ -25,7 +25,7 @@ from anibridge.app.web.state import get_app_state
 
 __all__ = ["create_app"]
 
-FRONTEND_BUILD_DIR = Path(__file__).parent.parent.parent / "frontend" / "build"
+FRONTEND_BUILD_DIR = PROJECT_ROOT / "frontend" / "build"
 
 
 @asynccontextmanager

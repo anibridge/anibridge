@@ -9,10 +9,9 @@ from anibridge.utils.cache import cache
 from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from anibridge.app import __file__ as src_file
 from anibridge.app import config, log
 from anibridge.app.exceptions import DataPathError
-from anibridge.app.utils.paths import find_project_root
+from anibridge.app.utils.paths import PROJECT_ROOT
 
 __all__ = ["AniBridgeDB", "db"]
 
@@ -126,17 +125,8 @@ class AniBridgeDB:
 
         log.debug("Running database migrations")
 
-        if src_file is None:
-            log.error("Cannot determine source file path for Alembic configuration")
-            raise FileNotFoundError("Source file path is undefined")
-
-        project_root = find_project_root(Path(src_file).resolve())
-        if project_root is None:
-            log.error("Cannot determine project root for Alembic configuration")
-            raise FileNotFoundError("Project root could not be determined")
-
         cfg = Config()
-        cfg.set_main_option("script_location", str(project_root / "alembic"))
+        cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
         cfg.set_main_option("sqlalchemy.url", f"sqlite:///{self.db_path}")
 
         try:

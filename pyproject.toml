@@ -1,5 +1,5 @@
 [project]
-name = "AniBridge"
+name = "anibridge"
 version = "2.1.0b2"
 description = "The smart way to keep your anime lists perfectly synchronized."
 readme = "README.md"
@@ -33,7 +33,7 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.13.3",
-    "alembic>=1.18.3",
+    "alembic>=1.18.4",
     "anibridge-anilist-provider>=0.2.0b8,<0.3.0",
     "anibridge-jellyfin-provider>=0.2.0b5,<0.3.0",
     "anibridge-library-base>=0.2.0b5",
@@ -41,16 +41,14 @@ dependencies = [
     "anibridge-mal-provider>=0.2.0b6,<0.3.0",
     "anibridge-plex-provider>=0.2.0b6,<0.3.0",
     "bcrypt>=5.0.0",
-    "cachetools>=5.5.2",
     "colorama>=0.4.6",
-    "diskcache>=5.6.3",
-    "fastapi[standard-no-fastapi-cloud-cli]>=0.128.0",
-    "orjson>=3.11.6",
-    "pydantic-settings>=2.12.0",
+    "fastapi[standard-no-fastapi-cloud-cli]>=0.133.1",
+    "orjson>=3.11.7",
+    "pydantic-settings>=2.13.1",
     "pydantic>=2.12.5",
     "pyparsing>=3.3.2",
     "rapidfuzz>=3.14.3",
-    "sqlalchemy>=2.0.46",
+    "sqlalchemy>=2.0.47",
 ]
 
 [project.scripts]

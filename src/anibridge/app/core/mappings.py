@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from compression import zstd
 from pathlib import Path
 from typing import Any, ClassVar, cast
 from urllib.parse import urljoin, urlparse
@@ -9,7 +10,6 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import orjson
 import yaml
-import zstandard
 from anibridge.utils.cache import ttl_cache
 from yaml import CSafeLoader as YamlLoader
 
@@ -112,9 +112,9 @@ class MappingsClient:
         suffixes = [suffix.lower() for suffix in Path(src).suffixes]
         if suffixes and suffixes[-1] == ".zst":
             try:
-                payload = zstandard.ZstdDecompressor().decompress(payload)
+                payload = zstd.decompress(payload)
                 suffixes = suffixes[:-1]
-            except zstandard.ZstdError:
+            except zstd.ZstdError:
                 log.error(
                     "Error decompressing Zstandard payload $$'%s'$$",
                     src,

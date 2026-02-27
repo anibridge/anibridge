@@ -51,7 +51,6 @@ dependencies = [
     "pyparsing>=3.3.2",
     "rapidfuzz>=3.14.3",
     "sqlalchemy>=2.0.46",
-    "zstandard>=0.25.0",
 ]
 
 [project.scripts]

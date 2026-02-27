@@ -1,12 +1,12 @@
 """Tests for the core mappings client (descriptor graph)."""
 
 import json
+from compression import zstd
 from pathlib import Path
 from typing import Any, cast
 
 import aiohttp
 import pytest
-import zstandard
 
 import anibridge.app.core.mappings as mappings_module
 from anibridge.app.core.mappings import MappingsClient
@@ -269,7 +269,7 @@ def test_decode_mappings_zstd_payload(tmp_path: Path) -> None:
     """Zstandard-compressed payloads should be decoded."""
     client = _make_client(tmp_path)
     raw = b'{"anilist:1": {"tmdb:2": {"1": null}}}'
-    compressed = zstandard.ZstdCompressor().compress(raw)
+    compressed = zstd.compress(raw)
 
     result = client._decode_mappings(compressed, "mappings.json.zst")
 

@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import ClassVar
 
 import colorama
+from anibridge.utils.cache import cache
 from colorama import Fore, Style
-
-from anibridge.app.utils.cache import cache
 
 __all__ = ["Logger", "get_logger"]
 

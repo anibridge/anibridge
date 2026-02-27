@@ -12,6 +12,7 @@ from anibridge.library import (
     LibraryShow,
 )
 from anibridge.list import ListEntry, ListMediaType, ListStatus, MappingDescriptor
+from anibridge.utils.cache import lru_cache, ttl_cache
 
 from anibridge.app.core.animap import descriptor_key
 from anibridge.app.core.sync.base import (
@@ -21,7 +22,6 @@ from anibridge.app.core.sync.base import (
     SyncTarget,
 )
 from anibridge.app.core.sync.stats import ItemIdentifier
-from anibridge.app.utils.cache import lru_cache, ttl_cache
 
 __all__ = ["ShowSyncClient"]
 

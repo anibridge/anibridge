@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from anibridge.utils.cache import cache
 
 from anibridge.app import log
 from anibridge.app.config.settings import AniBridgeConfig, find_yaml_config_file
-from anibridge.app.utils.cache import cache
 
 __all__ = ["ConfigurationService", "get_configuration_service"]
 

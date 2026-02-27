@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from anibridge.utils.cache import cache
 from pydantic import BaseModel
 
 from anibridge.app import log
@@ -15,7 +16,6 @@ from anibridge.app.exceptions import (
     ProfileNotFoundError,
     SchedulerNotInitializedError,
 )
-from anibridge.app.utils.cache import cache
 from anibridge.app.web.state import get_app_state
 
 if TYPE_CHECKING:

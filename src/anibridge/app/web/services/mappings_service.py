@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
+from anibridge.utils.cache import cache
 from sqlalchemy.sql import func, or_, select
 
 from anibridge.app.config.database import db
@@ -33,7 +34,6 @@ from anibridge.app.utils.booru_query import (
     evaluate,
     parse_query,
 )
-from anibridge.app.utils.cache import cache
 from anibridge.app.web.services.mappings_query_spec import (
     QueryFieldKind,
     QueryFieldSpec,

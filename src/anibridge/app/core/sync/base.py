@@ -8,6 +8,7 @@ from typing import Any
 
 from anibridge.library import LibraryEntry, LibraryProvider
 from anibridge.list import ListEntry, ListProvider, ListStatus, MappingDescriptor
+from anibridge.utils.types import Comparable
 from rapidfuzz import fuzz
 from sqlalchemy import tuple_
 
@@ -26,7 +27,6 @@ from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
 from anibridge.app.utils.mapping_ranges import SourceRange, parse_source_range
 from anibridge.app.utils.terminal import ARROW
-from anibridge.app.utils.types import Comparable
 
 __all__ = ["BaseSyncClient"]
 

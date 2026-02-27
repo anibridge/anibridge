@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from anibridge.utils.cache import lru_cache
+
 from anibridge.app import log
 from anibridge.app.config.settings import AniBridgeConfig, ScanMode
 from anibridge.app.core.animap import AnimapClient
@@ -13,7 +15,6 @@ from anibridge.app.core.bridge import BridgeClient
 from anibridge.app.core.sched.coord import GlobalSyncCoordinator
 from anibridge.app.core.sched.profile import ProfileScheduler
 from anibridge.app.exceptions import ProfileNotFoundError
-from anibridge.app.utils.cache import lru_cache
 
 __all__ = ["SchedulerClient"]
 

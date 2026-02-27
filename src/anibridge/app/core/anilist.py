@@ -5,18 +5,17 @@ from collections.abc import Iterable
 from typing import Any
 
 import aiohttp
+from anibridge.utils.cache import cache, ttl_cache
+from anibridge.utils.limiter import Limiter
 
 from anibridge.app import __version__, log
 from anibridge.app.exceptions import AniListFilterError, AniListSearchError
 from anibridge.app.models.schemas.anilist import Media
-from anibridge.app.utils.cache import cache, ttl_cache
-from anibridge.app.utils.limiter import Limiter
 
 __all__ = ["AniListClient"]
 
-# The rate limit for the AniList API *should* be 90 requests per minute, but in practice
-# it seems to be around 30 requests per minute
-anilist_limiter = Limiter(rate=30 / 60, capacity=3)
+# Rate limit of 30 req/min with a burst capacity of 4
+anilist_limiter = Limiter(rate=30 / 60, capacity=4)
 
 
 class AniListClient:
@@ -339,7 +338,7 @@ class AniListClient:
                     }}
                 }}
             }}
-            """  # ty:ignore[missing-argument]
+            """
 
             variables = {"ids": batch_ids}
             response = await self._make_request(query, variables)
@@ -356,7 +355,7 @@ class AniListClient:
 
         return result
 
-    @anilist_limiter()
+    @anilist_limiter
     async def _make_request(
         self, query: str, variables: dict | None = None, retry_count: int = 0
     ) -> dict:

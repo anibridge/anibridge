@@ -7,6 +7,7 @@ from functools import cached_property
 from pathlib import Path
 
 from anibridge.list import ListStatus
+from anibridge.utils.cache import cache
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
@@ -17,7 +18,6 @@ from pydantic_settings import (
 )
 
 from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
-from anibridge.app.utils.cache import cache
 from anibridge.app.utils.logging import _get_logger
 
 __all__ = [

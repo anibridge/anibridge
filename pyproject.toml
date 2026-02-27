@@ -40,6 +40,7 @@ dependencies = [
     "anibridge-list-base>=0.2.0b3",
     "anibridge-mal-provider>=0.2.0b3,<0.3.0",
     "anibridge-plex-provider>=0.2.0b1,<0.3.0",
+    "anibridge-utils>=0.1.0",
     "bcrypt>=5.0.0",
     "cachetools>=5.5.2",
     "colorama>=0.4.6",
@@ -114,6 +115,9 @@ filterwarnings = []
 module-name = "anibridge"
 namespace = true
 
+[tool.uv.sources]
+anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils" }
+
 [build-system]
 requires = ["uv_build>=0.9.21,<0.10.0"]
 build-backend = "uv_build"
@@ -125,6 +129,6 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "pytest>=9.0.2",
-    "ruff>=0.14.14",
-    "ty>=0.0.14",
+    "ruff>=0.15.4",
+    "ty>=0.0.19",
 ]

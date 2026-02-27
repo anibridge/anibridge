@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from anibridge.utils.cache import cache
+
 from anibridge.app.models.db.animap import AnimapEntry
 from anibridge.app.models.schemas.anilist import MediaFormat, MediaStatus
-from anibridge.app.utils.cache import cache
 
 __all__ = [
     "QueryFieldKind",

@@ -9,9 +9,10 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from anibridge.utils.cache import cache
+
 from anibridge.app.core.anilist import AniListClient
 from anibridge.app.exceptions import ProfileNotFoundError, SchedulerNotInitializedError
-from anibridge.app.utils.cache import cache
 
 __all__ = ["AppState", "get_app_state", "get_bridge"]
 

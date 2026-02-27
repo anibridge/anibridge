@@ -5,11 +5,11 @@ from datetime import datetime
 
 from anibridge.library import LibraryMovie
 from anibridge.list import ListEntry, ListMediaType, ListStatus
+from anibridge.utils.cache import ttl_cache
 
 from anibridge.app.core.animap import descriptor_key
 from anibridge.app.core.sync.base import BaseSyncClient, SyncTarget
 from anibridge.app.core.sync.stats import ItemIdentifier
-from anibridge.app.utils.cache import ttl_cache
 
 __all__ = ["MovieSyncClient"]
 

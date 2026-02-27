@@ -6,10 +6,10 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
+from anibridge.utils.cache import cache
 from starlette.websockets import WebSocket
 
 from anibridge.app import log
-from anibridge.app.utils.cache import cache
 
 __all__ = ["WebsocketLogHandler", "get_log_ws_handler"]
 

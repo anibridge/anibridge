@@ -5,10 +5,9 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, ClassVar, get_args, get_origin
 
+from anibridge.utils.cache import cache
 from pydantic import AfterValidator, BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
-
-from anibridge.app.utils.cache import cache
 
 UTCDateTime = Annotated[datetime, AfterValidator(lambda dt: dt.astimezone(UTC))]
 

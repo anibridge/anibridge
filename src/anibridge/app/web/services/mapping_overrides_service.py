@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
+from anibridge.utils.cache import cache
 
 from anibridge.app import config
 from anibridge.app.config.settings import get_config
@@ -17,7 +18,6 @@ from anibridge.app.exceptions import (
     MissingDescriptorError,
     SchedulerNotInitializedError,
 )
-from anibridge.app.utils.cache import cache
 from anibridge.app.utils.mapping_ranges import (
     is_valid_source_range,
     is_valid_target_range,

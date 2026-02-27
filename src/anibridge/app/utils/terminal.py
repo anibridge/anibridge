@@ -5,8 +5,7 @@ import os
 import sys
 
 import colorama
-
-from anibridge.app.utils.cache import cache
+from anibridge.utils.cache import cache
 
 __all__ = ["ARROW", "supports_color", "supports_utf8"]
 

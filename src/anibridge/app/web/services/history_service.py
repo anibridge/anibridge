@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from anibridge.utils.cache import cache, lru_cache, ttl_cache
 from fastapi.param_functions import Query
 from pydantic import BaseModel
 from sqlalchemy.sql import select
@@ -21,7 +22,6 @@ from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
 from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.utils.async_tasks import schedule_task
-from anibridge.app.utils.cache import cache, lru_cache, ttl_cache
 from anibridge.app.web.state import get_app_state, get_bridge
 
 if TYPE_CHECKING:

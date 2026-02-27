@@ -5,13 +5,13 @@ from types import TracebackType
 from typing import TYPE_CHECKING
 
 import sqlalchemy.event
+from anibridge.utils.cache import cache
 from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from anibridge.app import __file__ as src_file
 from anibridge.app import config, log
 from anibridge.app.exceptions import DataPathError
-from anibridge.app.utils.cache import cache
 from anibridge.app.utils.paths import find_project_root
 
 __all__ = ["AniBridgeDB", "db"]

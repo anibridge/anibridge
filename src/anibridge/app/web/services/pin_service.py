@@ -4,13 +4,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from anibridge.utils.cache import cache
 from pydantic import BaseModel, Field
 
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import SyncField
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.schemas.provider import ProviderMediaMetadata
-from anibridge.app.utils.cache import cache
 from anibridge.app.web.state import get_bridge
 
 __all__ = [

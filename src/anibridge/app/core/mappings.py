@@ -10,10 +10,10 @@ import aiohttp
 import orjson
 import yaml
 import zstandard
+from anibridge.utils.cache import ttl_cache
 from yaml import CSafeLoader as YamlLoader
 
 from anibridge.app import __version__, log
-from anibridge.app.utils.cache import ttl_cache
 
 __all__ = ["AnimapDict", "MappingsClient"]
 

@@ -11,8 +11,9 @@ from anibridge.library import (
     LibrarySeason,
     LibraryShow,
 )
-from anibridge.list import ListEntry, ListMediaType, ListStatus, MappingDescriptor
+from anibridge.list import ListEntry, ListMediaType, ListStatus
 from anibridge.utils.cache import lru_cache, ttl_cache
+from anibridge.utils.types import MappingDescriptor
 
 from anibridge.app.core.animap import descriptor_key
 from anibridge.app.core.sync.base import (

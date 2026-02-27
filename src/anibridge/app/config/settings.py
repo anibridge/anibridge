@@ -377,9 +377,9 @@ class AniBridgeConfig(BaseSettings):
     profiles: dict[str, AniBridgeProfileConfig] = Field(
         default_factory=dict, description="AniBridge profile configurations"
     )
-    provider_modules: list[str] = Field(
+    provider_classes: list[str] = Field(
         default_factory=list,
-        description="Additional module paths to load provider implementations from",
+        description="Additional class paths to register provider implementations from",
     )
     log_level: LogLevel = Field(
         default=LogLevel.INFO, description="Logging level for the application"

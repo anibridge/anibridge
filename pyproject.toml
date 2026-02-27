@@ -34,13 +34,12 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.13.3",
     "alembic>=1.18.3",
-    "anibridge-anilist-provider>=0.2.0b4,<0.3.0",
-    "anibridge-jellyfin-provider>=0.2.0b2,<0.3.0",
-    "anibridge-library-base>=0.2.0b2",
-    "anibridge-list-base>=0.2.0b3",
-    "anibridge-mal-provider>=0.2.0b3,<0.3.0",
-    "anibridge-plex-provider>=0.2.0b1,<0.3.0",
-    "anibridge-utils>=0.1.0",
+    "anibridge-anilist-provider>=0.2.0b8,<0.3.0",
+    "anibridge-jellyfin-provider>=0.2.0b5,<0.3.0",
+    "anibridge-library-base>=0.2.0b5",
+    "anibridge-list-base>=0.2.0b6",
+    "anibridge-mal-provider>=0.2.0b6,<0.3.0",
+    "anibridge-plex-provider>=0.2.0b6,<0.3.0",
     "bcrypt>=5.0.0",
     "cachetools>=5.5.2",
     "colorama>=0.4.6",
@@ -114,9 +113,6 @@ filterwarnings = []
 [tool.uv.build-backend]
 module-name = "anibridge"
 namespace = true
-
-[tool.uv.sources]
-anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils" }
 
 [build-system]
 requires = ["uv_build>=0.9.21,<0.10.0"]

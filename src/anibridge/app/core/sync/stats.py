@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from anibridge.library import LibraryEntry, MediaKind
-from anibridge.list import ListEntry, ListStatus, MappingDescriptor
+from anibridge.list import ListEntry, ListStatus
+from anibridge.utils.types import MappingDescriptor
 from pydantic import BaseModel
 
 from anibridge.app.models.db.sync_history import SyncOutcome

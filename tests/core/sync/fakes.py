@@ -13,7 +13,8 @@ from anibridge.library import (
     LibraryShow,
     MediaKind,
 )
-from anibridge.list import ListMediaType, ListStatus, ListTarget, MappingDescriptor
+from anibridge.list import ListMediaType, ListStatus, ListTarget
+from anibridge.utils.types import MappingDescriptor
 
 from anibridge.app.core.animap import AnimapEdge
 

@@ -6,13 +6,8 @@ from typing import Any, cast
 
 import pytest
 from anibridge.library import MediaKind
-from anibridge.list import (
-    ListEntry as ListEntryProtocol,
-)
-from anibridge.list import (
-    ListMediaType,
-    ListStatus,
-)
+from anibridge.list import ListEntry as ListEntryProtocol
+from anibridge.list import ListMediaType, ListStatus
 
 from anibridge.app.config.settings import SyncField
 from anibridge.app.core.sync.base import BaseSyncClient, SyncTarget, diff_snapshots

@@ -8,7 +8,7 @@ from hashlib import md5
 from itertools import batched
 from pathlib import Path
 
-from anibridge.list import MappingDescriptor
+from anibridge.utils.types import MappingDescriptor
 from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session, aliased

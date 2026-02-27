@@ -4,9 +4,8 @@ from collections.abc import Iterable
 from importlib import import_module
 
 from anibridge.library import LibraryProvider
-from anibridge.library import provider_registry as library_registry
 from anibridge.list import ListProvider
-from anibridge.list import provider_registry as list_registry
+from anibridge.utils.registry import ProviderRegistry
 
 from anibridge.app import log
 from anibridge.app.config.settings import AniBridgeConfig, AniBridgeProfileConfig
@@ -17,42 +16,77 @@ __all__ = [
     "build_list_provider",
 ]
 
-_DEFAULT_LIBRARY_PROVIDER_MODULES: tuple[str, ...] = (
-    "anibridge_jellyfin_provider.library",
-    "anibridge_plex_provider.library",
+_ROOT_LIBRARY_PACKAGE = "anibridge.providers.library"
+_ROOT_LIST_PACKAGE = "anibridge.providers.list"
+_DEFAULT_LIBRARY_PROVIDER_CLASSES: tuple[str, ...] = (
+    f"{_ROOT_LIBRARY_PACKAGE}.jellyfin.JellyfinLibraryProvider",
+    f"{_ROOT_LIBRARY_PACKAGE}.plex.PlexLibraryProvider",
 )
-_DEFAULT_LIST_PROVIDER_MODULES: tuple[str, ...] = (
-    "anibridge_anilist_provider.list",
-    "anibridge_mal_provider.list",
+_DEFAULT_LIST_PROVIDER_CLASSES: tuple[str, ...] = (
+    f"{_ROOT_LIST_PACKAGE}.anilist.AnilistListProvider",
+    f"{_ROOT_LIST_PACKAGE}.mal.MalListProvider",
 )
-_LOADED_MODULES: set[str] = set()
+_LOADED_CLASSES: set[str] = set()
+
+library_registry: ProviderRegistry[LibraryProvider] = ProviderRegistry()
+list_registry: ProviderRegistry[ListProvider] = ProviderRegistry()
 
 
-def _import_modules(modules: Iterable[str]) -> None:
-    """Import provider modules, ensuring each module loads only once."""
-    for module in modules:
-        if not module or module in _LOADED_MODULES:
+def _register_classes(class_paths: Iterable[str]) -> None:
+    """Import and register provider classes, ensuring each class loads once."""
+    for class_path in class_paths:
+        if not class_path or class_path in _LOADED_CLASSES:
             continue
-        try:
-            import_module(module)
-        except Exception as exc:
-            log.error("Failed to import provider module '%s'", module)
-            log.exception("Provider module import error details")
+
+        module_path, separator, class_name = class_path.rpartition(".")
+        if not separator or not module_path or not class_name:
             raise ProfileConfigError(
-                f"Failed to import provider module '{module}'. "
-                "Ensure the dependency is installed and the module path is valid."
+                f"Invalid provider class path '{class_path}'. "
+                "Expected a fully qualified class path like "
+                "'package.module.ProviderClass'."
+            )
+
+        try:
+            module = import_module(module_path)
+            provider_cls = getattr(module, class_name)
+        except Exception as exc:
+            log.error("Failed to import provider class '%s'", class_path)
+            log.exception("Provider class import error details")
+            raise ProfileConfigError(
+                f"Failed to import provider class '{class_path}'. "
+                "Ensure the dependency is installed and the class path is valid."
             ) from exc
-        else:
-            _LOADED_MODULES.add(module)
+
+        if not isinstance(provider_cls, type):
+            raise ProfileConfigError(
+                f"Provider class path '{class_path}' does not resolve to a class."
+            )
+
+        try:
+            if issubclass(provider_cls, LibraryProvider):
+                library_registry.register(provider_cls)
+            elif issubclass(provider_cls, ListProvider):
+                list_registry.register(provider_cls)
+            else:
+                raise ProfileConfigError(
+                    f"Provider class '{class_path}' must inherit from "
+                    "LibraryProvider or ListProvider."
+                )
+        except ValueError as exc:
+            raise ProfileConfigError(
+                f"Failed to register provider class '{class_path}': {exc}"
+            ) from exc
+
+        _LOADED_CLASSES.add(class_path)
 
 
-def _collect_module_overrides(config: AniBridgeConfig) -> set[str]:
-    """Gather module names requested globally and by the profile."""
-    modules: set[str] = set(config.provider_modules or [])
-    if not config.provider_modules:
-        return modules
-    modules.update(config.provider_modules)
-    return modules
+def _collect_class_overrides(config: AniBridgeConfig) -> set[str]:
+    """Gather class paths requested globally and by the profile."""
+    classes: set[str] = set(config.provider_classes or [])
+    if not config.provider_classes:
+        return classes
+    classes.update(config.provider_classes)
+    return classes
 
 
 def build_library_provider(profile: AniBridgeProfileConfig) -> LibraryProvider:
@@ -64,7 +98,7 @@ def build_library_provider(profile: AniBridgeProfileConfig) -> LibraryProvider:
     Returns:
         LibraryProvider: The instantiated library provider.
     """
-    _import_modules(_collect_module_overrides(profile.parent))
+    _register_classes(_collect_class_overrides(profile.parent))
 
     namespace = profile.library_provider
     config = profile.library_provider_config.get(namespace)
@@ -75,7 +109,7 @@ def build_library_provider(profile: AniBridgeProfileConfig) -> LibraryProvider:
         raise ProfileConfigError(
             f"No library provider registered for namespace '{namespace}'. "
             "Ensure the provider package is installed and listed under "
-            "provider_modules."
+            "provider_classes."
         ) from exc
 
 
@@ -88,7 +122,7 @@ def build_list_provider(profile: AniBridgeProfileConfig) -> ListProvider:
     Returns:
         ListProvider: The instantiated list provider.
     """
-    _import_modules(_collect_module_overrides(profile.parent))
+    _register_classes(_collect_class_overrides(profile.parent))
 
     namespace = profile.list_provider
     config = profile.list_provider_config.get(namespace)
@@ -99,9 +133,9 @@ def build_list_provider(profile: AniBridgeProfileConfig) -> ListProvider:
         raise ProfileConfigError(
             f"No list provider registered for namespace '{namespace}'. "
             "Ensure the provider package is installed and listed under "
-            "provider_modules."
+            "provider_classes."
         ) from exc
 
 
-# Pre-import default provider modules at factory load time
-_import_modules(_DEFAULT_LIBRARY_PROVIDER_MODULES + _DEFAULT_LIST_PROVIDER_MODULES)
+# Pre-register default provider classes at factory load time
+_register_classes(_DEFAULT_LIBRARY_PROVIDER_CLASSES + _DEFAULT_LIST_PROVIDER_CLASSES)

@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from anibridge.library import LibraryEntry, LibraryProvider
-from anibridge.list import ListEntry, ListProvider, ListStatus, MappingDescriptor
-from anibridge.utils.types import Comparable
+from anibridge.list import ListEntry, ListProvider, ListStatus
+from anibridge.utils.types import Comparable, MappingDescriptor
 from rapidfuzz import fuzz
 from sqlalchemy import tuple_
 

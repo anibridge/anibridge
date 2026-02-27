@@ -11,48 +11,66 @@ from anibridge.app.exceptions import ProfileConfigError
 
 
 class DummyConfig(SimpleNamespace):
-    """Minimal config object exposing provider module overrides."""
+    """Minimal config object exposing provider class overrides."""
 
-    def __init__(self, provider_modules):
-        super().__init__(provider_modules=provider_modules)
+    def __init__(self, provider_classes):
+        super().__init__(provider_classes=provider_classes)
 
 
-def test_collect_module_overrides_returns_empty_for_none() -> None:
-    """No provider_modules should yield an empty override set."""
-    config = DummyConfig(provider_modules=None)
+def test_collect_class_overrides_returns_empty_for_none() -> None:
+    """No provider_classes should yield an empty override set."""
+    config = DummyConfig(provider_classes=None)
 
     assert (
-        providers_module._collect_module_overrides(
+        providers_module._collect_class_overrides(
             cast("providers_module.AniBridgeConfig", config)
         )
         == set()
     )
 
 
-def test_collect_module_overrides_returns_set_for_values() -> None:
-    """Provider module overrides should be returned as a set."""
-    config = DummyConfig(provider_modules=["mod.a", "mod.b"])
+def test_collect_class_overrides_returns_set_for_values() -> None:
+    """Provider class overrides should be returned as a set."""
+    config = DummyConfig(provider_classes=["pkg.a.A", "pkg.b.B"])
 
-    assert providers_module._collect_module_overrides(
+    assert providers_module._collect_class_overrides(
         cast("providers_module.AniBridgeConfig", config)
-    ) == {"mod.a", "mod.b"}
+    ) == {"pkg.a.A", "pkg.b.B"}
 
 
-def test_import_modules_skips_duplicates_and_blanks(
+def test_register_classes_skips_duplicates_and_blanks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Only new, non-empty modules should be imported once."""
+    """Only new, non-empty classes should be imported once."""
     calls: list[str] = []
 
-    def fake_import(module: str) -> None:
+    class FakeLibraryProvider:
+        NAMESPACE = "fake"
+
+    def fake_import(module: str) -> SimpleNamespace:
         calls.append(module)
+        return SimpleNamespace(Provider=FakeLibraryProvider)
 
     monkeypatch.setattr(providers_module, "import_module", fake_import)
-    monkeypatch.setattr(providers_module, "_LOADED_MODULES", set())
+    monkeypatch.setattr(providers_module, "_LOADED_CLASSES", set())
+    monkeypatch.setattr(providers_module, "LibraryProvider", object)
+    monkeypatch.setattr(providers_module, "ListProvider", type("ListBase", (), {}))
 
-    providers_module._import_modules(["mod.a", "", "mod.a", "mod.b"])
+    register_calls: list[type] = []
+
+    class DummyRegistry:
+        def register(self, provider_cls: type) -> None:
+            register_calls.append(provider_cls)
+
+    monkeypatch.setattr(providers_module, "library_registry", DummyRegistry())
+    monkeypatch.setattr(providers_module, "list_registry", DummyRegistry())
+
+    providers_module._register_classes(
+        ["mod.a.Provider", "", "mod.a.Provider", "mod.b.Provider"]
+    )
 
     assert calls == ["mod.a", "mod.b"]
+    assert len(register_calls) == 2
 
 
 def test_build_library_provider_raises_when_missing(
@@ -62,7 +80,7 @@ def test_build_library_provider_raises_when_missing(
     profile = SimpleNamespace(
         library_provider="missing",
         library_provider_config={},
-        parent=DummyConfig(provider_modules=[]),
+        parent=DummyConfig(provider_classes=[]),
     )
 
     def fake_create(_namespace: str, logger: Logger, config=None):
@@ -83,7 +101,7 @@ def test_build_list_provider_raises_when_missing(
     profile = SimpleNamespace(
         list_provider="missing",
         list_provider_config={},
-        parent=DummyConfig(provider_modules=[]),
+        parent=DummyConfig(provider_classes=[]),
     )
 
     def fake_create(_namespace: str, logger: Logger, config=None):

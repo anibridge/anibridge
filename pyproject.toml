@@ -55,16 +55,16 @@ dependencies = [
 ]
 
 [project.scripts]
-ab-build = "scripts.dev:build"
-ab-bump-version = "scripts.dev:bump_version"
-ab-clean = "scripts.dev:clean"
-ab-deps-install = "scripts.dev:deps_install"
-ab-deps-upgrade = "scripts.dev:deps_upgrade"
-ab-dev = "scripts.dev:dev"
-ab-format = "scripts.dev:format"
-ab-lint = "scripts.dev:lint"
-ab-start = "scripts.dev:start"
-ab-test = "scripts.dev:test"
+ab-build = "anibridge.scripts.dev:build"
+ab-bump-version = "anibridge.scripts.dev:bump_version"
+ab-clean = "anibridge.scripts.dev:clean"
+ab-deps-install = "anibridge.scripts.dev:deps_install"
+ab-deps-upgrade = "anibridge.scripts.dev:deps_upgrade"
+ab-dev = "anibridge.scripts.dev:dev"
+ab-format = "anibridge.scripts.dev:format"
+ab-lint = "anibridge.scripts.dev:lint"
+ab-start = "anibridge.scripts.dev:start"
+ab-test = "anibridge.scripts.dev:test"
 
 [project.urls]
 Documentation = "https://anibridge.eliasbenb.dev"
@@ -111,8 +111,8 @@ addopts = "--cov=src"
 filterwarnings = []
 
 [tool.uv.build-backend]
-module-name = "scripts"
-module-root = ""
+module-name = "anibridge"
+namespace = true
 
 [build-system]
 requires = ["uv_build>=0.9.21,<0.10.0"]

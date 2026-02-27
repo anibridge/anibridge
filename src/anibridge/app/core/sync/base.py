@@ -101,6 +101,7 @@ class BaseSyncClient[
         dry_run: bool,
         profile_name: str,
         sync_fields: Mapping[SyncField, bool | Mapping[str, bool]] | None = None,
+        auto_rewatch: bool = False,
     ) -> None:
         """Initialize the base synchronisation client."""
         self.library_provider: LibraryProvider = library_provider
@@ -120,6 +121,7 @@ class BaseSyncClient[
         self.search_fallback_threshold: int = search_fallback_threshold
         self.batch_requests: bool = batch_requests
         self.dry_run: bool = dry_run
+        self.auto_rewatch: bool = auto_rewatch
         self.profile_name: str = profile_name
 
         self.sync_stats: SyncStats = SyncStats()
@@ -677,6 +679,14 @@ class BaseSyncClient[
                 debug_ids,
             )
             return SyncOutcome.SKIPPED
+
+        if (
+            self.auto_rewatch
+            and status_value == ListStatus.CURRENT
+            and before_snapshot.status
+            in (ListStatus.COMPLETED, ListStatus.REPEATING)
+        ):
+            status_value = ListStatus.REPEATING
 
         considered_attrs: set[str] = set()
 

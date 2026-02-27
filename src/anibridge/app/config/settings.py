@@ -245,6 +245,14 @@ class AniBridgeProfileConfig(BaseModel):
     search_fallback_threshold: int = Field(
         default=-1, ge=-1, le=100, description="Fuzzy search threshold"
     )
+    auto_rewatch: bool = Field(
+        default=False,
+        description=(
+            "When enabled, automatically set status to rewatching on the list provider "
+            "if the entry is already marked as completed or rewatching and new watch "
+            "activity is detected in the library"
+        ),
+    )
     backup_retention_days: int = Field(
         default=30,
         ge=-1,

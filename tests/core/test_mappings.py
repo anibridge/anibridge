@@ -134,7 +134,7 @@ async def test_finalize_mappings_with_invalid_includes(tmp_path: Path) -> None:
     mappings = {"$includes": "bad", "anilist:1": {"tmdb:2": {"1": None}}}
 
     merged = await client._finalize_mappings(
-        "source.json", cast("mappings_module.AnimapDict", mappings), set()
+        "source.json", cast(mappings_module.AnimapDict, mappings), set()
     )
 
     assert "anilist:1" in merged

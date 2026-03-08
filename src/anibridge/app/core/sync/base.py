@@ -695,6 +695,23 @@ class BaseSyncClient[
                 debug_ids,
             )
 
+        preserved_dropped_to_explicit_status = False
+        if status_value == ListStatus.DROPPED and before_snapshot.status in (
+            ListStatus.CURRENT,
+            ListStatus.PAUSED,
+            ListStatus.DROPPED,
+        ):
+            preserved_dropped_to_explicit_status = True
+            status_value = before_snapshot.status
+            log.debug(
+                "[%s] Preserving explicit status %s (dropped inferred to %s) %s %s",
+                self.profile_name,
+                before_snapshot.status.value if before_snapshot.status else "None",
+                status_value.value,
+                debug_title,
+                debug_ids,
+            )
+
         considered_attrs: set[str] = set()
 
         status_should_apply, status_reason = self._should_apply_field_with_reason(
@@ -756,6 +773,7 @@ class BaseSyncClient[
                 "computed_status": status_value,
                 "final_status": final_status,
                 "promoted_current_to_repeating": promoted_current_to_repeating,
+                "preserved_dropped_to_explicit_status": preserved_dropped_to_explicit_status,
                 "sync_fields_disabled": sorted(sync_fields_disabled),
                 "pinned_blocked": sorted(pinned_blocked_fields),
                 "sync_rules_blocked": [

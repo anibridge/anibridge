@@ -1107,6 +1107,80 @@ async def test_promote_rewatch_disabled_does_not_change_current(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "initial_status",
+    [ListStatus.PAUSED, ListStatus.CURRENT, ListStatus.DROPPED],
+)
+async def test_preserve_explicit_status_over_inferred_dropped(
+    stub_client: StubSyncClient, sync_db, initial_status: ListStatus
+) -> None:
+    """Explicit PAUSED/CURRENT/DROPPED list status must not be overwritten by inferred DROPPED."""
+    stub_client._status_override = ListStatus.DROPPED
+
+    provider = cast(Any, stub_client.list_provider)
+    movie = make_movie()
+    entry = FakeListEntry(
+        provider=provider,
+        key="m1",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+    )
+    entry.status = initial_status
+
+    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
+    stub_client._map_results = [
+        (movie, (movie,), SyncTarget(list_media_key="m1", entry=entry))
+    ]
+    provider.entries["m1"] = entry
+
+    outcome = await stub_client.sync_media(
+        item=movie,
+        child_item=movie,
+        grandchild_items=(movie,),
+        entry=entry,
+        list_media_key="m1",
+    )
+
+    assert outcome == SyncOutcome.SYNCED
+    assert entry.status == initial_status
+
+
+@pytest.mark.asyncio
+async def test_preserve_explicit_status_does_not_affect_planning(
+    stub_client: StubSyncClient, sync_db
+) -> None:
+    """PLANNING entry status should not block inferred DROPPED — only explicit active/stopped statuses are preserved."""
+    stub_client._status_override = ListStatus.DROPPED
+
+    provider = cast(Any, stub_client.list_provider)
+    movie = make_movie()
+    entry = FakeListEntry(
+        provider=provider,
+        key="m1",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+    )
+    entry.status = ListStatus.PLANNING
+
+    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
+    stub_client._map_results = [
+        (movie, (movie,), SyncTarget(list_media_key="m1", entry=entry))
+    ]
+    provider.entries["m1"] = entry
+
+    outcome = await stub_client.sync_media(
+        item=movie,
+        child_item=movie,
+        grandchild_items=(movie,),
+        entry=entry,
+        list_media_key="m1",
+    )
+
+    assert outcome == SyncOutcome.SYNCED
+    assert entry.status == ListStatus.DROPPED
+
+
+@pytest.mark.asyncio
 async def test_promote_rewatch_respects_sync_fields_repeating_disabled(
     stub_client: StubSyncClient, sync_db
 ) -> None:

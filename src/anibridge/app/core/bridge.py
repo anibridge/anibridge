@@ -256,7 +256,6 @@ class BridgeClient:
             library_provider=self.library_provider,
             list_provider=self.list_provider,
             animap_client=self.animap_client,
-            sync_fields=self.profile_config.sync_fields,
             sync_rules=self.profile_config.sync_rules,
             full_scan=self.profile_config.full_scan,
             destructive_sync=self.profile_config.destructive_sync,
@@ -264,14 +263,12 @@ class BridgeClient:
             search_fallback_threshold=self.profile_config.search_fallback_threshold,
             batch_requests=self.profile_config.batch_requests,
             dry_run=self.profile_config.dry_run,
-            promote_rewatch=self.profile_config.promote_rewatch,
             profile_name=self.profile_name,
         )
         show_sync = ShowSyncClient(
             library_provider=self.library_provider,
             list_provider=self.list_provider,
             animap_client=self.animap_client,
-            sync_fields=self.profile_config.sync_fields,
             sync_rules=self.profile_config.sync_rules,
             full_scan=self.profile_config.full_scan,
             destructive_sync=self.profile_config.destructive_sync,
@@ -279,7 +276,6 @@ class BridgeClient:
             search_fallback_threshold=self.profile_config.search_fallback_threshold,
             batch_requests=self.profile_config.batch_requests,
             dry_run=self.profile_config.dry_run,
-            promote_rewatch=self.profile_config.promote_rewatch,
             profile_name=self.profile_name,
         )
 

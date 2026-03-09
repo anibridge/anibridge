@@ -79,9 +79,7 @@ class BaseSyncClient[
         batch_requests: bool,
         dry_run: bool,
         profile_name: str,
-        sync_fields: Mapping[SyncField, bool | Mapping[str, bool]] | None = None,
         sync_rules: SyncRulesConfig | None = None,
-        promote_rewatch: bool = False,
     ) -> None:
         """Initialize the base synchronization client.
 
@@ -98,23 +96,11 @@ class BaseSyncClient[
             batch_requests (bool): Whether to queue updates for batch submission.
             dry_run (bool): Whether to log changes without applying them.
             profile_name (str): Active profile name.
-            sync_fields (Mapping[SyncField, bool | Mapping[str, bool]] | None):
-                Field-level sync rules.
             sync_rules (SyncRulesConfig | None): Declarative per-field sync rules.
-            promote_rewatch (bool): Whether to promote CURRENT to REPEATING
-                for rewatches.
         """
         self.library_provider: LibraryProvider = library_provider
         self.list_provider: ListProvider = list_provider
         self.animap_client: AnimapClient = animap_client
-        self.sync_fields: dict[str, bool | dict[str, bool]] = {
-            str(field): (
-                bool(rules)
-                if isinstance(rules, bool)
-                else {str(rule): bool(enabled) for rule, enabled in rules.items()}
-            )
-            for field, rules in (sync_fields or {}).items()
-        }
         self._sync_rule_engine = SyncRuleEngine(
             variables=sync_rules.vars if sync_rules is not None else None,
             field_rules=sync_rules.field_rules() if sync_rules is not None else None,
@@ -125,7 +111,6 @@ class BaseSyncClient[
         self.search_fallback_threshold: int = search_fallback_threshold
         self.batch_requests: bool = batch_requests
         self.dry_run: bool = dry_run
-        self.promote_rewatch: bool = promote_rewatch
         self.profile_name: str = profile_name
 
         self.sync_stats: SyncStats = SyncStats()
@@ -403,10 +388,10 @@ class BaseSyncClient[
             self.list_provider.NAMESPACE, resolved_list_key
         )
         skip_fields = set(pinned_fields)
-        sync_fields_disabled = {
-            field_name
-            for field_name, rules in self.sync_fields.items()
-            if rules is False
+        disabled_fields = {
+            field.value
+            for field in SyncField
+            if self._sync_rule_engine.is_disabled(field.value)
         }
         field_state = _FieldApplicationState(pinned_blocked_fields=set(skip_fields))
 
@@ -419,7 +404,7 @@ class BaseSyncClient[
 
         computed_values = await self._calculate_computed_values(
             calc_kwargs=calc_kwargs,
-            sync_fields_disabled=sync_fields_disabled,
+            disabled_fields=disabled_fields,
         )
         current_values = {
             field.value: getattr(entry, field.value) for field in SyncField
@@ -469,7 +454,7 @@ class BaseSyncClient[
                         "operation": "delete_entry",
                         "reason": "status_resolved_to_none",
                         "destructive_sync": self.destructive_sync,
-                        "sync_fields_disabled": sorted(sync_fields_disabled),
+                        "disabled_fields": sorted(disabled_fields),
                         "pinned_fields": ", ".join(sorted(skip_fields))
                         if skip_fields
                         else "",
@@ -486,23 +471,6 @@ class BaseSyncClient[
                 debug_ids,
             )
             return SyncOutcome.SKIPPED
-
-        promoted_current_to_repeating = False
-        if (
-            status_rule.allowed
-            and not self._sync_rule_engine.has_field_rules(SyncField.STATUS.value)
-            and self.promote_rewatch
-            and status_value == ListStatus.CURRENT
-            and before_snapshot.status in (ListStatus.COMPLETED, ListStatus.REPEATING)
-        ):
-            promoted_current_to_repeating = True
-            status_value = ListStatus.REPEATING
-            log.debug(
-                "[%s] Promoting status CURRENT -> REPEATING (promote_rewatch) %s %s",
-                self.profile_name,
-                debug_title,
-                debug_ids,
-            )
 
         considered_attrs: set[str] = set()
 
@@ -529,7 +497,7 @@ class BaseSyncClient[
             current_values=current_values,
             computed_values=computed_values,
             skip_fields=skip_fields,
-            sync_fields_disabled=sync_fields_disabled,
+            disabled_fields=disabled_fields,
             considered_attrs=considered_attrs,
             field_state=field_state,
         )
@@ -540,8 +508,7 @@ class BaseSyncClient[
             {
                 "computed_status": status_value,
                 "final_status": final_status,
-                "promoted_current_to_repeating": promoted_current_to_repeating,
-                "sync_fields_disabled": sorted(sync_fields_disabled),
+                "disabled_fields": sorted(disabled_fields),
                 "pinned_blocked": sorted(field_state.pinned_blocked_fields),
                 "sync_rules_blocked": [
                     f"{field_name}({rule_name})" if rule_name else field_name
@@ -692,7 +659,7 @@ class BaseSyncClient[
         current_values: Mapping[str, Any],
         computed_values: Mapping[str, Any],
         skip_fields: set[str],
-        sync_fields_disabled: set[str],
+        disabled_fields: set[str],
         considered_attrs: set[str],
         field_state: _FieldApplicationState,
     ) -> None:
@@ -703,13 +670,13 @@ class BaseSyncClient[
             if sync_field.value in skip_fields:
                 field_state.pinned_blocked_fields.add(sync_field.value)
                 continue
-            if self.sync_fields.get(sync_field.value) is False:
-                sync_fields_disabled.add(sync_field.value)
-                continue
             if (
                 reason := self._status_gate_reason(sync_field, final_status)
             ) is not None:
                 field_state.status_gate_blocked[sync_field.value] = reason
+                continue
+            if self._sync_rule_engine.is_disabled(sync_field.value):
+                disabled_fields.add(sync_field.value)
                 continue
 
             rule_decision = self._sync_rule_engine.evaluate_field(
@@ -743,7 +710,7 @@ class BaseSyncClient[
         self,
         *,
         calc_kwargs: Mapping[str, Any],
-        sync_fields_disabled: set[str],
+        disabled_fields: set[str],
     ) -> dict[str, Comparable | None]:
         """Calculate raw field values before any declarative rules are applied."""
         computed: dict[str, Comparable | None] = {
@@ -755,11 +722,8 @@ class BaseSyncClient[
         for sync_field in SyncField:
             if sync_field == SyncField.STATUS:
                 continue
-            if self.sync_fields.get(sync_field.value) is False:
-                sync_fields_disabled.add(sync_field.value)
-                continue
             if self._sync_rule_engine.is_disabled(sync_field.value):
-                sync_fields_disabled.add(sync_field.value)
+                disabled_fields.add(sync_field.value)
                 continue
             computed[sync_field.value] = await self._field_calculators[sync_field](
                 **calc_kwargs
@@ -957,48 +921,7 @@ class BaseSyncClient[
             and new_value is None
         ):
             return False, "destructive_disabled"
-        allowed, rule_reason = self._is_sync_field_allowed(
-            field,
-            current_value,
-            new_value,
-        )
-        if allowed:
-            return True, "applied"
-        return False, (
-            f"sync_rules:{rule_reason}" if rule_reason is not None else "sync_rules"
-        )
-
-    def _is_sync_field_allowed(
-        self,
-        field: SyncField,
-        current_value: Comparable | None,
-        new_value: Comparable | None,
-    ) -> tuple[bool, str | None]:
-        """Check if sync_fields allows this update and return blocking rule."""
-        rules = self.sync_fields.get(field.value)
-        if rules is None:
-            return True, None
-        if isinstance(rules, bool):
-            return rules, "disabled" if not rules else None
-
-        if isinstance(new_value, ListStatus) and rules.get(new_value.value) is False:
-            return False, new_value.value
-
-        if current_value is not None and new_value is not None:
-            for key, blocked in (
-                ("_lt", new_value < current_value),
-                ("_lte", new_value <= current_value),
-                ("_gt", new_value > current_value),
-                ("_gte", new_value >= current_value),
-            ):
-                if rules.get(key, True) is False and blocked:
-                    return False, key
-
-        if rules.get("_eq", True) is False and new_value == current_value:
-            return False, "_eq"
-        if rules.get("_ne", True) is False and new_value != current_value:
-            return False, "_ne"
-        return True, None
+        return True, "applied"
 
     def _format_diff(self, diff: dict[str, tuple[Any, Any]]) -> str:
         """Format a diff dictionary for logging."""

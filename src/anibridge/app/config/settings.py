@@ -101,6 +101,15 @@ class SyncField(BaseStrEnum):
 
 
 _SYNC_RULE_FIELD_NAMES = tuple(field.value for field in SyncField)
+# TODO: Remove legacy field rules before v2 release
+_LEGACY_FIELD_RULES_KEY = "sync_fields"
+_LEGACY_REWATCH_KEY = "promote_rewatch"
+_LEGACY_COMPARISON_OPERATORS = {
+    "_lt": ">=",
+    "_lte": ">",
+    "_gt": "<=",
+    "_gte": "<",
+}
 
 
 class ScanMode(BaseStrEnum):
@@ -309,6 +318,151 @@ class SyncRulesConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+def _normalize_legacy_field_rules(
+    value: Mapping[SyncField | str, bool | Mapping[str, bool]] | None,
+) -> dict[str, bool | dict[str, bool]]:
+    """Normalize legacy field-rule mappings before translation."""
+    if value is None:
+        return {}
+
+    if not isinstance(value, Mapping):
+        raise ValueError("legacy field rules must be a mapping")
+
+    normalized: dict[str, bool | dict[str, bool]] = {}
+    allowed_fields = {field.value for field in SyncField}
+    allowed_ops = {"_lt", "_lte", "_gt", "_gte", "_eq", "_ne"}
+    allowed_statuses = {status.value for status in ListStatus}
+
+    for raw_field, raw_rules in value.items():
+        field = str(raw_field)
+        if field not in allowed_fields:
+            raise ValueError(f"legacy field rules contain unknown field: '{field}'")
+
+        if isinstance(raw_rules, bool):
+            normalized[field] = raw_rules
+            continue
+
+        if not isinstance(raw_rules, Mapping):
+            raise ValueError(
+                "legacy field rules entries must be either booleans or mappings"
+            )
+
+        field_rules: dict[str, bool] = {}
+        for raw_rule_key, rule_value in raw_rules.items():
+            if not isinstance(rule_value, bool):
+                raise ValueError("legacy field rule conditions must be booleans")
+
+            rule_key = str(raw_rule_key)
+            if rule_key.startswith("_") and rule_key not in allowed_ops:
+                raise ValueError(
+                    "legacy field rules."
+                    f"{field} contains unknown operator: '{rule_key}'"
+                )
+
+            if field == SyncField.STATUS.value and not rule_key.startswith("_"):
+                rule_key = rule_key.lower()
+                if rule_key not in allowed_statuses:
+                    raise ValueError(
+                        f"legacy field rules.{field} contains unknown status: "
+                        f"'{raw_rule_key}'"
+                    )
+
+            field_rules[rule_key] = rule_value
+
+        normalized[field] = field_rules
+
+    return normalized
+
+
+def _legacy_allow_expression(
+    field_name: str,
+    rules: Mapping[str, bool],
+    *,
+    candidate: str | None = None,
+) -> str:
+    """Build one declarative allow expression from legacy field conditions."""
+    candidate = candidate or f"computed.{field_name}"
+    current = f"current.{field_name}"
+    terms: list[str] = []
+
+    def _tuple_literal(values: list[str]) -> str:
+        rendered = ", ".join(repr(value) for value in values)
+        if len(values) == 1:
+            rendered = f"{rendered},"
+        return f"({rendered})"
+
+    blocked_statuses = [
+        rule_name
+        for rule_name, enabled in rules.items()
+        if not rule_name.startswith("_") and enabled is False
+    ]
+    if blocked_statuses:
+        terms.append(f"{candidate} not in {_tuple_literal(blocked_statuses)}")
+
+    for operator_name, operator in _LEGACY_COMPARISON_OPERATORS.items():
+        if rules.get(operator_name) is False:
+            terms.append(
+                f"({candidate} is None or {current} is None or "
+                f"{candidate} {operator} {current})"
+            )
+
+    if rules.get("_eq") is False:
+        terms.append(f"{candidate} != {current}")
+    if rules.get("_ne") is False:
+        terms.append(f"{candidate} == {current}")
+
+    return " and ".join(terms)
+
+
+def _translate_legacy_field_rules(
+    value: Mapping[SyncField | str, bool | Mapping[str, bool]] | None,
+) -> tuple[dict[str, bool | list[dict[str, Any]]], dict[str, bool | dict[str, bool]]]:
+    """Translate legacy field rules into the declarative sync-rules structure."""
+    normalized = _normalize_legacy_field_rules(value)
+    translated = {field_name: True for field_name in _SYNC_RULE_FIELD_NAMES}
+    for field_name, rules in normalized.items():
+        if isinstance(rules, bool):
+            translated[field_name] = rules
+            continue
+
+        if allow_expression := _legacy_allow_expression(field_name, rules):
+            translated[field_name] = [
+                {"name": "Legacy field rules", "if": allow_expression}
+            ]
+    return translated, normalized
+
+
+def _prepend_legacy_status_adjustment(
+    status_rules: bool | list[dict[str, Any]],
+    legacy_status_rules: bool | Mapping[str, bool] | None,
+) -> bool | list[dict[str, Any]]:
+    """Deprecated rewatch promotion logic for the status field."""
+    if status_rules is False:
+        return False
+
+    conditions = [
+        'current.status in ("repeating", "completed")',
+        'computed.status == "current"',
+    ]
+    if isinstance(legacy_status_rules, Mapping):
+        allow_expression = _legacy_allow_expression(
+            SyncField.STATUS.value,
+            legacy_status_rules,
+            candidate='"repeating"',
+        )
+        if allow_expression:
+            conditions.append(allow_expression)
+
+    promotion_rule = {
+        "name": "Legacy rewatch promotion",
+        "if": " and ".join(conditions),
+        "set": "repeating",
+    }
+    if status_rules is True:
+        return [promotion_rule, {"name": "Legacy passthrough"}]
+    return [promotion_rule, *status_rules]
+
+
 class AnibridgeProfileConfig(BaseModel):
     """Configuration for a single AniBridge profile."""
 
@@ -342,24 +496,6 @@ class AnibridgeProfileConfig(BaseModel):
         description=(
             "When enabled, entries with no watch activity/history are synced as "
             "planning instead of being skipped"
-        ),
-    )
-    promote_rewatch: bool = Field(
-        default=False,
-        description=(
-            "When enabled, automatically set status to repeating on the list provider "
-            "if the entry is already marked as completed or repeating and new watch "
-            "activity is detected in the library"
-        ),
-    )
-    sync_fields: dict[SyncField, bool | dict[str, bool]] = Field(
-        default_factory=lambda: {
-            SyncField.REVIEW: False,
-            SyncField.USER_RATING: False,
-        },
-        description=(
-            "Per-field sync rules. Set a field to false to disable syncing it, "
-            "or define operator/value rules with a mapping."
         ),
     )
     sync_rules: SyncRulesConfig = Field(
@@ -400,6 +536,49 @@ class AnibridgeProfileConfig(BaseModel):
         repr=False,
         description="List provider configuration by namespace",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def translate_legacy_sync_config(cls, value: Any) -> Any:
+        """Translate deprecated sync configuration into declarative sync rules.
+
+        Args:
+            value (Any): Raw profile configuration payload before field parsing.
+
+        Returns:
+            Any: Updated payload with legacy sync settings translated to
+                ``sync_rules``.
+        """
+        if not isinstance(value, Mapping):
+            return value
+
+        payload = dict(value)
+        explicit_rules = payload.get("sync_rules", {})
+        translated_rules: dict[str, bool | list[dict[str, Any]]] = {}
+        normalized_legacy: dict[str, bool | dict[str, bool]] = {}
+
+        if _LEGACY_FIELD_RULES_KEY in payload:
+            _log.warning(
+                "Profile config contains deprecated '%s' field. Please update "
+                "your configuration to the new format. Refer to the documentation "
+                "for details: https://anibridge.eliasbenb.dev/configuration/#sync_rules",
+                _LEGACY_FIELD_RULES_KEY,
+            )
+            translated_rules, normalized_legacy = _translate_legacy_field_rules(
+                payload.pop(_LEGACY_FIELD_RULES_KEY)
+            )
+
+        if payload.pop(_LEGACY_REWATCH_KEY, False) and "status" not in explicit_rules:
+            translated_rules["status"] = _prepend_legacy_status_adjustment(
+                translated_rules.get("status", True),
+                normalized_legacy.get("status"),
+            )
+
+        merged_rules = {**translated_rules, **explicit_rules}
+        if merged_rules:
+            payload["sync_rules"] = merged_rules
+
+        return payload
 
     @property
     def parent(self) -> AnibridgeConfig:
@@ -448,63 +627,6 @@ class AnibridgeProfileConfig(BaseModel):
                 global_value = getattr(self._parent.global_config, field)
                 setattr(self, field, global_value)
         return self
-
-    @field_validator("sync_fields", mode="before")
-    @classmethod
-    def normalize_sync_fields(
-        cls,
-        value: Mapping[SyncField | str, bool | Mapping[str, bool]] | None,
-    ) -> Mapping[str, bool | dict[str, bool]] | None:
-        """Normalize and validate per-field sync rules."""
-        if value is None:
-            return value
-
-        if not isinstance(value, Mapping):
-            raise ValueError("sync_fields must be a mapping")
-
-        normalized: dict[str, bool | dict[str, bool]] = {}
-        allowed_fields = {field.value for field in SyncField}
-        allowed_ops = {"_lt", "_lte", "_gt", "_gte", "_eq", "_ne"}
-        allowed_statuses = {status.value for status in ListStatus}
-
-        for raw_field, raw_rules in value.items():
-            field = str(raw_field)
-            if field not in allowed_fields:
-                raise ValueError(f"sync_fields contains unknown field: '{field}'")
-
-            if isinstance(raw_rules, bool):
-                normalized[field] = raw_rules
-                continue
-
-            if not isinstance(raw_rules, Mapping):
-                raise ValueError(
-                    "sync_fields entries must be either booleans or mappings"
-                )
-
-            field_rules: dict[str, bool] = {}
-            for raw_rule_key, rule_value in raw_rules.items():
-                if not isinstance(rule_value, bool):
-                    raise ValueError("sync_fields nested rules must be booleans")
-
-                rule_key = str(raw_rule_key)
-                if rule_key.startswith("_") and rule_key not in allowed_ops:
-                    raise ValueError(
-                        f"sync_fields.{field} contains unknown operator: '{rule_key}'"
-                    )
-
-                if field == SyncField.STATUS.value and not rule_key.startswith("_"):
-                    rule_key = rule_key.lower()
-                    if rule_key not in allowed_statuses:
-                        raise ValueError(
-                            f"sync_fields.{field} contains unknown status: "
-                            f"'{raw_rule_key}'"
-                        )
-
-                field_rules[rule_key] = rule_value
-
-            normalized[field] = field_rules
-
-        return normalized
 
     _parent: AnibridgeConfig | None = None
 

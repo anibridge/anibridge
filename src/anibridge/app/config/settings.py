@@ -1,10 +1,12 @@
 """AniBridge Configuration Settings."""
 
+import keyword
 import os
 from collections.abc import Mapping
 from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 import yaml
 from anibridge.list import ListStatus
@@ -19,6 +21,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
+from anibridge.app.core.sync.rules import validate_sync_rule_expression
 from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
 from anibridge.app.utils.logging import _get_logger
 
@@ -28,6 +31,8 @@ __all__ = [
     "LogLevel",
     "ScanMode",
     "SyncField",
+    "SyncRuleDefinition",
+    "SyncRulesConfig",
     "get_config",
 ]
 
@@ -93,6 +98,9 @@ class SyncField(BaseStrEnum):
     USER_RATING = "user_rating"  # User's rating/score
     STARTED_AT = "started_at"  # When the user started watching (date)
     FINISHED_AT = "finished_at"  # When the user finished watching (date)
+
+
+_SYNC_RULE_FIELD_NAMES = tuple(field.value for field in SyncField)
 
 
 class ScanMode(BaseStrEnum):
@@ -163,6 +171,144 @@ class WebConfig(BaseModel):
         )
 
 
+class SyncRuleDefinition(BaseModel):
+    """Single declarative sync rule for a field."""
+
+    name: str | None = Field(default=None, description="Human-readable rule label")
+    if_expr: str | None = Field(
+        default=None,
+        alias="if",
+        description="Condition expression evaluated against the sync context",
+    )
+    set_expr: Any | None = Field(
+        default=None,
+        alias="set",
+        description="Expression or literal value returned when the rule matches",
+    )
+
+    @field_validator("if_expr")
+    @classmethod
+    def validate_if_expr(cls, value: str | None) -> str | None:
+        """Validate the optional condition expression.
+
+        Args:
+            value (str | None): Raw condition expression from configuration.
+
+        Returns:
+            str | None: The validated condition expression.
+        """
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("sync rule conditions cannot be blank")
+        validate_sync_rule_expression(value)
+        return value
+
+    @field_validator("set_expr")
+    @classmethod
+    def validate_set_expr(cls, value: Any | None) -> Any | None:
+        """Validate the optional set expression when it is string-based.
+
+        Args:
+            value (Any | None): Raw set expression or literal from configuration.
+
+        Returns:
+            Any | None: The validated expression or literal.
+        """
+        if isinstance(value, str):
+            if not value.strip():
+                raise ValueError("sync rule set expressions cannot be blank")
+            validate_sync_rule_expression(value)
+        return value
+
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+
+class SyncRulesConfig(BaseModel):
+    """Declarative per-field sync rules and reusable variables."""
+
+    vars: dict[str, str] = Field(
+        default_factory=dict,
+        description="Reusable expressions available under vars.<name>",
+    )
+    status: bool | list[SyncRuleDefinition] = True
+    progress: bool | list[SyncRuleDefinition] = True
+    repeats: bool | list[SyncRuleDefinition] = True
+    review: bool | list[SyncRuleDefinition] = False
+    user_rating: bool | list[SyncRuleDefinition] = False
+    started_at: bool | list[SyncRuleDefinition] = True
+    finished_at: bool | list[SyncRuleDefinition] = True
+
+    @field_validator("vars")
+    @classmethod
+    def validate_vars(cls, value: dict[str, str]) -> dict[str, str]:
+        """Validate reusable variable names and expressions.
+
+        Args:
+            value (dict[str, str]): Variable names mapped to expressions.
+
+        Returns:
+            dict[str, str]: The validated variable mapping.
+        """
+        reserved = {"computed", "current", "vars"}
+        for name, expression in value.items():
+            if not name.isidentifier() or keyword.iskeyword(name):
+                raise ValueError(
+                    f"sync_rules.vars contains invalid variable name: {name!r}"
+                )
+            if name in reserved:
+                raise ValueError(
+                    f"sync_rules.vars cannot redefine reserved name: {name!r}"
+                )
+            if not expression.strip():
+                raise ValueError(
+                    f"sync_rules.vars.{name} must be a non-empty expression"
+                )
+            validate_sync_rule_expression(expression)
+        return value
+
+    @field_validator(*_SYNC_RULE_FIELD_NAMES)
+    @classmethod
+    def validate_field_rules(
+        cls,
+        value: bool | list[SyncRuleDefinition],
+    ) -> bool | list[SyncRuleDefinition]:
+        """Reject empty rule lists for field-specific rule sets.
+
+        Args:
+            value (bool | list[SyncRuleDefinition]): Configured rule toggle or list.
+
+        Returns:
+            bool | list[SyncRuleDefinition]: The validated field rule payload.
+        """
+        if isinstance(value, list) and not value:
+            raise ValueError("sync_rules field rule lists cannot be empty")
+        return value
+
+    def field_rules(self) -> dict[str, bool | list[dict[str, Any]]]:
+        """Return configured field rules as plain runtime mappings.
+
+        Returns:
+            dict[str, bool | list[dict[str, Any]]]: Runtime field rules keyed by
+                sync field name.
+        """
+        payload: dict[str, bool | list[dict[str, Any]]] = {}
+        for field_name in _SYNC_RULE_FIELD_NAMES:
+            value = getattr(self, field_name)
+            if value is True:
+                continue
+            payload[field_name] = (
+                value
+                if isinstance(value, bool)
+                else [
+                    rule.model_dump(by_alias=True, exclude_unset=True) for rule in value
+                ]
+            )
+        return payload
+
+    model_config = {"extra": "forbid"}
+
+
 class AnibridgeProfileConfig(BaseModel):
     """Configuration for a single AniBridge profile."""
 
@@ -214,6 +360,14 @@ class AnibridgeProfileConfig(BaseModel):
         description=(
             "Per-field sync rules. Set a field to false to disable syncing it, "
             "or define operator/value rules with a mapping."
+        ),
+    )
+    sync_rules: SyncRulesConfig = Field(
+        default_factory=SyncRulesConfig,
+        description=(
+            "Declarative rule-based sync overrides. Each field can be disabled "
+            "or configured with an ordered list of conditions that decide how "
+            "the computed value should be transformed or whether it should sync."
         ),
     )
     backup_retention_days: int = Field(

@@ -77,6 +77,7 @@ class BaseSyncClient[
         dry_run: bool,
         profile_name: str,
         sync_fields: Mapping[SyncField, bool | Mapping[str, bool]] | None = None,
+        sync_rules: SyncRulesConfig | None = None,
         promote_rewatch: bool = False,
     ) -> None:
         """Initialize the base synchronization client.
@@ -96,6 +97,7 @@ class BaseSyncClient[
             profile_name (str): Active profile name.
             sync_fields (Mapping[SyncField, bool | Mapping[str, bool]] | None):
                 Field-level sync rules.
+            sync_rules (SyncRulesConfig | None): Declarative per-field sync rules.
             promote_rewatch (bool): Whether to promote CURRENT to REPEATING
                 for rewatches.
         """

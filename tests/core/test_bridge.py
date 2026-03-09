@@ -12,6 +12,7 @@ from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import anibridge.app.core.bridge as bridge_module
+from anibridge.app.config.settings import SyncRulesConfig
 from anibridge.app.core.bridge import BridgeClient
 from anibridge.app.core.sync.stats import ItemIdentifier, SyncStats
 from anibridge.app.exceptions import MediaTypeError
@@ -212,7 +213,7 @@ def _make_profile_config(**overrides: Any) -> SimpleNamespace:
         "list_provider": "fake",
         "library_provider_config": {},
         "list_provider_config": {},
-        "sync_fields": {},
+        "sync_rules": SyncRulesConfig(),
         "full_scan": False,
         "empty_sync": False,
         "destructive_sync": False,
@@ -220,7 +221,6 @@ def _make_profile_config(**overrides: Any) -> SimpleNamespace:
         "batch_requests": False,
         "backup_retention_days": -1,
         "dry_run": False,
-        "promote_rewatch": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

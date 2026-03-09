@@ -9,8 +9,9 @@ from anibridge.library import MediaKind
 from anibridge.list import ListEntry as ListEntryProtocol
 from anibridge.list import ListMediaType, ListStatus
 
-from anibridge.app.config.settings import SyncField
+from anibridge.app.config.settings import SyncField, SyncRulesConfig
 from anibridge.app.core.sync.base import BaseSyncClient
+from anibridge.app.core.sync.rules import SyncRuleEngine
 from anibridge.app.core.sync.stats import BatchUpdate, EntrySnapshot, ItemIdentifier
 from anibridge.app.core.sync.targeting import (
     SyncTarget,
@@ -134,6 +135,15 @@ def make_movie(**kwargs) -> FakeLibraryMovie:
     return FakeLibraryMovie(key=kwargs.pop("key", "movie-1"), title="Movie", **kwargs)
 
 
+def set_sync_rules(stub_client: StubSyncClient, payload: dict[str, Any]) -> None:
+    """Attach declarative sync rules to the stub client."""
+    rules = SyncRulesConfig.model_validate(payload)
+    stub_client._sync_rule_engine = SyncRuleEngine(
+        variables=rules.vars,
+        field_rules=rules.field_rules(),
+    )
+
+
 def test_diff_snapshots_returns_changed_fields() -> None:
     """`diff_snapshots` only includes differences for requested fields."""
     before = EntrySnapshot(
@@ -166,102 +176,28 @@ def test_diff_snapshots_returns_changed_fields() -> None:
     }
 
 
-def test_should_update_field_respects_comparison_rules(
+def test_should_update_field_respects_skip_fields(
     stub_client: StubSyncClient,
 ) -> None:
-    """Field updates honor skip lists and sync-field comparison rules."""
+    """Pinned fields should not be applied even when values differ."""
     skip_fields = {SyncField.STATUS.value}
-    stub_client.sync_fields = {"progress": {"_lt": False}}
-
-    assert not stub_client._should_apply_field(SyncField.STATUS, 5, 4, skip_fields)[0]
-
-    assert stub_client._should_apply_field(SyncField.PROGRESS, 5, 4, set())[0]
-    assert not stub_client._should_apply_field(SyncField.PROGRESS, 3, 4, set())[0]
-
-    stub_client.destructive_sync = True
-    assert stub_client._should_apply_field(SyncField.PROGRESS, 1, None, set())[0]
-
-
-def test_should_update_field_blocks_status_value_via_sync_fields(
-    stub_client: StubSyncClient,
-) -> None:
-    """`sync_fields.status.<value>: false` should block that target status."""
-    stub_client.sync_fields = {"status": {"dropped": False}}
 
     assert not stub_client._should_apply_field(
         SyncField.STATUS,
-        ListStatus.DROPPED,
+        ListStatus.COMPLETED,
         ListStatus.CURRENT,
-        set(),
+        skip_fields,
     )[0]
 
 
-def test_should_update_field_blocks_operator_via_sync_fields(
+def test_should_update_field_allows_regular_updates(
     stub_client: StubSyncClient,
 ) -> None:
-    """`sync_fields.<field>._lt: false` should block decreasing updates."""
-    stub_client.sync_fields = {"started_at": {"_gt": False}}
+    """Regular updates should apply when no generic guard blocks them."""
+    assert stub_client._should_apply_field(SyncField.PROGRESS, 5, 4, set())[0]
 
-    assert not stub_client._should_apply_field(
-        SyncField.STARTED_AT,
-        datetime(2025, 1, 2, tzinfo=UTC),
-        datetime(2025, 1, 1, tzinfo=UTC),
-        set(),
-    )[0]
-
-
-@pytest.mark.parametrize(
-    ("rule_key", "new_value", "current_value"),
-    [
-        ("_lte", 4, 4),
-        ("_gte", 4, 4),
-        ("_eq", 4, 4),
-        ("_ne", 5, 4),
-    ],
-)
-def test_should_update_field_blocks_additional_operators(
-    stub_client: StubSyncClient,
-    rule_key: str,
-    new_value: int,
-    current_value: int,
-) -> None:
-    """Operator toggles should block updates that match their condition."""
-    stub_client.sync_fields = {"progress": {rule_key: False}}
-
-    assert not stub_client._should_apply_field(
-        SyncField.PROGRESS,
-        new_value,
-        current_value,
-        set(),
-    )[0]
-
-
-def test_should_update_field_respects_boolean_field_disable(
-    stub_client: StubSyncClient,
-) -> None:
-    """`sync_fields.<field>: false` should block all writes for that field."""
-    stub_client.sync_fields = {"progress": False}
-
-    assert not stub_client._should_apply_field(
-        SyncField.PROGRESS,
-        10,
-        2,
-        set(),
-    )[0]
-
-
-def test_should_update_field_operator_checks_ignore_none_comparisons(
-    stub_client: StubSyncClient,
-) -> None:
-    """Range operators should not block initial writes when one side is None."""
-    stub_client.sync_fields = {"progress": {"_lt": False, "_gt": False}}
-
-    assert stub_client._should_apply_field(
-        SyncField.PROGRESS,
-        1,
-        None,
-        set(),
-    )[0]
+    stub_client.destructive_sync = True
+    assert stub_client._should_apply_field(SyncField.PROGRESS, 1, None, set())[0]
 
 
 def test_should_update_field_blocks_nulling_when_not_destructive(
@@ -355,20 +291,20 @@ async def test_sync_media_deletes_entry_when_destructive(
 
 
 @pytest.mark.asyncio
-async def test_sync_media_skips_disabled_field_calculator(
+async def test_sync_media_skips_sync_rule_disabled_field_calculator(
     stub_client: StubSyncClient,
 ) -> None:
-    """Disabled sync_fields should skip invoking that field calculator."""
+    """sync_rules.<field>: false should skip invoking that field calculator."""
     provider = cast(FakeListProvider, stub_client.list_provider)
     entry = FakeListEntry(
         provider=provider,
-        key="205",
+        key="205b",
         title="Movie",
         media_type=ListMediaType.MOVIE,
         total_units=1,
     )
     entry.status = ListStatus.CURRENT
-    stub_client.sync_fields = {"review": False}
+    set_sync_rules(stub_client, {"review": False})
 
     async def _boom_review(**kwargs):
         raise AssertionError("review calculator should not be called")
@@ -380,7 +316,7 @@ async def test_sync_media_skips_disabled_field_calculator(
         child_item=make_movie(),
         grandchild_items=(),
         entry=cast(ListEntryProtocol, entry),
-        list_media_key="205",
+        list_media_key="205b",
         mapping_descriptors=None,
     )
 
@@ -781,7 +717,6 @@ async def test_sync_media_info_reports_rule_and_status_blocks(
     stub_client: StubSyncClient, sync_db
 ) -> None:
     """Sync diagnostics should include blocked fields and rule metadata."""
-    stub_client.sync_fields = {"progress": {"_gt": False}, "review": False}
     movie = make_movie(view_count=2, user_rating=80)
     provider = cast(FakeListProvider, stub_client.list_provider)
     entry = FakeListEntry(
@@ -792,6 +727,18 @@ async def test_sync_media_info_reports_rule_and_status_blocks(
         total_units=1,
     )
     entry.progress = 0
+    set_sync_rules(
+        stub_client,
+        {
+            "progress": [
+                {
+                    "name": "Only allow non-increasing progress",
+                    "if": "computed.progress <= current.progress",
+                }
+            ],
+            "review": False,
+        },
+    )
 
     result = await stub_client.sync_media(
         item=movie,
@@ -805,8 +752,8 @@ async def test_sync_media_info_reports_rule_and_status_blocks(
     with sync_db as ctx:
         record = ctx.session.query(SyncHistory).one()
         assert record.info is not None
-        assert "progress(_gt)" in (record.info.get("sync_rules_blocked") or "")
-        assert "review" in (record.info.get("sync_fields_disabled") or "")
+        assert "progress(no_match)" in (record.info.get("sync_rules_blocked") or "")
+        assert "review" in (record.info.get("disabled_fields") or "")
         assert "user_rating(requires_completed)" in (
             record.info.get("status_gate_blocked") or ""
         )
@@ -839,6 +786,121 @@ async def test_sync_media_skips_when_entry_up_to_date(
     )
 
     assert result is SyncOutcome.SKIPPED
+    assert provider.updated_entries == []
+
+
+@pytest.mark.asyncio
+async def test_sync_media_applies_declarative_rules(
+    stub_client: StubSyncClient,
+) -> None:
+    """Declarative rules should transform status and review values."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    movie = make_movie(review="x" * 240)
+    entry = FakeListEntry(
+        provider=provider,
+        key="rule-entry",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+        total_units=1,
+    )
+    entry.status = ListStatus.COMPLETED
+    entry.progress = 1
+    stub_client._status_override = ListStatus.CURRENT
+    stub_client._progress_override = 1
+    stub_client._review_override = "x" * 240
+    stub_client._user_rating_override = None
+    set_sync_rules(
+        stub_client,
+        {
+            "vars": {
+                "is_review_long": (
+                    "computed.review is not None and len(computed.review) > 200"
+                ),
+            },
+            "status": [
+                {
+                    "name": "Promote rewatch to completed",
+                    "if": (
+                        'current.status in ("repeating", "completed") '
+                        'and computed.status == "current"'
+                    ),
+                    "set": "repeating",
+                }
+            ],
+            "review": [
+                {
+                    "name": "Truncate long reviews",
+                    "if": "vars.is_review_long",
+                    "set": 'computed.review[:197] + "..."',
+                }
+            ],
+        },
+    )
+
+    result = await stub_client.sync_media(
+        item=movie,
+        child_item=movie,
+        grandchild_items=(movie,),
+        entry=cast(ListEntryProtocol, entry),
+        list_media_key="rule-entry",
+    )
+
+    assert result is SyncOutcome.SYNCED
+    assert entry.status == ListStatus.REPEATING
+    assert entry.review == ("x" * 197) + "..."
+
+
+@pytest.mark.asyncio
+async def test_sync_media_blocks_field_when_no_sync_rule_matches(
+    stub_client: StubSyncClient,
+) -> None:
+    """Configured field rules should block sync when nothing matches."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    movie = make_movie(review="x" * 220)
+    entry = FakeListEntry(
+        provider=provider,
+        key="rule-blocked",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+        total_units=1,
+    )
+    entry.status = ListStatus.CURRENT
+    entry.progress = 1
+    entry.repeats = 0
+    entry.user_rating = 50
+    entry.review = "existing"
+    stub_client._status_override = ListStatus.CURRENT
+    stub_client._progress_override = 1
+    stub_client._repeats_override = 0
+    stub_client._review_override = "x" * 220
+    stub_client._user_rating_override = 50
+    set_sync_rules(
+        stub_client,
+        {
+            "vars": {
+                "has_short_review": (
+                    "computed.review is not None and len(computed.review) < 200"
+                ),
+            },
+            "review": [
+                {
+                    "name": "Only sync short reviews",
+                    "if": "vars.has_short_review",
+                }
+            ],
+        },
+    )
+
+    result = await stub_client.sync_media(
+        item=movie,
+        child_item=movie,
+        grandchild_items=(movie,),
+        entry=cast(ListEntryProtocol, entry),
+        list_media_key="rule-blocked",
+    )
+
+    assert result is SyncOutcome.SKIPPED
+    assert entry.review == "existing"
     assert provider.updated_entries == []
 
 
@@ -1013,197 +1075,3 @@ async def test_process_media_skips_untrackable_items(
     await stub_client.process_media(movie)
 
     assert stub_client.sync_stats.skipped == 1
-
-
-@pytest.mark.asyncio
-async def test_promote_rewatch_promotes_current_to_repeating_when_completed(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """promote_rewatch=True changes CURRENT to REPEATING if COMPLETED."""
-    stub_client.promote_rewatch = True
-    stub_client._status_override = ListStatus.CURRENT
-
-    provider = cast(Any, stub_client.list_provider)
-    movie = make_movie()
-    entry = FakeListEntry(
-        provider=provider,
-        key="m1",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    typed_entry = cast(ListEntryProtocol, entry)
-    entry.status = ListStatus.COMPLETED
-
-    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
-    stub_client._map_results = [
-        (movie, (movie,), SyncTarget(list_media_key="m1", entry=typed_entry))
-    ]
-    provider.entries["m1"] = entry
-
-    outcome = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=typed_entry,
-        list_media_key="m1",
-    )
-
-    assert outcome == SyncOutcome.SYNCED
-    assert entry.status == ListStatus.REPEATING
-
-
-@pytest.mark.asyncio
-async def test_promote_rewatch_preserves_repeating_when_already_repeating(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """promote_rewatch=True should keep REPEATING when entry is already REPEATING."""
-    stub_client.promote_rewatch = True
-    stub_client._status_override = ListStatus.CURRENT
-    stub_client._progress_override = 3
-
-    provider = cast(Any, stub_client.list_provider)
-    movie = make_movie()
-    entry = FakeListEntry(
-        provider=provider,
-        key="m1",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    typed_entry = cast(ListEntryProtocol, entry)
-    entry.status = ListStatus.REPEATING
-    entry.progress = 1
-
-    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
-    stub_client._map_results = [
-        (movie, (movie,), SyncTarget(list_media_key="m1", entry=typed_entry))
-    ]
-    provider.entries["m1"] = entry
-
-    outcome = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=typed_entry,
-        list_media_key="m1",
-    )
-
-    assert outcome == SyncOutcome.SYNCED
-    assert entry.status == ListStatus.REPEATING
-    assert entry.progress == 3
-
-
-@pytest.mark.asyncio
-async def test_promote_rewatch_disabled_does_not_change_current(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """promote_rewatch=False should not promote CURRENT to REPEATING."""
-    stub_client.promote_rewatch = False
-    stub_client._status_override = ListStatus.CURRENT
-
-    provider = cast(Any, stub_client.list_provider)
-    movie = make_movie()
-    entry = FakeListEntry(
-        provider=provider,
-        key="m1",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    typed_entry = cast(ListEntryProtocol, entry)
-    entry.status = ListStatus.COMPLETED
-
-    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
-    stub_client._map_results = [
-        (movie, (movie,), SyncTarget(list_media_key="m1", entry=typed_entry))
-    ]
-    provider.entries["m1"] = entry
-
-    outcome = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=typed_entry,
-        list_media_key="m1",
-    )
-
-    assert outcome == SyncOutcome.SYNCED
-    assert entry.status == ListStatus.CURRENT
-
-
-@pytest.mark.asyncio
-async def test_promote_rewatch_respects_sync_fields_repeating_disabled(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """sync_fields.status.repeating=False should block promote_rewatch promotion."""
-    stub_client.promote_rewatch = True
-    stub_client.sync_fields = {"status": {"repeating": False}}
-    stub_client._status_override = ListStatus.CURRENT
-
-    provider = cast(Any, stub_client.list_provider)
-    movie = make_movie()
-    entry = FakeListEntry(
-        provider=provider,
-        key="m1",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    typed_entry = cast(ListEntryProtocol, entry)
-    entry.status = ListStatus.COMPLETED
-
-    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
-    stub_client._map_results = [
-        (movie, (movie,), SyncTarget(list_media_key="m1", entry=typed_entry))
-    ]
-    provider.entries["m1"] = entry
-
-    await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=typed_entry,
-        list_media_key="m1",
-    )
-
-    # Promotion to REPEATING is blocked by sync_fields, so status stays COMPLETED
-    # Other fields may still sync, so outcome can be SYNCED
-    assert entry.status == ListStatus.COMPLETED
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "initial_status",
-    [ListStatus.PLANNING, ListStatus.DROPPED, ListStatus.PAUSED],
-)
-async def test_promote_rewatch_does_not_affect_non_completed_statuses(
-    stub_client: StubSyncClient, sync_db, initial_status: ListStatus
-) -> None:
-    """promote_rewatch should only apply when entry was COMPLETED or REPEATING."""
-    stub_client.promote_rewatch = True
-    stub_client._status_override = ListStatus.CURRENT
-
-    provider = cast(Any, stub_client.list_provider)
-    movie = make_movie()
-    entry = FakeListEntry(
-        provider=provider,
-        key="m1",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    typed_entry = cast(ListEntryProtocol, entry)
-    entry.status = initial_status
-
-    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
-    stub_client._map_results = [
-        (movie, (movie,), SyncTarget(list_media_key="m1", entry=typed_entry))
-    ]
-    provider.entries["m1"] = entry
-
-    outcome = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=typed_entry,
-        list_media_key="m1",
-    )
-
-    assert outcome == SyncOutcome.SYNCED
-    assert entry.status == ListStatus.CURRENT

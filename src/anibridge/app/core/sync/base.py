@@ -13,10 +13,11 @@ from anibridge.utils.types import Comparable, MappingDescriptor
 
 from anibridge.app import log
 from anibridge.app.config.database import db
-from anibridge.app.config.settings import SyncField
+from anibridge.app.config.settings import SyncField, SyncRulesConfig
 from anibridge.app.core.animap import AnimapClient, descriptor_key
 from anibridge.app.core.sync.cache import SyncCacheManager
 from anibridge.app.core.sync.history import SyncHistoryManager
+from anibridge.app.core.sync.rules import SyncRuleDecision, SyncRuleEngine
 from anibridge.app.core.sync.stats import (
     BatchUpdate,
     EntrySnapshot,
@@ -32,6 +33,8 @@ __all__ = ["BaseSyncClient"]
 
 @dataclass(slots=True)
 class _FieldApplicationState:
+    """Track why individual sync fields were blocked during planning."""
+
     pinned_blocked_fields: set[str] = dataclass_field(default_factory=set)
     sync_rules_blocked: dict[str, str] = dataclass_field(default_factory=dict)
     status_gate_blocked: dict[str, str] = dataclass_field(default_factory=dict)
@@ -112,6 +115,10 @@ class BaseSyncClient[
             )
             for field, rules in (sync_fields or {}).items()
         }
+        self._sync_rule_engine = SyncRuleEngine(
+            variables=sync_rules.vars if sync_rules is not None else None,
+            field_rules=sync_rules.field_rules() if sync_rules is not None else None,
+        )
         self.full_scan: bool = full_scan
         self.destructive_sync: bool = destructive_sync
         self.empty_sync: bool = empty_sync
@@ -410,9 +417,20 @@ class BaseSyncClient[
             "entry": entry,
         }
 
-        status_value: ListStatus | None = await self._field_calculators[
-            SyncField.STATUS
-        ](**calc_kwargs)
+        computed_values = await self._calculate_computed_values(
+            calc_kwargs=calc_kwargs,
+            sync_fields_disabled=sync_fields_disabled,
+        )
+        current_values = {
+            field.value: getattr(entry, field.value) for field in SyncField
+        }
+
+        status_rule = self._sync_rule_engine.evaluate_field(
+            field_name=SyncField.STATUS.value,
+            current_values=current_values,
+            computed_values=computed_values,
+        )
+        status_value = self._resolve_rule_value(status_rule)
 
         if status_value is None:
             if (
@@ -471,7 +489,9 @@ class BaseSyncClient[
 
         promoted_current_to_repeating = False
         if (
-            self.promote_rewatch
+            status_rule.allowed
+            and not self._sync_rule_engine.has_field_rules(SyncField.STATUS.value)
+            and self.promote_rewatch
             and status_value == ListStatus.CURRENT
             and before_snapshot.status in (ListStatus.COMPLETED, ListStatus.REPEATING)
         ):
@@ -486,14 +506,18 @@ class BaseSyncClient[
 
         considered_attrs: set[str] = set()
 
-        status_should_apply, status_reason = self._should_apply_field(
-            SyncField.STATUS,
-            status_value,
-            before_snapshot.status,
-            skip_fields,
+        status_should_apply, status_reason = (
+            self._should_apply_field(
+                SyncField.STATUS,
+                status_value,
+                before_snapshot.status,
+                skip_fields,
+            )
+            if status_rule.allowed
+            else (False, f"sync_rules:{status_rule.reason}")
         )
-        if status_should_apply:
-            entry.status = status_value
+        if status_should_apply and status_value is not None:
+            setattr(entry, SyncField.STATUS.value, status_value)
         else:
             field_state.mark_block(SyncField.STATUS.value, status_reason)
         considered_attrs.add(SyncField.STATUS.value)
@@ -502,7 +526,8 @@ class BaseSyncClient[
         await self._apply_secondary_fields(
             entry=entry,
             final_status=final_status,
-            calc_kwargs=calc_kwargs,
+            current_values=current_values,
+            computed_values=computed_values,
             skip_fields=skip_fields,
             sync_fields_disabled=sync_fields_disabled,
             considered_attrs=considered_attrs,
@@ -664,7 +689,8 @@ class BaseSyncClient[
         *,
         entry: ListEntry,
         final_status: ListStatus | None,
-        calc_kwargs: Mapping[str, Any],
+        current_values: Mapping[str, Any],
+        computed_values: Mapping[str, Any],
         skip_fields: set[str],
         sync_fields_disabled: set[str],
         considered_attrs: set[str],
@@ -686,8 +712,20 @@ class BaseSyncClient[
                 field_state.status_gate_blocked[sync_field.value] = reason
                 continue
 
-            value = await self._field_calculators[sync_field](**calc_kwargs)
-            current_value = getattr(entry, sync_field.value)
+            rule_decision = self._sync_rule_engine.evaluate_field(
+                field_name=sync_field.value,
+                current_values=current_values,
+                computed_values=computed_values,
+            )
+            if not rule_decision.allowed:
+                field_state.mark_block(
+                    sync_field.value,
+                    f"sync_rules:{rule_decision.reason}",
+                )
+                continue
+
+            value = self._resolve_rule_value(rule_decision)
+            current_value = current_values[sync_field.value]
             should_apply, apply_reason = self._should_apply_field(
                 sync_field,
                 value,
@@ -700,6 +738,39 @@ class BaseSyncClient[
 
             setattr(entry, sync_field.value, value)
             considered_attrs.add(sync_field.value)
+
+    async def _calculate_computed_values(
+        self,
+        *,
+        calc_kwargs: Mapping[str, Any],
+        sync_fields_disabled: set[str],
+    ) -> dict[str, Comparable | None]:
+        """Calculate raw field values before any declarative rules are applied."""
+        computed: dict[str, Comparable | None] = {
+            SyncField.STATUS.value: await self._field_calculators[SyncField.STATUS](
+                **calc_kwargs
+            )
+        }
+
+        for sync_field in SyncField:
+            if sync_field == SyncField.STATUS:
+                continue
+            if self.sync_fields.get(sync_field.value) is False:
+                sync_fields_disabled.add(sync_field.value)
+                continue
+            if self._sync_rule_engine.is_disabled(sync_field.value):
+                sync_fields_disabled.add(sync_field.value)
+                continue
+            computed[sync_field.value] = await self._field_calculators[sync_field](
+                **calc_kwargs
+            )
+
+        return computed
+
+    @staticmethod
+    def _resolve_rule_value(decision: SyncRuleDecision) -> Comparable | None:
+        """Return the value produced by the rule engine."""
+        return decision.value
 
     def _status_gate_reason(
         self,

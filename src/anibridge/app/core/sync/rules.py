@@ -106,14 +106,22 @@ _ALLOWED_NODES = (
 class _ContextNamespace(Mapping[str, Any]):
     """Mapping wrapper that exposes sync context values via attribute access."""
 
-    def __init__(self, values: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        values: Mapping[str, Any],
+        *,
+        missing_value: Any = ...,
+    ) -> None:
         """Store raw context values for attribute and key access."""
         self._values = values
+        self._missing_value = missing_value
 
     def __getitem__(self, key: str) -> Any:
         """Return a normalized context value for the provided key."""
         if key not in self._values:
-            raise KeyError(key)
+            if self._missing_value is ...:
+                raise KeyError(key)
+            return self._missing_value
         return self._normalize(self._values[key])
 
     def __iter__(self):
@@ -329,8 +337,8 @@ class SyncRuleEngine:
         computed_values: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Build the evaluation environment for expressions."""
-        current = _ContextNamespace(current_values)
-        computed = _ContextNamespace(computed_values)
+        current = _ContextNamespace(current_values, missing_value=None)
+        computed = _ContextNamespace(computed_values, missing_value=None)
         variables: dict[str, Any] = {}
         base_environment: dict[str, Any] = {
             **_SAFE_FUNCTIONS,

@@ -851,6 +851,61 @@ async def test_sync_media_applies_declarative_rules(
 
 
 @pytest.mark.asyncio
+async def test_sync_media_allows_vars_to_reference_missing_computed_fields(
+    stub_client: StubSyncClient,
+) -> None:
+    """Rule vars should treat missing computed fields as `None`."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    movie = make_movie()
+    entry = FakeListEntry(
+        provider=provider,
+        key="rule-missing-computed",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+        total_units=1,
+    )
+    entry.status = ListStatus.COMPLETED
+    entry.progress = 1
+    stub_client._status_override = ListStatus.CURRENT
+    stub_client._progress_override = 1
+    stub_client._review_override = "ignored"
+    set_sync_rules(
+        stub_client,
+        {
+            "vars": {
+                "has_review": (
+                    "computed.review is not None and len(computed.review) > 0"
+                ),
+            },
+            "status": [
+                {
+                    "name": "Promote rewatch",
+                    "if": (
+                        'not vars.has_review and current.status == "completed" '
+                        'and computed.status == "current"'
+                    ),
+                    "set": "repeating",
+                }
+            ],
+        },
+    )
+
+    result = await stub_client.sync_media(
+        item=movie,
+        child_item=movie,
+        grandchild_items=(movie,),
+        entry=cast(ListEntryProtocol, entry),
+        list_media_key="rule-missing-computed",
+    )
+
+    assert result is SyncOutcome.SYNCED
+    assert entry.status == ListStatus.REPEATING
+    assert provider.updated_entries and provider.updated_entries[0][0] == (
+        "rule-missing-computed"
+    )
+
+
+@pytest.mark.asyncio
 async def test_sync_media_blocks_field_when_no_sync_rule_matches(
     stub_client: StubSyncClient,
 ) -> None:

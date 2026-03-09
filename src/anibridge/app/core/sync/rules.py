@@ -3,6 +3,7 @@
 import ast
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -27,6 +28,9 @@ _SAFE_FUNCTIONS: dict[str, Any] = {
     "round": round,
     "str": str,
     "sum": sum,
+    "date": date,
+    "datetime": datetime,
+    "timedelta": timedelta,
 }
 
 _SAFE_METHODS = {
@@ -60,7 +64,9 @@ _ALIASES = {
     **{status.value: status.value for status in ListStatus},
 }
 
-_ALLOWED_NAMES = frozenset({"computed", "current", "vars", *_SAFE_FUNCTIONS, *_ALIASES})
+_ALLOWED_NAMES = frozenset(
+    {"computed", "current", "ctx", "vars", *_SAFE_FUNCTIONS, *_ALIASES}
+)
 _ALLOWED_NODES = (
     ast.Add,
     ast.And,
@@ -139,11 +145,16 @@ class _ContextNamespace(Mapping[str, Any]):
         except KeyError as exc:
             raise AttributeError(key) from exc
 
-    @staticmethod
-    def _normalize(value: Any) -> Any:
+    def _normalize(self, value: Any) -> Any:
         """Normalize values before exposing them to expressions."""
         if isinstance(value, ListStatus):
             return value.value
+        if isinstance(value, Mapping):
+            return _ContextNamespace(value, missing_value=self._missing_value)
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return tuple(self._normalize(item) for item in value)
         return value
 
 
@@ -284,6 +295,7 @@ class SyncRuleEngine:
         field_name: str,
         current_values: Mapping[str, Any],
         computed_values: Mapping[str, Any],
+        rule_context: Mapping[str, Any] | None = None,
     ) -> SyncRuleDecision:
         """Resolve the effective value for one field against the sync context.
 
@@ -292,6 +304,8 @@ class SyncRuleEngine:
             current_values (Mapping[str, Any]): Current list-entry field values.
             computed_values (Mapping[str, Any]): Newly computed field values before
                 declarative overrides.
+            rule_context (Mapping[str, Any] | None): Shimmed sync metadata exposed
+                under ``ctx`` for rule expressions.
 
         Returns:
             SyncRuleDecision: Decision describing whether the field may sync and
@@ -312,6 +326,7 @@ class SyncRuleEngine:
         environment = self._build_environment(
             current_values=current_values,
             computed_values=computed_values,
+            rule_context=rule_context,
         )
         for index, rule in enumerate(rules, start=1):
             condition = rule.get("if")
@@ -335,16 +350,19 @@ class SyncRuleEngine:
         *,
         current_values: Mapping[str, Any],
         computed_values: Mapping[str, Any],
+        rule_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the evaluation environment for expressions."""
         current = _ContextNamespace(current_values, missing_value=None)
         computed = _ContextNamespace(computed_values, missing_value=None)
+        ctx = _ContextNamespace(rule_context or {}, missing_value=None)
         variables: dict[str, Any] = {}
         base_environment: dict[str, Any] = {
             **_SAFE_FUNCTIONS,
             **_ALIASES,
             "current": current,
             "computed": computed,
+            "ctx": ctx,
         }
 
         for name, expression in self._variables.items():

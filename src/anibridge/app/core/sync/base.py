@@ -409,11 +409,19 @@ class BaseSyncClient[
         current_values = {
             field.value: getattr(entry, field.value) for field in SyncField
         }
+        rule_context = self._build_rule_context(
+            item=item,
+            child_item=child_item,
+            grandchild_items=grandchild_items,
+            list_media_key=resolved_list_key,
+            mapping_descriptors=mapping_descriptors,
+        )
 
         status_rule = self._sync_rule_engine.evaluate_field(
             field_name=SyncField.STATUS.value,
             current_values=current_values,
             computed_values=computed_values,
+            rule_context=rule_context,
         )
         status_value = self._resolve_rule_value(status_rule)
 
@@ -496,6 +504,7 @@ class BaseSyncClient[
             final_status=final_status,
             current_values=current_values,
             computed_values=computed_values,
+            rule_context=rule_context,
             skip_fields=skip_fields,
             disabled_fields=disabled_fields,
             considered_attrs=considered_attrs,
@@ -658,6 +667,7 @@ class BaseSyncClient[
         final_status: ListStatus | None,
         current_values: Mapping[str, Any],
         computed_values: Mapping[str, Any],
+        rule_context: Mapping[str, Any],
         skip_fields: set[str],
         disabled_fields: set[str],
         considered_attrs: set[str],
@@ -683,6 +693,7 @@ class BaseSyncClient[
                 field_name=sync_field.value,
                 current_values=current_values,
                 computed_values=computed_values,
+                rule_context=rule_context,
             )
             if not rule_decision.allowed:
                 field_state.mark_block(
@@ -730,6 +741,45 @@ class BaseSyncClient[
             )
 
         return computed
+
+    @staticmethod
+    def _build_rule_context(
+        *,
+        item: ParentMediaT,
+        child_item: ChildMediaT,
+        grandchild_items: Sequence[GrandchildMediaT],
+        list_media_key: str | None,
+        mapping_descriptors: Sequence[MappingDescriptor] | None,
+    ) -> dict[str, Any]:
+        """Build the shimmed `ctx` object exposed to sync rule expressions."""
+        return {
+            "list_media_key": list_media_key,
+            "item": BaseSyncClient._shim_rule_media(item),
+            "child": BaseSyncClient._shim_rule_media(child_item),
+            "grandchildren": [
+                BaseSyncClient._shim_rule_media(grandchild_item)
+                for grandchild_item in grandchild_items
+            ],
+        }
+
+    @staticmethod
+    def _shim_rule_media(media: Any) -> dict[str, Any]:
+        """Build a stable rule-facing view of a library media object."""
+        payload = {
+            "key": getattr(media, "key", None),
+            "title": getattr(media, "title", None),
+            "media_kind": getattr((getattr(media, "media_kind", None)), "value", None),
+            "on_watching": getattr(media, "on_watching", None),
+            "on_watchlist": getattr(media, "on_watchlist", None),
+            "user_rating": getattr(media, "user_rating", None),
+            "view_count": getattr(media, "view_count", None),
+        }
+
+        for attribute in ("index", "season_index"):
+            if hasattr(media, attribute):
+                payload[attribute] = getattr(media, attribute)
+
+        return payload
 
     @staticmethod
     def _resolve_rule_value(decision: SyncRuleDecision) -> Comparable | None:

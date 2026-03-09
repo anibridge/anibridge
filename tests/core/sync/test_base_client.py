@@ -24,8 +24,11 @@ from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
 from anibridge.app.utils.terminal import ARROW
 from tests.core.sync.fakes import (
     FakeAnimapClient,
+    FakeLibraryEpisode,
     FakeLibraryMovie,
     FakeLibraryProvider,
+    FakeLibrarySeason,
+    FakeLibraryShow,
     FakeListEntry,
     FakeListProvider,
 )
@@ -903,6 +906,90 @@ async def test_sync_media_allows_vars_to_reference_missing_computed_fields(
     assert provider.updated_entries and provider.updated_entries[0][0] == (
         "rule-missing-computed"
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_media_exposes_ctx_item_child_and_grandchildren(
+    stub_client: StubSyncClient,
+) -> None:
+    """Rule expressions should receive shimmed item context under ctx."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    show = FakeLibraryShow(key="show-ctx", title="Ctx Show")
+    season = FakeLibrarySeason(
+        key="season-ctx",
+        title="Season 1",
+        index=1,
+        show=show,
+    )
+    episodes = [
+        FakeLibraryEpisode(
+            key="episode-1",
+            title="Episode 1",
+            index=1,
+            season_index=1,
+            show=show,
+            season=season,
+            view_count=1,
+        ),
+        FakeLibraryEpisode(
+            key="episode-2",
+            title="Episode 2",
+            index=2,
+            season_index=1,
+            show=show,
+            season=season,
+            view_count=1,
+        ),
+    ]
+    show.attach_children(episodes=episodes, seasons=[season])
+
+    entry = FakeListEntry(
+        provider=provider,
+        key="ctx-entry",
+        title="Ctx Show",
+        media_type=ListMediaType.TV,
+        total_units=2,
+    )
+    entry.status = ListStatus.PLANNING
+    entry.progress = 1
+    stub_client._status_override = ListStatus.CURRENT
+    stub_client._progress_override = 1
+
+    set_sync_rules(
+        stub_client,
+        {
+            "status": [
+                {
+                    "name": "Use ctx metadata",
+                    "if": (
+                        'ctx.profile == "tester" '
+                        'and ctx.library.provider == "_fake-library" '
+                        'and ctx.list.provider == "_fake-list" '
+                        'and ctx.item.title == "Ctx Show" '
+                        "and ctx.child.index == 1 "
+                        "and ctx.grandchild_count == 2 "
+                        "and len(ctx.grandchildren) == 2 "
+                        'and ctx.grandchildren[0].title == "Episode 1" '
+                        "and ctx.grandchildren[1].index == 2 "
+                        "and ctx.grandchildren[0].season_index == 1"
+                    ),
+                    "set": "completed",
+                }
+            ]
+        },
+    )
+
+    result = await stub_client.sync_media(
+        item=show,
+        child_item=season,
+        grandchild_items=tuple(episodes),
+        entry=cast(ListEntryProtocol, entry),
+        list_media_key="ctx-entry",
+    )
+
+    assert result is SyncOutcome.SYNCED
+    assert entry.status == ListStatus.COMPLETED
+    assert provider.updated_entries and provider.updated_entries[0][0] == "ctx-entry"
 
 
 @pytest.mark.asyncio

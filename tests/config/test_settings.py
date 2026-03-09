@@ -236,6 +236,7 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
                 "has_review": (
                     "computed.review is not None and len(computed.review) > 0"
                 ),
+                "is_special_item": 'ctx.item.title == "Movie"',
             },
             "status": [
                 {
@@ -266,6 +267,12 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
     assert status_rules[0]["set"] == "repeating"
     assert "set" in review_rules[0]
     assert review_rules[0]["set"] is None
+
+
+def test_sync_rules_reject_reserved_ctx_variable_name() -> None:
+    """sync_rules.vars cannot redefine the ctx namespace."""
+    with pytest.raises(ValueError):
+        SyncRulesConfig(vars={"ctx": "True"})
 
 
 def test_sync_rules_defaults_match_sync_defaults() -> None:

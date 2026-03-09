@@ -259,7 +259,7 @@ class SyncRulesConfig(BaseModel):
         Returns:
             dict[str, str]: The validated variable mapping.
         """
-        reserved = {"computed", "current", "vars"}
+        reserved = {"computed", "current", "ctx", "vars"}
         for name, expression in value.items():
             if not name.isidentifier() or keyword.iskeyword(name):
                 raise ValueError(

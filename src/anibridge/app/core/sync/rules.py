@@ -15,21 +15,48 @@ __all__ = [
     "validate_sync_rule_expression",
 ]
 
+
+def _progressed(previous: Any, current: Any) -> bool:
+    """Return whether a value progressed without raising on nulls."""
+    if previous is None:
+        return current is not None
+    if current is None:
+        return False
+    try:
+        return current > previous
+    except TypeError:
+        return False
+
+
+def _regressed(previous: Any, current: Any) -> bool:
+    """Return whether a value regressed without raising on nulls."""
+    if previous is None:
+        return False
+    if current is None:
+        return True
+    try:
+        return current < previous
+    except TypeError:
+        return False
+
+
 _SAFE_FUNCTIONS: dict[str, Any] = {
     "abs": abs,
     "all": all,
     "any": any,
     "bool": bool,
+    "date": date,
+    "datetime": datetime,
     "float": float,
     "int": int,
     "len": len,
     "max": max,
     "min": min,
+    "progressed": _progressed,
+    "regressed": _regressed,
     "round": round,
     "str": str,
     "sum": sum,
-    "date": date,
-    "datetime": datetime,
     "timedelta": timedelta,
 }
 

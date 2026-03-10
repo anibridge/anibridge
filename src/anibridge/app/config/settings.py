@@ -388,6 +388,7 @@ class AnibridgeProfileConfig(BaseModel):
     _parent: AnibridgeConfig | None = None
 
     @model_validator(mode="before")
+    @classmethod
     def raise_on_legacy_fields(cls, values: dict[str, Any]) -> dict[str, Any]:
         """Detect legacy fields and raise an error with instructions for migration.
 

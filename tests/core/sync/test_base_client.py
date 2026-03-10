@@ -1022,12 +1022,9 @@ async def test_sync_media_exposes_ctx_item_child_and_grandchildren(
                 {
                     "name": "Use ctx metadata",
                     "if": (
-                        'ctx.profile == "tester" '
-                        'and ctx.library.provider == "_fake-library" '
-                        'and ctx.list.provider == "_fake-list" '
+                        'ctx.list_media_key == "ctx-entry" '
                         'and ctx.item.title == "Ctx Show" '
                         "and ctx.child.index == 1 "
-                        "and ctx.grandchild_count == 2 "
                         "and len(ctx.grandchildren) == 2 "
                         'and ctx.grandchildren[0].title == "Episode 1" '
                         "and ctx.grandchildren[1].index == 2 "

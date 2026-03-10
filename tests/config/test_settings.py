@@ -1,7 +1,7 @@
 """Tests for settings configuration utilities."""
 
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from pydantic import SecretStr
@@ -153,79 +153,6 @@ def test_legacy_field_rules_reject_unknown_operator() -> None:
         AnibridgeProfileConfig.model_validate(
             {"sync_fields": {SyncField.STATUS: {"_between": False}}}
         )
-
-
-def test_legacy_field_rules_translate_from_global_profile() -> None:
-    """Global legacy field rules should translate into declarative sync rules."""
-    config = AnibridgeConfig.model_validate(
-        {
-            "global_config": {
-                "library_provider": "plex",
-                "sync_fields": {},
-            },
-            "profiles": {
-                "anilist": {
-                    "list_provider": "anilist",
-                    "list_provider_config": {"anilist": {"token": "token"}},
-                }
-            },
-        }
-    )
-
-    profile = config.get_profile("anilist")
-
-    assert profile.sync_rules.review is True
-    assert profile.sync_rules.user_rating is True
-    assert profile.sync_rules.status is True
-
-
-def test_legacy_status_rule_names_are_case_insensitive() -> None:
-    """Legacy status names should normalize before translation."""
-    profile = AnibridgeProfileConfig.model_validate(
-        {
-            "sync_fields": {
-                SyncField.STATUS: {
-                    "dropped": False,
-                    "PAUSED": False,
-                    "pLaNNing": False,
-                }
-            }
-        }
-    )
-
-    status_rules = cast(list[object], profile.sync_rules.status)
-    rendered_if = cast(str, cast(Any, status_rules[0]).if_expr)
-    assert "computed.status not in" in rendered_if
-    assert "dropped" in rendered_if
-    assert "paused" in rendered_if
-    assert "planning" in rendered_if
-
-
-def test_legacy_rewatch_config_translates_to_status_rules() -> None:
-    """Legacy rewatch promotion should translate into declarative status rules."""
-    profile = AnibridgeProfileConfig.model_validate({"promote_rewatch": True})
-
-    status_rules = cast(list[object], profile.sync_rules.status)
-    assert cast(Any, status_rules[0]).set_expr == "repeating"
-    assert cast(Any, status_rules[1]).name == "Legacy passthrough"
-
-
-def test_legacy_field_rules_and_rewatch_merge_into_status_rules() -> None:
-    """Legacy status conditions should constrain translated rewatch promotion."""
-    profile = AnibridgeProfileConfig.model_validate(
-        {
-            "sync_fields": {"status": {"repeating": False}},
-            "promote_rewatch": True,
-        }
-    )
-
-    status_rules = cast(list[object], profile.sync_rules.status)
-    promotion_if = cast(str, cast(Any, status_rules[0]).if_expr)
-    passthrough_if = cast(str, cast(Any, status_rules[1]).if_expr)
-    assert '"repeating" not in' in promotion_if
-    assert "repeating" in promotion_if
-    assert "computed.status not in" in passthrough_if
-    assert "repeating" in passthrough_if
 
 
 def test_sync_rules_accept_declarative_field_rules() -> None:

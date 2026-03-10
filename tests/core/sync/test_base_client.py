@@ -1,5 +1,6 @@
 """Tests covering helper utilities on `anibridge.app.core.sync.base`."""
 
+import logging
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -9,6 +10,7 @@ from anibridge.library import MediaKind
 from anibridge.list import ListEntry as ListEntryProtocol
 from anibridge.list import ListMediaType, ListStatus
 
+from anibridge.app import log
 from anibridge.app.config.settings import SyncField, SyncRulesConfig
 from anibridge.app.core.sync.base import BaseSyncClient
 from anibridge.app.core.sync.rules import SyncRuleEngine
@@ -145,6 +147,17 @@ def set_sync_rules(stub_client: StubSyncClient, payload: dict[str, Any]) -> None
         variables=rules.vars,
         field_rules=rules.field_rules(),
     )
+
+
+class CaptureHandler(logging.Handler):
+    """Capture log records for assertions."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
 
 
 def test_diff_snapshots_returns_changed_fields() -> None:
@@ -351,6 +364,53 @@ async def test_sync_media_skips_when_no_status(
     )
 
     assert outcome is SyncOutcome.SKIPPED
+
+
+@pytest.mark.asyncio
+async def test_sync_media_logs_sync_rule_blocked_status_skip(
+    stub_client: StubSyncClient,
+) -> None:
+    """Status skip logs should explain when declarative rules block syncing."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    entry = FakeListEntry(
+        provider=provider,
+        key="201-rule-blocked",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+        total_units=1,
+    )
+    stub_client._status_override = ListStatus.CURRENT
+    set_sync_rules(
+        stub_client,
+        {
+            "status": [
+                {
+                    "name": "Never matches",
+                    "if": "False",
+                }
+            ]
+        },
+    )
+    handler = CaptureHandler()
+    log.addHandler(handler)
+
+    try:
+        outcome = await stub_client.sync_media(
+            item=make_movie(),
+            child_item=make_movie(),
+            grandchild_items=(),
+            entry=cast(ListEntryProtocol, entry),
+            list_media_key="201-rule-blocked",
+            mapping_descriptors=None,
+        )
+    finally:
+        log.removeHandler(handler)
+
+    assert outcome is SyncOutcome.SKIPPED
+    assert any(
+        "status sync was blocked by sync rules (no_match)" in message
+        for message in handler.messages
+    )
 
 
 @pytest.mark.asyncio
@@ -1044,6 +1104,63 @@ async def test_sync_media_blocks_field_when_no_sync_rule_matches(
     assert result is SyncOutcome.SKIPPED
     assert entry.review == "existing"
     assert provider.updated_entries == []
+
+
+@pytest.mark.asyncio
+async def test_sync_media_logs_blocked_noop_reason(
+    stub_client: StubSyncClient,
+) -> None:
+    """No-op skip logs should report blocked fields instead of up-to-date."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    movie = make_movie(review="x" * 220)
+    entry = FakeListEntry(
+        provider=provider,
+        key="rule-blocked-log",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+        total_units=1,
+    )
+    entry.status = ListStatus.CURRENT
+    entry.progress = 1
+    entry.repeats = 0
+    entry.user_rating = 50
+    entry.review = "existing"
+    stub_client._status_override = ListStatus.CURRENT
+    stub_client._progress_override = 1
+    stub_client._repeats_override = 0
+    stub_client._review_override = "x" * 220
+    stub_client._user_rating_override = 50
+    set_sync_rules(
+        stub_client,
+        {
+            "review": [
+                {
+                    "name": "Only sync short reviews",
+                    "if": "computed.review is not None and len(computed.review) < 200",
+                }
+            ],
+        },
+    )
+    handler = CaptureHandler()
+    log.addHandler(handler)
+
+    try:
+        result = await stub_client.sync_media(
+            item=movie,
+            child_item=movie,
+            grandchild_items=(movie,),
+            entry=cast(ListEntryProtocol, entry),
+            list_media_key="rule-blocked-log",
+        )
+    finally:
+        log.removeHandler(handler)
+
+    assert result is SyncOutcome.SKIPPED
+    assert any(
+        "no eligible changes remained" in message
+        and "sync rules: review(no_match)" in message
+        for message in handler.messages
+    )
 
 
 @pytest.mark.asyncio

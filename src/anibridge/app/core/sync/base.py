@@ -59,6 +59,14 @@ class _FieldApplicationState:
             self.sync_rules_blocked[field_name] = detail
 
 
+def _format_blocked_field_reasons(field_reasons: Mapping[str, str]) -> str:
+    """Format blocked field metadata for human-readable logging."""
+    return ", ".join(
+        f"{field_name}({reason})" if reason else field_name
+        for field_name, reason in sorted(field_reasons.items())
+    )
+
+
 class BaseSyncClient[
     ParentMediaT: LibraryEntry,
     ChildMediaT: LibraryEntry,
@@ -472,9 +480,14 @@ class BaseSyncClient[
                 return SyncOutcome.DELETED
 
             log.info(
-                "[%s] Skipping %s due to no activity %s %s",
+                "[%s] Skipping %s because %s %s %s",
                 self.profile_name,
                 item.media_kind.value,
+                self._describe_status_skip(
+                    status_rule=status_rule,
+                    before_status=before_snapshot.status,
+                    skip_fields=skip_fields,
+                ),
                 debug_title,
                 debug_ids,
             )
@@ -540,9 +553,10 @@ class BaseSyncClient[
 
         if not diff:
             log.info(
-                "[%s] Skipping %s because it is already up to date %s %s",
+                "[%s] Skipping %s because %s %s %s",
                 self.profile_name,
                 item.media_kind.value,
+                self._describe_noop_reason(field_state),
                 debug_title,
                 debug_ids,
             )
@@ -785,6 +799,56 @@ class BaseSyncClient[
     def _resolve_rule_value(decision: SyncRuleDecision) -> Comparable | None:
         """Return the value produced by the rule engine."""
         return decision.value
+
+    def _describe_status_skip(
+        self,
+        *,
+        status_rule: SyncRuleDecision,
+        before_status: ListStatus | None,
+        skip_fields: set[str],
+    ) -> str:
+        """Describe why sync stopped before any field could be applied."""
+        if not status_rule.allowed:
+            rule_reason = status_rule.reason or "blocked"
+            return f"status sync was blocked by sync rules ({rule_reason})"
+        if before_status is not None and SyncField.STATUS.value in skip_fields:
+            return "status changes are pinned"
+        if before_status is not None and not self.destructive_sync:
+            return "status would be cleared but destructive sync is disabled"
+        return "no syncable activity was found"
+
+    def _describe_noop_reason(self, field_state: _FieldApplicationState) -> str:
+        """Describe why planning produced no eligible changes."""
+        details: list[str] = []
+
+        if field_state.sync_rules_blocked:
+            details.append(
+                "sync rules: "
+                + _format_blocked_field_reasons(field_state.sync_rules_blocked)
+            )
+        if field_state.status_gate_blocked:
+            details.append(
+                "status gates: "
+                + _format_blocked_field_reasons(field_state.status_gate_blocked)
+            )
+        if field_state.pinned_blocked_fields:
+            details.append(
+                "pinned: " + ", ".join(sorted(field_state.pinned_blocked_fields))
+            )
+        if field_state.destructive_blocked_fields:
+            details.append(
+                "destructive sync disabled: "
+                + ", ".join(sorted(field_state.destructive_blocked_fields))
+            )
+        if field_state.unchanged_fields and not details:
+            return "all considered fields are already up to date"
+        if field_state.unchanged_fields:
+            details.append(
+                "unchanged: " + ", ".join(sorted(field_state.unchanged_fields))
+            )
+        if not details:
+            return "no eligible changes were produced"
+        return f"no eligible changes remained ({'; '.join(details)})"
 
     def _status_gate_reason(
         self,

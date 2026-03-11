@@ -144,7 +144,7 @@ def set_sync_rules(stub_client: StubSyncClient, payload: dict[str, Any]) -> None
     """Attach declarative sync rules to the stub client."""
     rules = SyncRulesConfig.model_validate(payload)
     stub_client._sync_rule_engine = SyncRuleEngine(
-        variables=rules.vars,
+        variables=rules.resolved_vars(),
         field_rules=rules.field_rules(),
     )
 

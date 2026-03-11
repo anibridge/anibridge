@@ -12,6 +12,7 @@ from anibridge.app.config.settings import (
     BasicAuthConfig,
     SyncField,
     SyncRulesConfig,
+    SyncRuleTemplateId,
     WebConfig,
     find_yaml_config_file,
 )
@@ -194,6 +195,77 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
     assert status_rules[0]["set"] == "repeating"
     assert "set" in review_rules[0]
     assert review_rules[0]["set"] is None
+
+
+def test_sync_rules_templates_prepend_selected_rules() -> None:
+    """Built-in templates should prepend field rules before user-defined rules."""
+    rules = SyncRulesConfig.model_validate(
+        {
+            "templates": [SyncRuleTemplateId.PROMOTE_REWATCH],
+            "status": [
+                {
+                    "name": "User rule",
+                    "if": "computed.status == current.status",
+                    "set": "computed.status",
+                }
+            ],
+        }
+    )
+
+    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
+
+    assert status_rules[0]["name"] == "Promote rewatch to repeating"
+    assert status_rules[1]["name"] == "User rule"
+
+
+def test_sync_rules_disable_review_and_rating_template_overrides_defaults() -> None:
+    """The disable template should force review and user_rating off."""
+    rules = SyncRulesConfig.model_validate(
+        {"templates": [SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW]}
+    )
+
+    assert rules.field_rules()["review"] is False
+    assert rules.field_rules()["user_rating"] is False
+    assert rules.templates == [SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW]
+
+
+def test_sync_rules_prevent_regressions_template_adds_guard_rules() -> None:
+    """The regression template should add keep-current rules for decreasing fields."""
+    rules = SyncRulesConfig.model_validate(
+        {
+            "templates": [SyncRuleTemplateId.PREVENT_REGRESSIONS],
+        }
+    )
+    progress_rules = cast(list[dict[str, object]], rules.field_rules()["progress"])
+    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
+
+    assert progress_rules[0]["if"] == (
+        "current.progress is not None and "
+        "(computed.progress is None or computed.progress < current.progress)"
+    )
+    assert progress_rules[0]["set"] == "current.progress"
+    assert status_rules[0]["if"] == (
+        "current.status is not None and "
+        "(computed.status is None or computed.status < current.status)"
+    )
+
+
+def test_sync_rules_explicit_false_overrides_template_field_rules() -> None:
+    """Explicit field disables should still beat template-provided rule lists."""
+    rules = SyncRulesConfig.model_validate(
+        {
+            "templates": [SyncRuleTemplateId.PREVENT_REGRESSIONS],
+            "progress": False,
+        }
+    )
+
+    assert rules.field_rules()["progress"] is False
+
+
+def test_sync_rules_reject_unknown_template_ids() -> None:
+    """Unknown built-in template IDs should fail validation."""
+    with pytest.raises(ValueError):
+        SyncRulesConfig.model_validate({"templates": ["missing-template"]})
 
 
 def test_sync_rules_reject_reserved_ctx_variable_name() -> None:

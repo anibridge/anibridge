@@ -1,15 +1,14 @@
 """AniBridge Configuration Settings."""
 
-import keyword
 import os
 from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 from anibridge.utils.cache import cache
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_core import PydanticUndefined
 from pydantic_settings import (
     BaseSettings,
@@ -19,7 +18,11 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from anibridge.app.core.sync.rules import validate_sync_rule_expression
+from anibridge.app.config.sync_rules import (
+    SyncRuleDefinition,
+    SyncRulesConfig,
+    SyncRuleTemplateId,
+)
 from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
 from anibridge.app.utils.logging import _get_logger
 
@@ -30,6 +33,7 @@ __all__ = [
     "ScanMode",
     "SyncField",
     "SyncRuleDefinition",
+    "SyncRuleTemplateId",
     "SyncRulesConfig",
     "get_config",
 ]
@@ -173,142 +177,6 @@ class WebConfig(BaseModel):
             )
             or self.basic_auth.htpasswd_path
         )
-
-
-class SyncRuleDefinition(BaseModel):
-    """Single declarative sync rule for a field."""
-
-    name: str | None = Field(default=None, description="Human-readable rule label")
-    if_expr: str | None = Field(
-        default=None,
-        alias="if",
-        description="Condition expression evaluated against the sync context",
-    )
-    set_expr: Any | None = Field(
-        default=None,
-        alias="set",
-        description="Expression or literal value returned when the rule matches",
-    )
-
-    @field_validator("if_expr")
-    @classmethod
-    def validate_if_expr(cls, value: str | None) -> str | None:
-        """Validate the optional condition expression.
-
-        Args:
-            value (str | None): Raw condition expression from configuration.
-
-        Returns:
-            str | None: The validated condition expression.
-        """
-        if value is None:
-            return value
-        if not value.strip():
-            raise ValueError("sync rule conditions cannot be blank")
-        validate_sync_rule_expression(value)
-        return value
-
-    @field_validator("set_expr")
-    @classmethod
-    def validate_set_expr(cls, value: Any | None) -> Any | None:
-        """Validate the optional set expression when it is string-based.
-
-        Args:
-            value (Any | None): Raw set expression or literal from configuration.
-
-        Returns:
-            Any | None: The validated expression or literal.
-        """
-        if isinstance(value, str):
-            if not value.strip():
-                raise ValueError("sync rule set expressions cannot be blank")
-            validate_sync_rule_expression(value)
-        return value
-
-    model_config = {"populate_by_name": True}
-
-
-class SyncRulesConfig(BaseModel):
-    """Declarative per-field sync rules and reusable variables."""
-
-    vars: dict[str, str] = Field(
-        default_factory=dict,
-        description="Reusable expressions available under vars.<name>",
-    )
-    status: bool | list[SyncRuleDefinition] = True
-    progress: bool | list[SyncRuleDefinition] = True
-    repeats: bool | list[SyncRuleDefinition] = True
-    review: bool | list[SyncRuleDefinition] = False
-    user_rating: bool | list[SyncRuleDefinition] = False
-    started_at: bool | list[SyncRuleDefinition] = True
-    finished_at: bool | list[SyncRuleDefinition] = True
-
-    @field_validator("vars")
-    @classmethod
-    def validate_vars(cls, value: dict[str, str]) -> dict[str, str]:
-        """Validate reusable variable names and expressions.
-
-        Args:
-            value (dict[str, str]): Variable names mapped to expressions.
-
-        Returns:
-            dict[str, str]: The validated variable mapping.
-        """
-        reserved = {"computed", "current", "ctx", "vars"}
-        for name, expression in value.items():
-            if not name.isidentifier() or keyword.iskeyword(name):
-                raise ValueError(
-                    f"sync_rules.vars contains invalid variable name: {name!r}"
-                )
-            if name in reserved:
-                raise ValueError(
-                    f"sync_rules.vars cannot redefine reserved name: {name!r}"
-                )
-            if not expression.strip():
-                raise ValueError(
-                    f"sync_rules.vars.{name} must be a non-empty expression"
-                )
-            validate_sync_rule_expression(expression)
-        return value
-
-    @field_validator(*SyncField.field_names())
-    @classmethod
-    def validate_field_rules(
-        cls,
-        value: bool | list[SyncRuleDefinition],
-    ) -> bool | list[SyncRuleDefinition]:
-        """Reject empty rule lists for field-specific rule sets.
-
-        Args:
-            value (bool | list[SyncRuleDefinition]): Configured rule toggle or list.
-
-        Returns:
-            bool | list[SyncRuleDefinition]: The validated field rule payload.
-        """
-        if isinstance(value, list) and not value:
-            raise ValueError("sync_rules field rule lists cannot be empty")
-        return value
-
-    def field_rules(self) -> dict[str, bool | list[dict[str, Any]]]:
-        """Return configured field rules as plain runtime mappings.
-
-        Returns:
-            dict[str, bool | list[dict[str, Any]]]: Runtime field rules keyed by
-                sync field name.
-        """
-        payload: dict[str, bool | list[dict[str, Any]]] = {}
-        for field_name in SyncField.field_names():
-            value = cast(bool | list[SyncRuleDefinition], getattr(self, field_name))
-            if value is True:
-                continue
-            payload[field_name] = (
-                value
-                if isinstance(value, bool)
-                else [
-                    rule.model_dump(by_alias=True, exclude_unset=True) for rule in value
-                ]
-            )
-        return payload
 
 
 class AnibridgeProfileConfig(BaseModel):

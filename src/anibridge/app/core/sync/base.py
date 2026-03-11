@@ -110,7 +110,7 @@ class BaseSyncClient[
         self.list_provider: ListProvider = list_provider
         self.animap_client: AnimapClient = animap_client
         self._sync_rule_engine = SyncRuleEngine(
-            variables=sync_rules.vars if sync_rules is not None else None,
+            variables=sync_rules.resolved_vars() if sync_rules is not None else None,
             field_rules=sync_rules.field_rules() if sync_rules is not None else None,
         )
         self.full_scan: bool = full_scan

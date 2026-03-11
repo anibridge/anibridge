@@ -27,14 +27,6 @@ SYNC_FIELD_NAMES: Final[tuple[str, ...]] = (
 )
 
 
-class SyncRuleTemplateId(StrEnum):
-    """Built-in sync-rule template identifiers."""
-
-    DISABLE_USER_RATING_AND_REVIEW = "disable_user_rating_and_review"
-    PREVENT_REGRESSIONS = "prevent_regressions"
-    PROMOTE_REWATCH = "promote_rewatch"
-
-
 class SyncRuleDefinition(BaseModel):
     """Single declarative sync rule for a field."""
 
@@ -130,7 +122,31 @@ class SyncRuleTemplate(BaseModel):
         return cast(bool | list[SyncRuleDefinition] | None, getattr(self, field_name))
 
 
+class SyncRuleTemplateId(StrEnum):
+    """Built-in sync-rule template identifiers."""
+
+    DISABLE_DROPPED_AND_PAUSED = "disable_dropped_and_paused"
+    DISABLE_USER_RATING_AND_REVIEW = "disable_user_rating_and_review"
+    PREVENT_REGRESSIONS = "prevent_regressions"
+    PROMOTE_REWATCH = "promote_rewatch"
+
+
 SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
+    SyncRuleTemplateId.DISABLE_DROPPED_AND_PAUSED: SyncRuleTemplate(
+        description="Map dropped and paused statuses to current.",
+        status=[
+            SyncRuleDefinition(
+                name="Disable dropped status syncing",
+                if_expr='computed.status == "dropped"',
+                set_expr='"current"',
+            ),
+            SyncRuleDefinition(
+                name="Disable paused status syncing",
+                if_expr='computed.status == "paused"',
+                set_expr='"current"',
+            ),
+        ],
+    ),
     SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW: SyncRuleTemplate(
         description="Disable syncing for review and user rating fields.",
         review=False,

@@ -1,7 +1,6 @@
 """AniBridge Configuration Settings."""
 
 import os
-from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -19,6 +18,7 @@ from pydantic_settings import (
 )
 
 from anibridge.app.config.sync_rules import (
+    BaseStrEnum,
     SyncRuleDefinition,
     SyncRulesConfig,
     SyncRuleTemplateId,
@@ -39,38 +39,6 @@ __all__ = [
 ]
 
 _log = _get_logger(__name__)
-
-
-class BaseStrEnum(StrEnum):
-    """Base class for string-based enumerations with a custom __repr__ method.
-
-    Provides case-insensitive lookup functionality and consistent string
-    representation for enumeration values.
-    """
-
-    @classmethod
-    def _missing_(cls, value: object) -> BaseStrEnum | None:
-        """Handle case-insensitive lookup for enum values.
-
-        Args:
-            value: The value to look up in the enumeration
-
-        Returns:
-            BaseStrEnum | None: The matching enum member if found, None otherwise
-        """
-        value = value.lower() if isinstance(value, str) else value
-        for member in cls:
-            if member.lower() == value:
-                return member
-        return None
-
-    def __repr__(self) -> str:
-        """Return the string value of the enum member."""
-        return self.value
-
-    def __str__(self) -> str:
-        """Return the string representation of the enum member."""
-        return repr(self)
 
 
 class LogLevel(BaseStrEnum):

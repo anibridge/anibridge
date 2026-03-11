@@ -27,6 +27,38 @@ SYNC_FIELD_NAMES: Final[tuple[str, ...]] = (
 )
 
 
+class BaseStrEnum(StrEnum):
+    """Base class for string-based enumerations with a custom __repr__ method.
+
+    Provides case-insensitive lookup functionality and consistent string
+    representation for enumeration values.
+    """
+
+    @classmethod
+    def _missing_(cls, value: object) -> BaseStrEnum | None:
+        """Handle case-insensitive lookup for enum values.
+
+        Args:
+            value: The value to look up in the enumeration
+
+        Returns:
+            BaseStrEnum | None: The matching enum member if found, None otherwise
+        """
+        value = value.lower() if isinstance(value, str) else value
+        for member in cls:
+            if member.lower() == value:
+                return member
+        return None
+
+    def __repr__(self) -> str:
+        """Return the string value of the enum member."""
+        return self.value
+
+    def __str__(self) -> str:
+        """Return the string representation of the enum member."""
+        return repr(self)
+
+
 class SyncRuleDefinition(BaseModel):
     """Single declarative sync rule for a field."""
 
@@ -122,7 +154,7 @@ class SyncRuleTemplate(BaseModel):
         return cast(bool | list[SyncRuleDefinition] | None, getattr(self, field_name))
 
 
-class SyncRuleTemplateId(StrEnum):
+class SyncRuleTemplateId(BaseStrEnum):
     """Built-in sync-rule template identifiers."""
 
     DISABLE_DROPPED_AND_PAUSED = "disable_dropped_and_paused"

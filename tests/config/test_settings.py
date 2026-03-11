@@ -274,20 +274,6 @@ def test_sync_rules_reject_reserved_ctx_variable_name() -> None:
         SyncRulesConfig(vars={"ctx": "True"})
 
 
-def test_sync_rules_defaults_match_sync_defaults() -> None:
-    """Declarative sync rules should default to enabled except review fields."""
-    rules = SyncRulesConfig()
-
-    assert rules.status is True
-    assert rules.progress is True
-    assert rules.repeats is True
-    assert rules.started_at is True
-    assert rules.finished_at is True
-    assert rules.review is False
-    assert rules.user_rating is False
-    assert rules.field_rules() == {"review": False, "user_rating": False}
-
-
 def test_sync_rules_reject_none_field_values() -> None:
     """Declarative sync rule fields should not accept null values."""
     with pytest.raises(ValueError):

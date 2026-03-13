@@ -747,8 +747,9 @@ async def test_sync_media_info_reports_rule_and_status_blocks(
         {
             "progress": [
                 {
-                    "name": "Only allow non-increasing progress",
-                    "if": "computed.progress <= current.progress",
+                    "name": "Freeze progress if status is planning",
+                    "if": "current.status == 'planning'",
+                    "set": "current.progress",
                 }
             ],
             "review": False,
@@ -767,7 +768,7 @@ async def test_sync_media_info_reports_rule_and_status_blocks(
     with sync_db as ctx:
         record = ctx.session.query(SyncHistory).one()
         assert record.info is not None
-        assert "progress(no_match)" in (record.info.get("sync_rules_blocked") or "")
+        assert "progress(no_match)" not in (record.info.get("sync_rules_blocked") or "")
         assert "review" in (record.info.get("disabled_fields") or "")
         assert "user_rating(requires_completed)" in (
             record.info.get("status_gate_blocked") or ""
@@ -1002,10 +1003,10 @@ async def test_sync_media_exposes_ctx_item_child_and_grandchildren(
 
 
 @pytest.mark.asyncio
-async def test_sync_media_blocks_field_when_no_sync_rule_matches(
+async def test_sync_media_uses_default_value_when_no_sync_rule_matches(
     stub_client: StubSyncClient,
 ) -> None:
-    """Configured field rules should block sync when nothing matches."""
+    """Configured field rules should fall back to computed values when unmatched."""
     provider = cast(FakeListProvider, stub_client.list_provider)
     movie = make_movie(review="x" * 220)
     entry = FakeListEntry(
@@ -1035,8 +1036,9 @@ async def test_sync_media_blocks_field_when_no_sync_rule_matches(
             },
             "review": [
                 {
-                    "name": "Only sync short reviews",
+                    "name": "Tag short reviews",
                     "if": "vars.has_short_review",
+                    "set": 'computed.review + " [short]"',
                 }
             ],
         },
@@ -1050,9 +1052,9 @@ async def test_sync_media_blocks_field_when_no_sync_rule_matches(
         list_media_key="rule-blocked",
     )
 
-    assert result is SyncOutcome.SKIPPED
-    assert entry.review == "existing"
-    assert provider.updated_entries == []
+    assert result is SyncOutcome.SYNCED
+    assert entry.review == "x" * 220
+    assert provider.updated_entries and provider.updated_entries[0][0] == "rule-blocked"
 
 
 @pytest.mark.asyncio

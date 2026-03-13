@@ -197,8 +197,8 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
     assert review_rules[0]["set"] is None
 
 
-def test_sync_rules_templates_prepend_selected_rules() -> None:
-    """Built-in templates should prepend field rules before user-defined rules."""
+def test_sync_rules_user_rules_precede_template_rules() -> None:
+    """User field rules should run before built-in template fallback rules."""
     rules = SyncRulesConfig.model_validate(
         {
             "templates": [SyncRuleTemplateId.PROMOTE_REWATCH],
@@ -206,7 +206,7 @@ def test_sync_rules_templates_prepend_selected_rules() -> None:
                 {
                     "name": "User rule",
                     "if": "computed.status == current.status",
-                    "set": "computed.status",
+                    "set": "current.status",
                 }
             ],
         }
@@ -214,8 +214,42 @@ def test_sync_rules_templates_prepend_selected_rules() -> None:
 
     status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
 
+    assert status_rules[0]["name"] == "User rule"
+    assert status_rules[1]["name"] == "Promote rewatch to repeating"
+
+
+def test_sync_rules_disable_dropped_and_paused_template_adds_status_guard() -> None:
+    """Dropped/paused template should add the expected status guard rule."""
+    rules = SyncRulesConfig.model_validate(
+        {
+            "templates": [SyncRuleTemplateId.DISABLE_DROPPED_AND_PAUSED],
+        }
+    )
+
+    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
+
+    assert status_rules[0]["name"] == "Don't sync dropped or paused status changes"
+    assert status_rules[0]["if"] == 'computed.status in ("dropped", "paused")'
+    assert status_rules[0]["set"] == (
+        '"current" if current.status is None else current.status'
+    )
+
+
+def test_sync_rules_promote_rewatch_template_adds_status_promotion_rule() -> None:
+    """Promote rewatch template should add the status promotion rule."""
+    rules = SyncRulesConfig.model_validate(
+        {
+            "templates": [SyncRuleTemplateId.PROMOTE_REWATCH],
+        }
+    )
+
+    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
+
     assert status_rules[0]["name"] == "Promote rewatch to repeating"
-    assert status_rules[1]["name"] == "User rule"
+    assert status_rules[0]["if"] == (
+        'current.status in ("completed", "repeating") and computed.status == "current"'
+    )
+    assert status_rules[0]["set"] == "repeating"
 
 
 def test_sync_rules_disable_review_and_rating_template_overrides_defaults() -> None:
@@ -280,6 +314,20 @@ def test_sync_rules_reject_none_field_values() -> None:
         SyncRulesConfig.model_validate({"status": None})
 
 
+def test_sync_rules_reject_rule_without_set() -> None:
+    """Declarative sync rules must provide an explicit set value."""
+    with pytest.raises(ValueError):
+        SyncRulesConfig.model_validate(
+            {
+                "review": [
+                    {
+                        "if": "computed.review is not None",
+                    }
+                ]
+            }
+        )
+
+
 def test_sync_rules_reject_invalid_variable_names() -> None:
     """sync_rules.vars names must be safe Python identifiers."""
     with pytest.raises(ValueError):
@@ -294,6 +342,7 @@ def test_sync_rules_reject_unsupported_expression_syntax() -> None:
                 "review": [
                     {
                         "if": "[value for value in [1, 2, 3]]",
+                        "set": None,
                     }
                 ]
             }

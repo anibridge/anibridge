@@ -164,7 +164,10 @@ class SyncRuleTemplateId(BaseStrEnum):
 
 SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
     SyncRuleTemplateId.DISABLE_DROPPED_AND_PAUSED: SyncRuleTemplate(
-        description="Map dropped and paused statuses to current.",
+        description=(
+            "Prevent dropped and paused computed statuses from replacing the "
+            "current list status."
+        ),
         status=[
             SyncRuleDefinition.model_validate(
                 {
@@ -276,7 +279,7 @@ class SyncRulesConfig(BaseModel):
 
     templates: list[SyncRuleTemplateId] = Field(
         default_factory=lambda: [SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW],
-        description="Built-in templates to apply in order before user-defined rules",
+        description="Built-in templates to apply in order after the user-defined rules",
     )
     vars: dict[str, str] = Field(
         default_factory=dict,

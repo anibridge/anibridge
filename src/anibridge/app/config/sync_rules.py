@@ -322,7 +322,7 @@ class SyncRulesConfig(BaseModel):
         self,
         field_name: str,
     ) -> bool | list[SyncRuleDefinition]:
-        """Resolve one field's effective rule payload including templates."""
+        """Resolve one field's effective rule payload with user-first priority."""
         template_value = self._template_field_value(field_name)
         user_value = cast(bool | list[SyncRuleDefinition], getattr(self, field_name))
         user_explicit = field_name in self.model_fields_set
@@ -334,7 +334,7 @@ class SyncRulesConfig(BaseModel):
         if user_value is True:
             return template_value if template_value is not None else True
         if isinstance(template_value, list):
-            return [*template_value, *user_value]
+            return [*user_value, *template_value]
         return user_value
 
     def _template_field_value(

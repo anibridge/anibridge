@@ -68,8 +68,7 @@ class SyncRuleDefinition(BaseModel):
         alias="if",
         description="Condition expression evaluated against the sync context",
     )
-    set_expr: Any | None = Field(
-        default=None,
+    set_expr: Any = Field(
         alias="set",
         description="Expression or literal value returned when the rule matches",
     )
@@ -87,8 +86,8 @@ class SyncRuleDefinition(BaseModel):
 
     @field_validator("set_expr")
     @classmethod
-    def validate_set_expr(cls, value: Any | None) -> Any | None:
-        """Validate the optional set expression when it is string-based."""
+    def validate_set_expr(cls, value: Any) -> Any:
+        """Validate the required set expression when it is string-based."""
         if isinstance(value, str):
             if not value.strip():
                 raise ValueError("sync rule set expressions cannot be blank")
@@ -167,10 +166,12 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
     SyncRuleTemplateId.DISABLE_DROPPED_AND_PAUSED: SyncRuleTemplate(
         description="Map dropped and paused statuses to current.",
         status=[
-            SyncRuleDefinition(
-                name="Disable dropped status syncing",
-                if_expr='computed.status in ("dropped", "paused")',
-                set_expr='"current" if current.status is None else current.status',
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Don't sync dropped or paused status changes",
+                    "if": 'computed.status in ("dropped", "paused")',
+                    "set": '"current" if current.status is None else current.status',
+                }
             ),
         ],
     ),
@@ -185,56 +186,67 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
             "backward by keeping the current list value instead."
         ),
         status=[
-            SyncRuleDefinition(
-                name="Keep non-regressing status",
-                if_expr=(
-                    "current.status is not None and "
-                    "(computed.status is None or computed.status < current.status)"
-                ),
-                set_expr="current.status",
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Prevent regressing status",
+                    "if": (
+                        "current.status is not None and "
+                        "(computed.status is None or computed.status < current.status)"
+                    ),
+                    "set": "current.status",
+                }
             )
         ],
         progress=[
-            SyncRuleDefinition(
-                name="Keep non-regressing progress",
-                if_expr=(
-                    "current.progress is not None and "
-                    "(computed.progress is None or "
-                    "computed.progress < current.progress)"
-                ),
-                set_expr="current.progress",
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Prevent regressing progress",
+                    "if": (
+                        "current.progress is not None and "
+                        "(computed.progress is None or "
+                        "computed.progress < current.progress)"
+                    ),
+                    "set": "current.progress",
+                }
             )
         ],
         repeats=[
-            SyncRuleDefinition(
-                name="Keep non-regressing repeats",
-                if_expr=(
-                    "current.repeats is not None and "
-                    "(computed.repeats is None or computed.repeats < current.repeats)"
-                ),
-                set_expr="current.repeats",
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Prevent regressing repeats",
+                    "if": (
+                        "current.repeats is not None and "
+                        "(computed.repeats is None or "
+                        "computed.repeats < current.repeats)"
+                    ),
+                    "set": "current.repeats",
+                }
             )
         ],
         started_at=[
-            SyncRuleDefinition(
-                name="Keep non-regressing started_at",
-                if_expr=(
-                    "current.started_at is not None and "
-                    "(computed.started_at is None or "
-                    "computed.started_at < current.started_at)"
-                ),
-                set_expr="current.started_at",
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Prevent regressing started_at",
+                    "if": (
+                        "current.started_at is not None and "
+                        "(computed.started_at is None or "
+                        "computed.started_at < current.started_at)"
+                    ),
+                    "set": "current.started_at",
+                }
             )
         ],
         finished_at=[
-            SyncRuleDefinition(
-                name="Keep non-regressing finished_at",
-                if_expr=(
-                    "current.finished_at is not None and "
-                    "(computed.finished_at is None or "
-                    "computed.finished_at < current.finished_at)"
-                ),
-                set_expr="current.finished_at",
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Prevent regressing finished_at",
+                    "if": (
+                        "current.finished_at is not None and "
+                        "(computed.finished_at is None or "
+                        "computed.finished_at < current.finished_at)"
+                    ),
+                    "set": "current.finished_at",
+                }
             )
         ],
     ),
@@ -244,13 +256,15 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
             "activity computes a current status."
         ),
         status=[
-            SyncRuleDefinition(
-                name="Promote rewatch to repeating",
-                if_expr=(
-                    'current.status in ("completed", "repeating") and '
-                    'computed.status == "current"'
-                ),
-                set_expr="repeating",
+            SyncRuleDefinition.model_validate(
+                {
+                    "name": "Promote rewatch to repeating",
+                    "if": (
+                        'current.status in ("completed", "repeating") and '
+                        'computed.status == "current"'
+                    ),
+                    "set": "repeating",
+                }
             )
         ],
     ),

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import yaml
 from pydantic import SecretStr
 
 from anibridge.app.config.settings import (
@@ -16,6 +17,7 @@ from anibridge.app.config.settings import (
     WebConfig,
     find_yaml_config_file,
 )
+from anibridge.app.core.sync.rules import SyncRuleEngine
 from anibridge.app.exceptions import (
     ProfileConfigError,
     ProfileNotFoundError,
@@ -347,6 +349,42 @@ def test_sync_rules_reject_unsupported_expression_syntax() -> None:
                 ]
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("yaml_set_value", "expected_rule_set"),
+    [("null", None), ("None", "None")],
+)
+def test_sync_rules_yaml_set_values_preserve_null_and_none_semantics(
+    yaml_set_value: str,
+    expected_rule_set: object,
+) -> None:
+    """YAML null and bare None should preserve their expected sync-rule meaning."""
+    payload = yaml.safe_load(
+        "global_config:\n"
+        "  sync_rules:\n"
+        "    review:\n"
+        "      - name: Clear review\n"
+        f"        set: {yaml_set_value}\n"
+    )
+
+    rules = SyncRulesConfig.model_validate(payload["global_config"]["sync_rules"])
+    review_rules = cast(list[dict[str, object]], rules.field_rules()["review"])
+
+    assert review_rules[0]["set"] == expected_rule_set
+
+    decision = SyncRuleEngine(
+        variables=rules.resolved_vars(),
+        field_rules=rules.field_rules(),
+    ).evaluate_field(
+        field_name="review",
+        current_values={"review": "existing"},
+        computed_values={"review": "computed"},
+    )
+
+    assert decision.allowed is True
+    assert decision.value is None
+    assert decision.reason == "Clear review"
 
 
 def test_web_config_reports_auth_configuration_state(tmp_path: Path) -> None:

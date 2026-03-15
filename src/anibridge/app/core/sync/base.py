@@ -24,7 +24,11 @@ from anibridge.app.core.sync.stats import (
     ItemIdentifier,
     SyncStats,
 )
-from anibridge.app.core.sync.targeting import SyncTarget, diff_snapshots
+from anibridge.app.core.sync.targeting import (
+    SourceRangeMapping,
+    SyncTarget,
+    diff_snapshots,
+)
 from anibridge.app.models.db.sync_history import SyncOutcome
 from anibridge.app.utils.terminal import ARROW
 
@@ -224,6 +228,7 @@ class BaseSyncClient[
                     entry=entry,
                     list_media_key=list_media_key,
                     mapping_descriptors=target.mapping_descriptors,
+                    source_mappings=target.source_mappings,
                 )
                 self.sync_stats.track_items(grandchild_ids, outcome)
                 self.sync_stats.track_item(item_identifier, outcome)
@@ -323,6 +328,7 @@ class BaseSyncClient[
         entry: ListEntry,
         list_media_key: str | None,
         mapping_descriptors: Sequence[MappingDescriptor] | None = None,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> SyncOutcome:
         """Synchronize a mapped media item with the list provider.
 
@@ -335,6 +341,8 @@ class BaseSyncClient[
             list_media_key (str | None): Resolved list media key for the target entry.
             mapping_descriptors (Sequence[MappingDescriptor] | None): Mapping
                 descriptors used to find the target.
+            source_mappings (Sequence[SourceRangeMapping] | None): Source mapping
+                ranges used to resolve the target.
 
         Returns:
             SyncOutcome: Final outcome for the sync operation.
@@ -362,6 +370,7 @@ class BaseSyncClient[
             "child_item": child_item,
             "grandchild_items": grandchild_items,
             "entry": entry,
+            "source_mappings": source_mappings,
         }
         computed_values = await self._calculate_computed_values(
             calc_kwargs=calc_kwargs, disabled_fields=disabled_fields
@@ -921,6 +930,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> ListStatus | None:
         """Calculate the desired status for the list entry."""
         ...
@@ -933,6 +943,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
         """Calculate the desired score for the list entry."""
         ...
@@ -945,6 +956,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
         """Calculate the desired progress for the list entry."""
         ...
@@ -957,6 +969,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
         """Calculate the desired repeat count for the list entry."""
         ...
@@ -969,6 +982,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> datetime | None:
         """Calculate the desired start date for the list entry."""
         ...
@@ -981,6 +995,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> datetime | None:
         """Calculate the desired completion date for the list entry."""
         ...
@@ -993,6 +1008,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> str | None:
         """Calculate the desired review/notes for the list entry."""
         ...

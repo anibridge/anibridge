@@ -164,6 +164,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
                     list_media_key=group.media_key,
                     entry=group.entry,
                     mapping_descriptors=tuple(group.mapping_descriptors),
+                    source_mappings=tuple(group.source_mappings),
                 ),
             )
 
@@ -368,6 +369,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> ListStatus | None:
         watched_count = len(
             [episode for episode in grandchild_items if episode.view_count]
@@ -423,6 +425,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
         scores = [
             episode.user_rating for episode in grandchild_items if episode.user_rating
@@ -442,6 +445,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
         watched = len([episode for episode in grandchild_items if episode.view_count])
         total_units = entry.media().total_units or len(grandchild_items)
@@ -456,6 +460,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
         view_counts = [
             episode.view_count for episode in grandchild_items if episode.view_count
@@ -469,6 +474,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> datetime | None:
         history = await self._filter_history_by_episodes(item, grandchild_items)
         if not history:
@@ -482,6 +488,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> datetime | None:
         history = await self._filter_history_by_episodes(item, grandchild_items)
         if not history:
@@ -495,6 +502,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         child_item: LibrarySeason,
         grandchild_items: Sequence[LibraryEpisode],
         entry: ListEntry,
+        source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> str | None:
         if entry.media().total_units == 1 and len(grandchild_items) == 1:
             review = await grandchild_items[0].review

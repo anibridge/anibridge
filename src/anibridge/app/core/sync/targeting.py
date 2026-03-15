@@ -55,6 +55,7 @@ class SyncTarget:
     list_media_key: str
     entry: ListEntry
     mapping_descriptors: tuple[MappingDescriptor, ...] = ()
+    source_mappings: tuple[SourceRangeMapping, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

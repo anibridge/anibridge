@@ -441,6 +441,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
             return item.user_rating
         return None
 
+    @lru_cache(maxsize=1)  # De-duplicate call from status
     async def _calculate_progress(
         self,
         *,

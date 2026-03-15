@@ -32,6 +32,7 @@ class _SeasonGroup:
     entry: ListEntry
     media_key: str
     mapping_descriptors: list[MappingDescriptor]
+    source_mappings: list[SourceRangeMapping]
 
 
 class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode]):
@@ -144,6 +145,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
                         entry=entry,
                         media_key=media_key,
                         mapping_descriptors=list(target.mapping_descriptors),
+                        source_mappings=list(target.source_mappings),
                     )
                     continue
 
@@ -154,6 +156,9 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
                 for descriptor in target.mapping_descriptors:
                     if descriptor not in group.mapping_descriptors:
                         group.mapping_descriptors.append(descriptor)
+                for source_mapping in target.source_mappings:
+                    if source_mapping not in group.source_mappings:
+                        group.source_mappings.append(source_mapping)
 
         for group in sorted(groups.values(), key=lambda g: g.first_index):
             eps = sorted(group.episodes, key=lambda ep: (ep.season_index, ep.index))
@@ -371,9 +376,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         entry: ListEntry,
         source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> ListStatus | None:
-        watched_count = len(
-            [episode for episode in grandchild_items if episode.view_count]
-        )
+        watched_count = self._calculate_watched_units(grandchild_items, source_mappings)
         min_view_count = min(
             (episode.view_count for episode in grandchild_items if episode.view_count),
             default=0,
@@ -447,7 +450,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
         entry: ListEntry,
         source_mappings: Sequence[SourceRangeMapping] | None = None,
     ) -> int | None:
-        watched = len([episode for episode in grandchild_items if episode.view_count])
+        watched = self._calculate_watched_units(grandchild_items, source_mappings)
         total_units = entry.media().total_units or len(grandchild_items)
         if total_units:
             return min(watched, total_units)
@@ -509,6 +512,53 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
             if review:
                 return review
         return await child_item.review or await item.review
+
+    def _calculate_watched_units(
+        self,
+        episodes: Sequence[LibraryEpisode],
+        source_mappings: Sequence[SourceRangeMapping] | None,
+    ) -> int:
+        """Calculate the number of watched units, taking mapping ratios into account."""
+        watched_count = sum(1 for episode in episodes if episode.view_count)
+        if watched_count == 0:
+            return 0
+        if not source_mappings:
+            return watched_count
+
+        ranges = [
+            source_range
+            for mapping in source_mappings
+            for source_range in mapping.ranges
+        ]
+        if not ranges:
+            return watched_count
+        if all(
+            source_range.ratio is None or source_range.ratio == 1
+            for source_range in ranges
+        ):
+            # Basic case where there's no ratio weight
+            return watched_count
+
+        watched_units = 0.0
+        ratio_by_index: dict[int, int | None] = {}  # Cache
+        for episode in episodes:
+            if not episode.view_count:
+                continue
+            ratio = ratio_by_index.get(episode.index)
+            if episode.index not in ratio_by_index:
+                ratio = None
+                for source_range in ranges:
+                    if source_range.contains(episode.index):
+                        ratio = source_range.ratio
+                        break
+                ratio_by_index[episode.index] = ratio
+            if ratio is None or ratio == 1:
+                watched_units += 1
+            elif ratio > 0:
+                watched_units += ratio
+            else:
+                watched_units += 1 / abs(ratio)
+        return int(watched_units)
 
     def _debug_log_title(
         self,

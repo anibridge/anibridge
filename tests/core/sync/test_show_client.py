@@ -1079,6 +1079,76 @@ async def test_calculate_progress_and_repeats(
 
 
 @pytest.mark.asyncio
+async def test_calculate_progress_applies_positive_ratio(
+    show_client: ShowSyncClient,
+) -> None:
+    """Positive source ratios should scale watched progress upward."""
+    show, season, episodes = build_show(view_counts=[1, 1])
+    entry = FakeListEntry(
+        provider=FakeListProvider(),
+        key="entry",
+        title="Show",
+        media_type=ListMediaType.TV,
+        total_units=4,
+    )
+    source_mappings = (
+        SourceRangeMapping(
+            descriptor=("anilist", "1", None),
+            ranges=(SourceRange(start=1, end=2, ratio=2),),
+        ),
+    )
+
+    progress = await show_client._calculate_progress(
+        item=cast(LibraryShowProtocol, show),
+        child_item=cast(LibrarySeasonProtocol, season),
+        grandchild_items=cast(Sequence[LibraryEpisodeProtocol], tuple(episodes)),
+        entry=cast(ListEntryProtocol, entry),
+        source_mappings=source_mappings,
+    )
+    status = await show_client._calculate_status(
+        item=cast(LibraryShowProtocol, show),
+        child_item=cast(LibrarySeasonProtocol, season),
+        grandchild_items=cast(Sequence[LibraryEpisodeProtocol], tuple(episodes)),
+        entry=cast(ListEntryProtocol, entry),
+        source_mappings=source_mappings,
+    )
+
+    assert progress == 4
+    assert status == ListStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_calculate_progress_applies_negative_ratio(
+    show_client: ShowSyncClient,
+) -> None:
+    """Negative source ratios should scale watched progress downward."""
+    show, season, episodes = build_show(view_counts=[1, 1, 1])
+    entry = FakeListEntry(
+        provider=FakeListProvider(),
+        key="entry",
+        title="Show",
+        media_type=ListMediaType.TV,
+        total_units=3,
+    )
+    source_mappings = (
+        SourceRangeMapping(
+            descriptor=("anilist", "1", None),
+            ranges=(SourceRange(start=1, end=3, ratio=-2),),
+        ),
+    )
+
+    progress = await show_client._calculate_progress(
+        item=cast(LibraryShowProtocol, show),
+        child_item=cast(LibrarySeasonProtocol, season),
+        grandchild_items=cast(Sequence[LibraryEpisodeProtocol], tuple(episodes)),
+        entry=cast(ListEntryProtocol, entry),
+        source_mappings=source_mappings,
+    )
+
+    assert progress == 1
+
+
+@pytest.mark.asyncio
 async def test_calculate_started_finished_at(show_client: ShowSyncClient) -> None:
     """Start and finish timestamps should use min/max history values."""
     history = [

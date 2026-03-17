@@ -24,11 +24,13 @@ from anibridge.app.config.sync_rules import (
     SyncRuleTemplateId,
 )
 from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
+from anibridge.app.utils.cron import CronStr
 from anibridge.app.utils.logging import _get_logger
 
 __all__ = [
     "AnibridgeConfig",
     "AnibridgeProfileConfig",
+    "CronStr",
     "LogLevel",
     "ScanMode",
     "SyncField",
@@ -162,11 +164,13 @@ class AnibridgeProfileConfig(BaseModel):
         default_factory=lambda: [ScanMode.PERIODIC, ScanMode.POLL, ScanMode.WEBHOOK],
         description="List of enabled scan modes (periodic, poll, webhook)",
     )
-    scan_interval: int = Field(
-        default=86400, ge=0, description="Scan interval in seconds"
+    scan_interval: int | CronStr = Field(
+        default=86400,
+        description="Scan interval in seconds or as a cron expression",
     )
-    poll_interval: int = Field(
-        default=60, ge=0, description="Poll scan interval in seconds"
+    poll_interval: int | CronStr = Field(
+        default=60,
+        description="Poll scan interval in seconds or as a cron expression",
     )
     full_scan: bool = Field(
         default=False, description="Perform full library scans, even on unwatched items"

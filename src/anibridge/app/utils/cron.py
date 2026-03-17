@@ -22,7 +22,7 @@ def _validate_cron(value: str) -> str:
     return value
 
 
-type CronStr = Annotated[str, AfterValidator(_validate_cron)]
+CronStr = Annotated[str, AfterValidator(_validate_cron)]
 
 
 def get_next_run_datetime(interval: int | str, now: datetime | None = None) -> datetime:

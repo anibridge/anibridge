@@ -30,7 +30,6 @@ from anibridge.app.utils.logging import _get_logger
 __all__ = [
     "AnibridgeConfig",
     "AnibridgeProfileConfig",
-    "CronStr",
     "LogLevel",
     "ScanMode",
     "SyncField",

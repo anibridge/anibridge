@@ -11,7 +11,11 @@ from anibridge.app import log
 from anibridge.app.config.settings import ScanMode
 from anibridge.app.core.bridge import BridgeClient
 from anibridge.app.exceptions import SchedulerUnavailableError
-from anibridge.app.utils.cron import CronStr, get_next_interval_seconds
+from anibridge.app.utils.cron import (
+    CronStr,
+    get_next_interval_seconds,
+    get_next_run_datetime,
+)
 
 
 @dataclass(slots=True)
@@ -309,15 +313,43 @@ class ProfileScheduler:
     ) -> None:
         """Run a periodic loop to trigger syncs at the given interval.
 
-        For integer intervals, calculates wait time as the interval in seconds.
-        For cron expressions, calculates the next trigger time dynamically.
+        For integer intervals, syncs immediately on start, then waits.
+        For cron expressions, waits for the first scheduled time before syncing.
         """
+        is_cron = isinstance(interval, str)
+        first = True
         while self._running and not self.stop_event.is_set():
             try:
-                await self.sync(poll=poll, source=f"loop:{name}")
-                wait_time = get_next_interval_seconds(interval, datetime.now())
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self.stop_event.wait(), wait_time)
+                now = datetime.now()
+                wait_time = get_next_interval_seconds(interval, now)
+                if is_cron:
+                    log.info(
+                        "[%s] Next %s sync scheduled for %s (in %s seconds)",
+                        self.profile_name,
+                        name,
+                        get_next_run_datetime(interval),
+                        wait_time,
+                    )
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(self.stop_event.wait(), wait_time)
+                    if not self._running or self.stop_event.is_set():
+                        break
+                    await self.sync(poll=poll, source=f"loop:{name}")
+                else:
+                    if not first:
+                        with contextlib.suppress(asyncio.TimeoutError):
+                            await asyncio.wait_for(self.stop_event.wait(), wait_time)
+                        if not self._running or self.stop_event.is_set():
+                            break
+                    await self.sync(poll=poll, source=f"loop:{name}")
+                    log.info(
+                        "[%s] Next %s sync scheduled for %s (in %s seconds)",
+                        self.profile_name,
+                        name,
+                        get_next_run_datetime(interval),
+                        wait_time,
+                    )
+                first = False
             except asyncio.CancelledError:
                 break
             except Exception:

@@ -1,6 +1,6 @@
 """Utilities for handling cron expressions and intervals."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from croniter import croniter
@@ -10,6 +10,7 @@ __all__ = [
     "CronStr",
     "format_interval",
     "get_next_interval_seconds",
+    "get_next_run_datetime",
     "is_enabled_interval",
 ]
 
@@ -22,6 +23,28 @@ def _validate_cron(value: str) -> str:
 
 
 type CronStr = Annotated[str, AfterValidator(_validate_cron)]
+
+
+def get_next_run_datetime(interval: int | str, now: datetime | None = None) -> datetime:
+    """Get the datetime of the next interval trigger.
+
+    Args:
+        interval: Either an integer (seconds) or a cron expression string.
+        now: Optional datetime to compute from (defaults to now).
+
+    Returns:
+        datetime: The datetime of the next trigger.
+    """
+    base = now or datetime.now()
+    if isinstance(interval, int):
+        if interval <= 0:
+            raise ValueError("Integer interval must be greater than 0")
+        return base + timedelta(seconds=interval)
+    if isinstance(interval, str):
+        if not croniter.is_valid(interval):
+            raise ValueError(f"Invalid cron expression: {interval}")
+        return croniter(interval, base).get_next(datetime)
+    raise ValueError(f"Invalid interval type: {type(interval)}")
 
 
 def get_next_interval_seconds(interval: int | str, now: datetime | None = None) -> int:
@@ -37,18 +60,12 @@ def get_next_interval_seconds(interval: int | str, now: datetime | None = None) 
     Raises:
         ValueError: If interval is invalid.
     """
-    if isinstance(interval, int):
-        if interval <= 0:
-            raise ValueError("Integer interval must be greater than 0")
-        return interval
-    if isinstance(interval, str):
-        if not croniter.is_valid(interval):
-            raise ValueError(f"Invalid cron expression: {interval}")
-        cron = croniter(interval, now or datetime.now())
-        next_run = cron.get_next(datetime)
-        delta = next_run - (now or datetime.now())
-        return max(1, int(delta.total_seconds()))
-    raise ValueError(f"Invalid interval type: {type(interval)}")
+    next_run = get_next_run_datetime(interval, now)
+    now = now or datetime.now()
+    wait_time = (next_run - now).total_seconds()
+    if wait_time < 0:
+        raise ValueError("Next run time is in the past")
+    return int(wait_time)
 
 
 def format_interval(interval: int | str) -> str:

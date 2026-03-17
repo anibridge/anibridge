@@ -60,12 +60,9 @@ def get_next_interval_seconds(interval: int | str, now: datetime | None = None) 
     Raises:
         ValueError: If interval is invalid.
     """
-    next_run = get_next_run_datetime(interval, now)
-    now = now or datetime.now()
-    wait_time = (next_run - now).total_seconds()
-    if wait_time < 0:
-        raise ValueError("Next run time is in the past")
-    return int(wait_time)
+    base = now or datetime.now()
+    next_run = get_next_run_datetime(interval, base)
+    return int((next_run - base).total_seconds())
 
 
 def format_interval(interval: int | str) -> str:

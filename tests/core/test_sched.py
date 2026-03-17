@@ -229,7 +229,7 @@ async def test_profile_scheduler_run_loop_stops_on_event(
     monkeypatch.setattr(scheduler, "sync", _sync)
 
     scheduler._running = True
-    await scheduler._run_loop(name="periodic", interval=0, poll=False)
+    await scheduler._run_loop(name="periodic", interval=1, poll=False)
 
     assert scheduler.stop_event.is_set()
 
@@ -258,7 +258,7 @@ async def test_profile_scheduler_run_loop_handles_exception(
     monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
 
     scheduler._running = True
-    await scheduler._run_loop(name="poll", interval=0, poll=True)
+    await scheduler._run_loop(name="poll", interval=1, poll=True)
 
     assert scheduler.stop_event.is_set()
 

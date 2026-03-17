@@ -1,6 +1,6 @@
 """Utilities for handling cron expressions and intervals."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from croniter import croniter
@@ -35,7 +35,7 @@ def get_next_run_datetime(interval: int | str, now: datetime | None = None) -> d
     Returns:
         datetime: The datetime of the next trigger.
     """
-    base = now or datetime.now()
+    base = now or datetime.now(tz=UTC)
     if isinstance(interval, int):
         if interval <= 0:
             raise ValueError("Integer interval must be greater than 0")

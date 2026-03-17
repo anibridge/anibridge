@@ -16,6 +16,7 @@ from anibridge.app.core.sched.coord import GlobalSyncCoordinator
 from anibridge.app.core.sched.profile import ProfileScheduler
 from anibridge.app.exceptions import ProfileNotFoundError
 from anibridge.app.utils.cron import format_interval, is_enabled_interval
+from anibridge.app.utils.human import human_duration
 
 __all__ = ["SchedulerClient"]
 
@@ -453,12 +454,12 @@ class SchedulerClient:
                 now = datetime.now(UTC)
                 next_sync_time = self._get_next_1am_utc(now)
 
-                sleep_duration = (next_sync_time - now).total_seconds()
+                sleep_duration = int((next_sync_time - now).total_seconds())
 
                 log.info(
-                    "Next database sync scheduled for: %s (in %.1f hours)",
+                    "Next database sync scheduled for: %s (in %s)",
                     next_sync_time.astimezone(),
-                    sleep_duration / 3600,
+                    human_duration(sleep_duration),
                 )
 
                 try:

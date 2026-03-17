@@ -15,6 +15,7 @@ from anibridge.app.core.bridge import BridgeClient
 from anibridge.app.core.sched.coord import GlobalSyncCoordinator
 from anibridge.app.core.sched.profile import ProfileScheduler
 from anibridge.app.exceptions import ProfileNotFoundError
+from anibridge.app.utils.cron import format_interval, is_enabled_interval
 
 __all__ = ["SchedulerClient"]
 
@@ -125,11 +126,11 @@ class SchedulerClient:
             profile_config = self.global_config.get_profile(profile_name)
 
             log.info(
-                "[%s] Starting scheduler: poll_interval=%ss, scan_interval=%ss, "
+                "[%s] Starting scheduler: poll_interval=%s, scan_interval=%s, "
                 "modes=%s, full_scan=%s, destructive=%s",
                 profile_name,
-                profile_config.poll_interval,
-                profile_config.scan_interval,
+                format_interval(profile_config.poll_interval),
+                format_interval(profile_config.scan_interval),
                 profile_config.scan_modes,
                 "enabled" if profile_config.full_scan else "disabled",
                 "enabled" if profile_config.destructive_sync else "disabled",
@@ -153,7 +154,7 @@ class SchedulerClient:
                 next_sync_time = "in progress"
                 if (
                     ScanMode.PERIODIC in profile_config.scan_modes
-                    and profile_config.scan_interval > 0
+                    and is_enabled_interval(profile_config.scan_interval)
                 ):
                     next_sync = datetime.now(UTC).astimezone()
                     next_sync_time = "at {}".format(

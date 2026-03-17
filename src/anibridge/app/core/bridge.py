@@ -25,6 +25,7 @@ from anibridge.app.core.sync.stats import SyncProgress, SyncStats
 from anibridge.app.exceptions import MediaTypeError
 from anibridge.app.models.db.housekeeping import Housekeeping
 from anibridge.app.models.db.sync_history import SyncOutcome
+from anibridge.app.utils.cron import get_next_interval_seconds
 from anibridge.app.utils.terminal import ARROW
 
 __all__ = ["BridgeClient"]
@@ -423,7 +424,9 @@ class BridgeClient:
             (
                 self.last_synced
                 or datetime.now(UTC)
-                - timedelta(seconds=self.profile_config.poll_interval)
+                - timedelta(
+                    seconds=get_next_interval_seconds(self.profile_config.poll_interval)
+                )
             )
             - timedelta(seconds=15)  # small buffer
             if poll

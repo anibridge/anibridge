@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from anibridge.app import __git_hash__, __version__
 from anibridge.app.exceptions import AnibridgeError, SchedulerUnavailableError
+from anibridge.app.utils.human import human_duration
 from anibridge.app.web.routes.api.config import require_config_api_access
 from anibridge.app.web.routes.api.status import (
     ProfileConfigModel,
@@ -161,18 +162,7 @@ async def api_about() -> AboutResponse:
     if started_at:
         delta = now - started_at
         uptime_seconds = int(delta.total_seconds())
-        days, rem = divmod(uptime_seconds, 86400)
-        hours, rem = divmod(rem, 3600)
-        minutes, seconds = divmod(rem, 60)
-        parts: list[str] = []
-        if days:
-            parts.append(f"{days}d")
-        if hours:
-            parts.append(f"{hours}h")
-        if minutes:
-            parts.append(f"{minutes}m")
-        parts.append(f"{seconds}s")
-        human_uptime = " ".join(parts)
+        human_uptime = human_duration(uptime_seconds)
 
     info = AboutInfoModel(
         version=__version__,

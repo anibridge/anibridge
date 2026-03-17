@@ -16,6 +16,7 @@ from anibridge.app.utils.cron import (
     get_next_interval_seconds,
     get_next_run_datetime,
 )
+from anibridge.app.utils.human import human_duration
 
 
 @dataclass(slots=True)
@@ -324,11 +325,11 @@ class ProfileScheduler:
                 wait_time = get_next_interval_seconds(interval, now)
                 if is_cron:
                     log.info(
-                        "[%s] Next %s sync scheduled for %s (in %s seconds)",
+                        "[%s] Next %s sync scheduled for %s (in %s)",
                         self.profile_name,
                         name,
                         get_next_run_datetime(interval),
-                        wait_time,
+                        human_duration(wait_time),
                     )
                     with contextlib.suppress(asyncio.TimeoutError):
                         await asyncio.wait_for(self.stop_event.wait(), wait_time)
@@ -343,11 +344,11 @@ class ProfileScheduler:
                             break
                     await self.sync(poll=poll, source=f"loop:{name}")
                     log.info(
-                        "[%s] Next %s sync scheduled for %s (in %s seconds)",
+                        "[%s] Next %s sync scheduled for %s (in %s)",
                         self.profile_name,
                         name,
                         get_next_run_datetime(interval),
-                        wait_time,
+                        human_duration(wait_time),
                     )
                 first = False
             except asyncio.CancelledError:

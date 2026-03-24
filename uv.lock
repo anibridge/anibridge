@@ -149,7 +149,7 @@ requires-dist = [
     { name = "anibridge-list-base", specifier = ">=0.2.0b7" },
     { name = "anibridge-mal-provider", specifier = ">=0.2.0b7,<0.3.0" },
     { name = "anibridge-plex-provider", specifier = ">=0.2.0b7,<0.3.0" },
-    { name = "anibridge-utils", specifier = ">=0.2.0b2" },
+    { name = "anibridge-utils", git = "https://github.com/anibridge/anibridge-utils.git" },
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "croniter", specifier = ">=6.2.2" },
@@ -275,15 +275,11 @@ wheels = [
 [[package]]
 name = "anibridge-utils"
 version = "0.2.0b2"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/anibridge/anibridge-utils.git#e91355c51623fd52324dccc5cae55ff677fba053" }
 dependencies = [
     { name = "cachetools" },
     { name = "diskcache" },
     { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/78/80/c025c05e833e728ffc6df0dc6448cf0813bfb8517be0147cc0c0a0ed1fa7/anibridge_utils-0.2.0b2.tar.gz", hash = "sha256:93590ab0cc8774804e6ca7045f241f6d25e653afaed8bb127f6737b5533751d9", size = 9140, upload-time = "2026-03-13T00:25:47.075Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/c8/0f3167ba30311c9e2f511489c101ef05eb83ffe327f124015a7b73bd8d84/anibridge_utils-0.2.0b2-py3-none-any.whl", hash = "sha256:e9bf9a0070a68e7e2caa360c194453d7cfc431debf1940a5b78622d18cbe1ab3", size = 11634, upload-time = "2026-03-13T00:25:46.348Z" },
 ]
 
 [[package]]

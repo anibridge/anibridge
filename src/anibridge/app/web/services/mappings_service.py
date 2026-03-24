@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from anibridge.utils.cache import cache
+from anibridge.utils.mappings import descriptor_key, parse_mapping_descriptor
 from sqlalchemy.sql import func, or_, select
 
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import get_config
-from anibridge.app.core.animap import descriptor_key, parse_mapping_descriptor
 from anibridge.app.exceptions import (
     AniListFilterError,
     AniListSearchError,

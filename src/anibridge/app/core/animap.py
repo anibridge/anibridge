@@ -1,6 +1,5 @@
 """Animap client for v3 provider-range mappings."""
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import md5
@@ -8,6 +7,12 @@ from itertools import batched
 from pathlib import Path
 
 import orjson
+from anibridge.utils.mappings import (
+    descriptor_key,
+    is_valid_source_range,
+    is_valid_target_range,
+    parse_mapping_descriptor,
+)
 from anibridge.utils.types import MappingDescriptor
 from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert
@@ -19,36 +24,11 @@ from anibridge.app.config.database import db
 from anibridge.app.core.mappings import MappingsClient
 from anibridge.app.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
 from anibridge.app.models.db.housekeeping import Housekeeping
-from anibridge.app.utils.mapping_ranges import (
-    is_valid_source_range,
-    is_valid_target_range,
-)
 
 __all__ = [
     "AnimapClient",
     "AnimapEdge",
-    "descriptor_key",
-    "parse_mapping_descriptor",
 ]
-
-
-_DESCRIPTOR_PATTERN = re.compile(
-    r"^(?P<provider>\w+):(?P<entry>\w+)(?::(?P<scope>\w+))?$"
-)
-
-
-def descriptor_key(descriptor: MappingDescriptor) -> str:
-    """Return a stable string key for a descriptor tuple."""
-    provider, entry_id, scope = descriptor
-    return f"{provider}:{entry_id}:{scope}" if scope else f"{provider}:{entry_id}"
-
-
-def parse_mapping_descriptor(raw: str) -> MappingDescriptor:
-    """Parse a descriptor string into its tuple representation."""
-    match = _DESCRIPTOR_PATTERN.match(raw)
-    if not match:
-        raise ValueError("Invalid mapping descriptor")
-    return (match.group("provider"), match.group("entry"), match.group("scope") or None)
 
 
 @dataclass(frozen=True, slots=True)

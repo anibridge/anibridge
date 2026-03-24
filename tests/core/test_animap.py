@@ -145,25 +145,6 @@ def _fetch_edges(ctx) -> list[AnimapEdge]:
     return edges
 
 
-def test_descriptor_key_and_parse_mapping_descriptor_roundtrip() -> None:
-    """Descriptor helpers should round-trip provider entries and scopes."""
-    descriptor = ("anilist", "1", None)
-    scoped = ("tmdb", "2", "s1")
-
-    from anibridge.app.core.animap import descriptor_key, parse_mapping_descriptor
-
-    assert parse_mapping_descriptor(descriptor_key(descriptor)) == descriptor
-    assert parse_mapping_descriptor(descriptor_key(scoped)) == scoped
-
-
-def test_parse_mapping_descriptor_rejects_invalid() -> None:
-    """Invalid mapping descriptors should raise a ValueError."""
-    from anibridge.app.core.animap import parse_mapping_descriptor
-
-    with pytest.raises(ValueError):
-        parse_mapping_descriptor("bad-descriptor!")
-
-
 def test_resolve_edges_and_grouping(
     animap_client: AnimapClient, tmp_path: Path, in_memory_db: AnibridgeDb
 ) -> None:
@@ -374,10 +355,7 @@ def test_sync_db_skips_invalid_range_strings(
         edges = _fetch_edges(ctx)
 
     edge_ranges = {(edge.source_range, edge.destination_range) for edge in edges}
-    assert edge_ranges == {
-        ("1-6|2", "1-3|2,4-6|2"),
-        ("2", "1,2"),
-    }
+    assert edge_ranges == {("2", "1,2")}
 
 
 def test_sync_db_logs_distinct_mapping_changes(

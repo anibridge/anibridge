@@ -8,19 +8,21 @@ from typing import Any, ClassVar
 import orjson
 import yaml
 from anibridge.utils.cache import cache
+from anibridge.utils.mappings import (
+    AnibridgeMapping,
+    descriptor_key,
+    is_valid_source_range,
+    is_valid_target_range,
+    parse_mapping_descriptor,
+)
 
 from anibridge.app import config
 from anibridge.app.config.settings import get_config
-from anibridge.app.core.animap import descriptor_key, parse_mapping_descriptor
 from anibridge.app.core.mappings import MappingsClient
 from anibridge.app.exceptions import (
     MappingError,
     MissingDescriptorError,
     SchedulerNotInitializedError,
-)
-from anibridge.app.utils.mapping_ranges import (
-    is_valid_source_range,
-    is_valid_target_range,
 )
 from anibridge.app.web.state import get_app_state
 
@@ -311,14 +313,16 @@ class MappingOverridesService:
             if dest is not None and not isinstance(dest, str):
                 raise MappingError("destination_range must be a string or null")
             if not is_valid_source_range(source_range):
-                raise MappingError(
-                    "source_range must match the mapping schema (no commas)"
-                )
+                raise MappingError("source_range must match the mapping schema")
             if dest is not None and not is_valid_target_range(dest):
-                raise MappingError(
-                    "destination_range must match the mapping schema "
-                    "(comma-separated target ranges only)"
-                )
+                raise MappingError("destination_range must match the mapping schema ")
+            if dest is not None:
+                try:
+                    AnibridgeMapping.parse(
+                        source_range=source_range, target_ranges=dest
+                    )
+                except ValueError as exc:
+                    raise MappingError(str(exc)) from exc
             normalized[source_range] = dest
 
         return normalized

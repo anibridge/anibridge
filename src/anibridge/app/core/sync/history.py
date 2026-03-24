@@ -6,11 +6,11 @@ from typing import Any
 
 from anibridge.library import LibraryEntry
 from anibridge.list import ListStatus
+from anibridge.utils.mappings import descriptor_key
 from anibridge.utils.types import MappingDescriptor
 from sqlalchemy import tuple_
 
 from anibridge.app import log
-from anibridge.app.core.animap import descriptor_key
 from anibridge.app.core.sync.stats import EntrySnapshot
 from anibridge.app.models.db.animap import AnimapEntry
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome

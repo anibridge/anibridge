@@ -157,14 +157,14 @@ async def test_save_override_allows_ratio_ranges(
                 "entry_id": "901",
                 "ranges": [
                     {
-                        "source_range": "1-6|2",
-                        "destination_range": "1-3|2,4-6|2",
+                        "source_range": "1-6",
+                        "destination_range": "1-3|2",
                     }
                 ],
             }
         ],
     )
 
-    assert result["layers"]["effective"]["tmdb:901"]["1-6|2"] == "1-3|2,4-6|2"
+    assert result["layers"]["effective"]["tmdb:901"]["1-6"] == "1-3|2"
     data = orjson.loads((tmp_path / "mappings.json").read_bytes())
-    assert data["anilist:501"]["tmdb:901"]["1-6|2"] == "1-3|2,4-6|2"
+    assert data["anilist:501"]["tmdb:901"]["1-6"] == "1-3|2"

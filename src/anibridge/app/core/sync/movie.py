@@ -6,12 +6,11 @@ from datetime import datetime
 from anibridge.library import LibraryMovie
 from anibridge.list import ListEntry, ListMediaType, ListStatus
 from anibridge.utils.cache import lru_cache
+from anibridge.utils.mappings import AnibridgeDescriptorMapping, descriptor_key
 
-from anibridge.app.core.animap import descriptor_key
 from anibridge.app.core.sync.base import BaseSyncClient
 from anibridge.app.core.sync.stats import ItemIdentifier
 from anibridge.app.core.sync.targeting import (
-    RangeMapping,
     SyncTarget,
     find_best_search_result,
     resolve_list_targets,
@@ -131,7 +130,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> ListStatus | None:
         has_views = item.view_count > 0
         history = await self._get_history(item)
@@ -158,7 +157,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> int | None:
         return item.user_rating
 
@@ -169,7 +168,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> int | None:
         total_units = entry.media().total_units or len(grandchild_items) or 1
         return total_units if item.view_count > 0 else None
@@ -181,7 +180,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> int | None:
         return item.view_count - 1 if item.view_count > 0 else None
 
@@ -192,7 +191,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> datetime | None:
         history = await self._get_history(item)
         if not history:
@@ -206,7 +205,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> datetime | None:
         history = await self._get_history(item)
         if not history:
@@ -220,7 +219,7 @@ class MovieSyncClient(BaseSyncClient[LibraryMovie, LibraryMovie, LibraryMovie]):
         child_item: LibraryMovie,
         grandchild_items: Sequence[LibraryMovie],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> str | None:
         return await item.review
 

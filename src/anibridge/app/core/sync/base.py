@@ -10,12 +10,13 @@ from typing import Any
 
 from anibridge.library import LibraryEntry, LibraryProvider
 from anibridge.list import ListEntry, ListProvider, ListStatus
+from anibridge.utils.mappings import AnibridgeDescriptorMapping, descriptor_key
 from anibridge.utils.types import Comparable, MappingDescriptor
 
 from anibridge.app import log
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import SyncField, SyncRulesConfig
-from anibridge.app.core.animap import AnimapClient, descriptor_key
+from anibridge.app.core.animap import AnimapClient
 from anibridge.app.core.sync.cache import SyncCacheManager
 from anibridge.app.core.sync.history import SyncHistoryManager
 from anibridge.app.core.sync.rules import SyncRuleEngine
@@ -25,11 +26,7 @@ from anibridge.app.core.sync.stats import (
     ItemIdentifier,
     SyncStats,
 )
-from anibridge.app.core.sync.targeting import (
-    RangeMapping,
-    SyncTarget,
-    diff_snapshots,
-)
+from anibridge.app.core.sync.targeting import SyncTarget, diff_snapshots
 from anibridge.app.models.db.sync_history import SyncOutcome
 from anibridge.app.utils.terminal import ARROW
 
@@ -329,7 +326,7 @@ class BaseSyncClient[
         entry: ListEntry,
         list_media_key: str | None,
         mapping_descriptors: Sequence[MappingDescriptor] | None = None,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> SyncOutcome:
         """Synchronize a mapped media item with the list provider.
 
@@ -342,7 +339,8 @@ class BaseSyncClient[
             list_media_key (str | None): Resolved list media key for the target entry.
             mapping_descriptors (Sequence[MappingDescriptor] | None): Mapping
                 descriptors used to find the target.
-            mappings (Sequence[RangeMapping] | None): Source mapping ranges used to
+            mappings (Sequence[AnibridgeDescriptorMapping] | None): Source mapping
+                metadata used to
                 resolve the target.
 
         Returns:
@@ -989,7 +987,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> ListStatus | None:
         """Calculate the desired status for the list entry."""
         ...
@@ -1002,7 +1000,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> int | None:
         """Calculate the desired score for the list entry."""
         ...
@@ -1015,7 +1013,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> int | None:
         """Calculate the desired progress for the list entry."""
         ...
@@ -1028,7 +1026,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> int | None:
         """Calculate the desired repeat count for the list entry."""
         ...
@@ -1041,7 +1039,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> datetime | None:
         """Calculate the desired start date for the list entry."""
         ...
@@ -1054,7 +1052,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> datetime | None:
         """Calculate the desired completion date for the list entry."""
         ...
@@ -1067,7 +1065,7 @@ class BaseSyncClient[
         child_item: ChildMediaT,
         grandchild_items: Sequence[GrandchildMediaT],
         entry: ListEntry,
-        mappings: Sequence[RangeMapping] | None = None,
+        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
     ) -> str | None:
         """Calculate the desired review/notes for the list entry."""
         ...

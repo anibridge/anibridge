@@ -1,7 +1,9 @@
 """Unit tests for `anibridge.app.core.sync.show`."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -10,12 +12,12 @@ from anibridge.library import LibrarySeason as LibrarySeasonProtocol
 from anibridge.library import LibraryShow as LibraryShowProtocol
 from anibridge.list import ListEntry as ListEntryProtocol
 from anibridge.list import ListMediaType, ListStatus
+from anibridge.utils.mappings import AnibridgeDescriptorMapping
 
 import anibridge.app.core.sync.show as show_module
 from anibridge.app.core.sync.show import ShowSyncClient
-from anibridge.app.core.sync.targeting import RangeMapping, ResolvedListTarget
+from anibridge.app.core.sync.targeting import ResolvedListTarget
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
-from anibridge.app.utils.mapping_ranges import MappingRange
 from tests.core.sync.fakes import (
     FakeAnimapClient,
     FakeLibraryEpisode,
@@ -29,6 +31,100 @@ from tests.core.sync.fakes import (
 
 if TYPE_CHECKING:
     from anibridge.app.config.database import AnibridgeDb
+
+
+@dataclass(slots=True, frozen=True)
+class MappingSpec:
+    """Test helper that represents one source/target range segment."""
+
+    start: int
+    end: int | None
+    ratio: int | None = None
+
+
+def _format_mapping_segment(segment: MappingSpec) -> str:
+    if segment.end is None:
+        return f"{segment.start}-"
+    if segment.start == segment.end:
+        return str(segment.start)
+    return f"{segment.start}-{segment.end}"
+
+
+def make_descriptor_mapping(
+    *,
+    descriptor,
+    source_ranges: Sequence[MappingSpec],
+    target_ranges: Sequence[Sequence[MappingSpec]] | None = None,
+) -> AnibridgeDescriptorMapping:
+    """Build a descriptor mapping using schema strings."""
+    mapping = AnibridgeDescriptorMapping(
+        source=descriptor,
+        target=("_test", "_target", None),
+    )
+    targets = tuple(target_ranges or ())
+
+    for index, source_range in enumerate(source_ranges):
+        if source_range.ratio == 0:
+            source_text = _format_mapping_segment(source_range)
+            mapping.add_mapping(source_text, f"{source_text}|0")
+            continue
+
+        source_text = _format_mapping_segment(
+            MappingSpec(
+                start=source_range.start,
+                end=source_range.end,
+                ratio=None,
+            )
+        )
+        scoped_targets = targets[index] if index < len(targets) else ()
+
+        ratio = None
+        if source_range.ratio is not None:
+            ratio = source_range.ratio * -1
+        elif scoped_targets:
+            explicit = [
+                segment.ratio for segment in scoped_targets if segment.ratio is not None
+            ]
+            if (
+                explicit
+                and len(explicit) == len(scoped_targets)
+                and len(set(explicit)) == 1
+            ):
+                ratio = explicit[0]
+
+        target_text = (
+            ",".join(_format_mapping_segment(segment) for segment in scoped_targets)
+            if scoped_targets
+            else source_text
+        )
+
+        if (
+            ratio is not None
+            and not scoped_targets
+            and source_range.end is not None
+            and ratio != 0
+        ):
+            source_length = source_range.end - source_range.start + 1
+            if ratio > 0:
+                expected_target_length = Fraction(source_length, ratio)
+            else:
+                expected_target_length = Fraction(source_length * abs(ratio), 1)
+            if expected_target_length.denominator != 1:
+                raise AssertionError(
+                    "Test mapping has non-integral ratio alignment. "
+                    "Provide explicit target_ranges for this case."
+                )
+            aligned_end = source_range.start + expected_target_length.numerator - 1
+            target_text = _format_mapping_segment(
+                MappingSpec(start=source_range.start, end=aligned_end)
+            )
+
+        if ratio is not None:
+            target_text = f"{target_text}|{ratio}"
+
+        mapping.add_mapping(source_text, target_text)
+
+    return mapping
 
 
 @pytest.fixture
@@ -187,9 +283,9 @@ async def test_process_media_untracks_filtered_mapping_range_items(
                     "909",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=1, end=1, ratio=None),),
+                            source_ranges=(MappingSpec(start=1, end=1, ratio=None),),
                         ),
                     ),
                 )
@@ -228,9 +324,9 @@ async def test_process_media_skips_when_all_mapped_items_are_filtered(
                     "910",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=2, end=2, ratio=None),),
+                            source_ranges=(MappingSpec(start=2, end=2, ratio=None),),
                         ),
                     ),
                 )
@@ -331,9 +427,9 @@ async def test_search_media_returns_none_when_disabled(
 def test_filter_episodes_by_ranges(show_client: ShowSyncClient) -> None:
     """Episode filtering should honor source range mappings."""
     _show, _season, episodes = build_show(view_counts=[0, 0, 0])
-    mapping = RangeMapping(
+    mapping = make_descriptor_mapping(
         descriptor=("anilist", "1", None),
-        source_ranges=(MappingRange(start=2, end=2, ratio=None),),
+        source_ranges=(MappingSpec(start=2, end=2, ratio=None),),
     )
 
     filtered = show_client._filter_episodes_by_ranges(
@@ -349,9 +445,9 @@ def test_filter_episodes_by_ranges_returns_empty_when_no_range_matches(
 ) -> None:
     """Non-overlapping source ranges should not fall back to all episodes."""
     _show, _season, episodes = build_show(view_counts=[0] * 12)
-    mapping = RangeMapping(
+    mapping = make_descriptor_mapping(
         descriptor=("anilist", "2", None),
-        source_ranges=(MappingRange(start=13, end=24, ratio=None),),
+        source_ranges=(MappingSpec(start=13, end=24, ratio=None),),
     )
 
     filtered = show_client._filter_episodes_by_ranges(
@@ -367,9 +463,9 @@ def test_filter_episodes_by_ranges_treats_zero_source_ratio_as_empty(
 ) -> None:
     """Source ranges with ratio=0 should not include any episodes."""
     _show, _season, episodes = build_show(view_counts=[0, 0, 0])
-    mapping = RangeMapping(
+    mapping = make_descriptor_mapping(
         descriptor=("anilist", "3", None),
-        source_ranges=(MappingRange(start=1, end=3, ratio=0),),
+        source_ranges=(MappingSpec(start=1, end=3, ratio=0),),
     )
 
     filtered = show_client._filter_episodes_by_ranges(
@@ -385,11 +481,11 @@ def test_filter_episodes_by_ranges_ignores_zero_ratio_when_mixed(
 ) -> None:
     """Zero-ratio source ranges should be ignored when other ranges are present."""
     _show, _season, episodes = build_show(view_counts=[0, 0, 0])
-    mapping = RangeMapping(
+    mapping = make_descriptor_mapping(
         descriptor=("anilist", "4", None),
         source_ranges=(
-            MappingRange(start=1, end=1, ratio=0),
-            MappingRange(start=2, end=3, ratio=None),
+            MappingSpec(start=1, end=1, ratio=0),
+            MappingSpec(start=2, end=3, ratio=None),
         ),
     )
 
@@ -750,9 +846,9 @@ async def test_map_media_skips_inactive_mapping_ranges_before_lookup(
                     "904",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=2, end=2, ratio=None),),
+                            source_ranges=(MappingSpec(start=2, end=2, ratio=None),),
                         ),
                     ),
                 )
@@ -810,9 +906,9 @@ async def test_map_media_uses_search_fallback_for_active_mapping_range(
                     "906",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=1, end=1, ratio=None),),
+                            source_ranges=(MappingSpec(start=1, end=1, ratio=None),),
                         ),
                     ),
                 )
@@ -873,9 +969,9 @@ async def test_map_media_keeps_inactive_mapping_range_when_watchlisted(
                     "907",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=2, end=2, ratio=None),),
+                            source_ranges=(MappingSpec(start=2, end=2, ratio=None),),
                         ),
                     ),
                 )
@@ -945,11 +1041,11 @@ def test_filter_episodes_by_ranges_deduplicates(
 ) -> None:
     """Duplicate episode matches should only be included once."""
     _show, _season, episodes = build_show(view_counts=[0, 0])
-    mapping = RangeMapping(
+    mapping = make_descriptor_mapping(
         descriptor=("anilist", "1", None),
         source_ranges=(
-            MappingRange(start=1, end=2, ratio=None),
-            MappingRange(start=1, end=1, ratio=None),
+            MappingSpec(start=1, end=2, ratio=None),
+            MappingSpec(start=1, end=1, ratio=None),
         ),
     )
 
@@ -999,9 +1095,9 @@ async def test_collect_prefetch_keys_skips_inactive_mapping_ranges(
                     "905",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=2, end=2, ratio=None),),
+                            source_ranges=(MappingSpec(start=2, end=2, ratio=None),),
                         ),
                     ),
                 )
@@ -1034,9 +1130,9 @@ async def test_collect_prefetch_keys_keeps_inactive_mapping_ranges_in_full_scan(
                     "908",
                     (),
                     (
-                        RangeMapping(
+                        make_descriptor_mapping(
                             descriptor=("tmdb", "10", "s1"),
-                            source_ranges=(MappingRange(start=2, end=2, ratio=None),),
+                            source_ranges=(MappingSpec(start=2, end=2, ratio=None),),
                         ),
                     ),
                 )
@@ -1088,9 +1184,9 @@ async def test_calculate_status_finished_no_total_units_with_ratio_expansion(
         total_units=None,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "1", None),
-            source_ranges=(MappingRange(start=1, end=2, ratio=2),),
+            source_ranges=(MappingSpec(start=1, end=2, ratio=2),),
         ),
     )
 
@@ -1179,9 +1275,9 @@ async def test_calculate_progress_applies_positive_ratio(
         total_units=4,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "1", None),
-            source_ranges=(MappingRange(start=1, end=2, ratio=2),),
+            source_ranges=(MappingSpec(start=1, end=2, ratio=2),),
         ),
     )
 
@@ -1209,7 +1305,7 @@ async def test_calculate_progress_applies_negative_ratio(
     show_client: ShowSyncClient,
 ) -> None:
     """Negative source ratios should scale watched progress downward."""
-    show, season, episodes = build_show(view_counts=[1, 1, 1])
+    show, season, episodes = build_show(view_counts=[1, 1])
     entry = FakeListEntry(
         provider=FakeListProvider(),
         key="entry",
@@ -1218,9 +1314,9 @@ async def test_calculate_progress_applies_negative_ratio(
         total_units=3,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "1", None),
-            source_ranges=(MappingRange(start=1, end=3, ratio=-2),),
+            source_ranges=(MappingSpec(start=1, end=2, ratio=-2),),
         ),
     )
 
@@ -1249,10 +1345,10 @@ async def test_calculate_progress_applies_destination_ratio(
         total_units=4,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "1", None),
-            source_ranges=(MappingRange(start=1, end=2, ratio=None),),
-            target_ranges=((MappingRange(start=10, end=None, ratio=2),),),
+            source_ranges=(MappingSpec(start=1, end=2, ratio=None),),
+            target_ranges=((MappingSpec(start=10, end=None, ratio=2),),),
         ),
     )
 
@@ -1281,10 +1377,10 @@ async def test_calculate_progress_prefers_source_ratio_over_destination_ratio(
         total_units=4,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "1", None),
-            source_ranges=(MappingRange(start=1, end=2, ratio=-2),),
-            target_ranges=((MappingRange(start=1, end=2, ratio=2),),),
+            source_ranges=(MappingSpec(start=1, end=2, ratio=-2),),
+            target_ranges=((MappingSpec(start=1, end=1, ratio=2),),),
         ),
     )
 
@@ -1300,10 +1396,10 @@ async def test_calculate_progress_prefers_source_ratio_over_destination_ratio(
 
 
 @pytest.mark.asyncio
-async def test_calculate_progress_derives_weight_from_destination_lengths(
+async def test_calculate_progress_defaults_to_unit_weight_without_ratio(
     show_client: ShowSyncClient,
 ) -> None:
-    """Destination segment lengths should derive source weight when finite."""
+    """Destination segment lengths should not affect weight when ratio is absent."""
     show, season, episodes = build_show(view_counts=[1, 1])
     entry = FakeListEntry(
         provider=FakeListProvider(),
@@ -1313,13 +1409,13 @@ async def test_calculate_progress_derives_weight_from_destination_lengths(
         total_units=4,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "1", None),
-            source_ranges=(MappingRange(start=1, end=2, ratio=None),),
+            source_ranges=(MappingSpec(start=1, end=2, ratio=None),),
             target_ranges=(
                 (
-                    MappingRange(start=1, end=1, ratio=None),
-                    MappingRange(start=3, end=6, ratio=None),
+                    MappingSpec(start=1, end=1, ratio=None),
+                    MappingSpec(start=3, end=6, ratio=None),
                 ),
             ),
         ),
@@ -1333,7 +1429,7 @@ async def test_calculate_progress_derives_weight_from_destination_lengths(
         mappings=mappings,
     )
 
-    assert progress == 4
+    assert progress == 2
 
 
 @pytest.mark.asyncio
@@ -1350,13 +1446,13 @@ async def test_calculate_progress_applies_mixed_target_ratio_segments(
         total_units=100,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "17074", None),
-            source_ranges=(MappingRange(start=1, end=23, ratio=None),),
+            source_ranges=(MappingSpec(start=1, end=23, ratio=None),),
             target_ranges=(
                 (
-                    MappingRange(start=1, end=22, ratio=None),
-                    MappingRange(start=23, end=26, ratio=-4),
+                    MappingSpec(start=1, end=22, ratio=None),
+                    MappingSpec(start=23, end=26, ratio=-4),
                 ),
             ),
         ),
@@ -1370,7 +1466,7 @@ async def test_calculate_progress_applies_mixed_target_ratio_segments(
         mappings=mappings,
     )
 
-    assert progress == 26
+    assert progress == 23
 
 
 @pytest.mark.asyncio
@@ -1386,18 +1482,18 @@ async def test_calculate_progress_uses_piecewise_target_segments_for_steps(
         total_units=100,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "17074", None),
-            source_ranges=(MappingRange(start=1, end=23, ratio=None),),
+            source_ranges=(MappingSpec(start=1, end=23, ratio=None),),
             target_ranges=(
                 (
-                    MappingRange(start=1, end=4, ratio=None),
-                    MappingRange(start=5, end=6, ratio=-2),
-                    MappingRange(start=7, end=9, ratio=None),
-                    MappingRange(start=10, end=11, ratio=-2),
-                    MappingRange(start=12, end=14, ratio=None),
-                    MappingRange(start=15, end=16, ratio=-2),
-                    MappingRange(start=17, end=26, ratio=None),
+                    MappingSpec(start=1, end=4, ratio=None),
+                    MappingSpec(start=5, end=6, ratio=-2),
+                    MappingSpec(start=7, end=9, ratio=None),
+                    MappingSpec(start=10, end=11, ratio=-2),
+                    MappingSpec(start=12, end=14, ratio=None),
+                    MappingSpec(start=15, end=16, ratio=-2),
+                    MappingSpec(start=17, end=26, ratio=None),
                 ),
             ),
         ),
@@ -1405,12 +1501,12 @@ async def test_calculate_progress_uses_piecewise_target_segments_for_steps(
 
     checkpoints = {
         4: 4,
-        5: 6,
-        8: 9,
-        9: 11,
-        12: 14,
-        13: 16,
-        23: 26,
+        5: 5,
+        8: 8,
+        9: 9,
+        12: 12,
+        13: 13,
+        23: 23,
     }
 
     for watched_count, expected in checkpoints.items():
@@ -1440,10 +1536,10 @@ async def test_calculate_progress_applies_target_positive_ratio_compression(
         total_units=100,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "17074", None),
-            source_ranges=(MappingRange(start=1, end=22, ratio=None),),
-            target_ranges=((MappingRange(start=1, end=11, ratio=2),),),
+            source_ranges=(MappingSpec(start=1, end=22, ratio=None),),
+            target_ranges=((MappingSpec(start=1, end=11, ratio=2),),),
         ),
     )
 
@@ -1472,13 +1568,13 @@ async def test_calculate_progress_caps_after_ratio_expansion(
         total_units=23,
     )
     mappings = (
-        RangeMapping(
+        make_descriptor_mapping(
             descriptor=("anilist", "17074", None),
-            source_ranges=(MappingRange(start=1, end=23, ratio=None),),
+            source_ranges=(MappingSpec(start=1, end=23, ratio=None),),
             target_ranges=(
                 (
-                    MappingRange(start=1, end=22, ratio=None),
-                    MappingRange(start=23, end=26, ratio=-4),
+                    MappingSpec(start=1, end=22, ratio=None),
+                    MappingSpec(start=23, end=26, ratio=-4),
                 ),
             ),
         ),

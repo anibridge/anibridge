@@ -42,7 +42,7 @@ dependencies = [
     "anibridge-list-base>=0.2.0b7",
     "anibridge-mal-provider>=0.2.0b7,<0.3.0",
     "anibridge-plex-provider>=0.2.0b7,<0.3.0",
-    "anibridge-utils>=0.2.0b2",
+    "anibridge-utils>=0.2.0b3",
     "bcrypt>=5.0.0",
     "colorama>=0.4.6",
     "croniter>=6.2.2",
@@ -116,8 +116,7 @@ module-name = "anibridge"
 namespace = true
 
 [tool.uv.sources]
-anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git" }
-py-spy = { git = "https://github.com/czardoz/py-spy.git" }                     # Until upstream suports Python 3.14
+py-spy = { git = "https://github.com/czardoz/py-spy.git" } # Until upstream suports Python 3.14
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]

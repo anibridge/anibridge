@@ -646,7 +646,7 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
             episode for episode in item.episodes() if episode.season_index in seasons
         ]
 
-    @lru_cache(32)
+    @lru_cache(maxsize=32)
     async def _filter_history_by_episodes(
         self, item: LibraryShow, episodes: Sequence[LibraryEpisode]
     ) -> list[HistoryEntry]:

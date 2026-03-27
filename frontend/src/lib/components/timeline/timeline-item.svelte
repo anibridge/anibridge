@@ -131,6 +131,7 @@
             .sort(([left], [right]) => left.localeCompare(right)),
     );
     const hasInfo = $derived(infoEntries.length > 0);
+    const isEphemeral = $derived(Boolean(item.ephemeral));
 
     $effect(() => {
         if (!hasInfo) openInfo = false;
@@ -151,7 +152,9 @@
 {/snippet}
 
 <div
-    class="group relative flex items-stretch gap-3 overflow-hidden rounded-md border border-slate-800 bg-slate-900/60 p-3 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md sm:p-4">
+    class={`group relative flex items-stretch gap-3 overflow-hidden rounded-md border p-3 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md sm:p-4 border-slate-800 bg-slate-900/60 ${
+        isEphemeral ? " opacity-80" : ""
+    }`}>
     <div
         class={`w-1 shrink-0 self-stretch rounded-md ${meta.color}`}
         aria-hidden="true">
@@ -188,6 +191,12 @@
                             <meta.icon class="inline h-3.5 w-3.5 text-[10px]" />
                             {meta.label}
                         </span>
+                        {#if isEphemeral}
+                            <span
+                                class="inline-flex items-center gap-1 rounded-md border border-amber-400/70 bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]">
+                                Dry Run
+                            </span>
+                        {/if}
                     </div>
                     <div
                         class="chip-scroll space-y-1 overflow-x-auto mask-[linear-gradient(to_right,black,black_calc(100%-10px),transparent)] whitespace-nowrap">

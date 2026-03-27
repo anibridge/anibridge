@@ -133,6 +133,7 @@
             after_state: null,
             info: null,
             error_message: null,
+            ephemeral: false,
             timestamp,
             library_media: null,
             list_media: resolvedMedia,

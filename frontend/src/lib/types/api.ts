@@ -267,6 +267,7 @@ export interface HistoryItem {
     after_state?: Record<string, unknown> | null;
     info?: Record<string, string> | null;
     error_message?: string | null;
+    ephemeral?: boolean;
     timestamp: string;
     library_media?: ProviderMediaMetadata | null;
     list_media?: ProviderMediaMetadata | null;

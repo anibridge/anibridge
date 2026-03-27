@@ -151,6 +151,7 @@
 
     function canUndo(item: HistoryItem): boolean {
         if (!item) return false;
+        if (item.ephemeral) return false;
         if (!item.list_media_key || !item.list_namespace) return false;
         return item.outcome === "synced" || item.outcome === "deleted";
     }

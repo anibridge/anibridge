@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from fastapi.applications import FastAPI
 from fastapi.exception_handlers import http_exception_handler
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -91,6 +92,8 @@ def create_app(scheduler: SchedulerClient | None = None) -> FastAPI:
 
     if scheduler:
         app.extra["scheduler"] = scheduler
+
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
     # Add request logging middleware if in debug mode
     if cast(Logger, log).level <= DEBUG:

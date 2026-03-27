@@ -20,6 +20,7 @@ from anibridge.app.utils.paths import PROJECT_ROOT
 from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
 from anibridge.app.web.middlewares.request_logging import RequestLoggingMiddleware
 from anibridge.app.web.routes import router
+from anibridge.app.web.services.history_service import get_history_service
 from anibridge.app.web.services.logging_handler import get_log_ws_handler
 from anibridge.app.web.state import get_app_state
 
@@ -52,6 +53,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await get_app_state().ensure_public_anilist()
     except Exception:
         log.debug("Web - Failed to initialize public AniList client at startup")
+
+    purged_history_count = await get_history_service().purge_ephemeral_items()
+    if purged_history_count:
+        log.info(
+            "Web - Deleted %s ephemeral dry-run history entries at startup",
+            purged_history_count,
+        )
 
     root_logger = cast(Logger, log)
     log_ws_handler = get_log_ws_handler()

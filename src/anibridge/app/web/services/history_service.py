@@ -44,6 +44,7 @@ class HistoryItem(BaseModel):
     after_state: dict | None = None
     info: dict[str, str] | None = None
     error_message: str | None = None
+    ephemeral: bool = False
     timestamp: str
     library_media: ProviderMediaMetadata | None = None
     list_media: ProviderMediaMetadata | None = None
@@ -161,6 +162,7 @@ class HistoryService:
                     after_state=row.after_state,
                     info=row.info,
                     error_message=row.error_message,
+                    ephemeral=row.ephemeral,
                     timestamp=row.timestamp.isoformat(),
                     library_media=library_metadata,
                     list_media=list_metadata,
@@ -491,6 +493,7 @@ class HistoryService:
                 outcome=SyncOutcome.UNDONE,
                 before_state=row.after_state,
                 after_state=row.before_state,
+                ephemeral=bridge.profile_config.dry_run,
                 info={
                     **source_info,
                     "operation": "undo",
@@ -557,6 +560,25 @@ class HistoryService:
         """Clear cached provider metadata batches."""
         self._fetch_list_metadata_batch.cache_clear()
         self._fetch_library_metadata_batch.cache_clear()
+
+    async def purge_ephemeral_items(self) -> int:
+        """Delete ephemeral history rows."""
+        with db() as ctx:
+            count = (
+                ctx.session.query(SyncHistory)
+                .filter(SyncHistory.ephemeral.is_(True))
+                .count()
+            )
+            if not count:
+                return 0
+            (
+                ctx.session.query(SyncHistory)
+                .filter(SyncHistory.ephemeral.is_(True))
+                .delete(synchronize_session=False)
+            )
+            ctx.session.commit()
+        await self.clear_cache()
+        return count
 
     def get_cache_info(self) -> dict[str, Any]:
         """Get cache statistics for monitoring.

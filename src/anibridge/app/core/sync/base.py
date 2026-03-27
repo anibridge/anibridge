@@ -198,7 +198,11 @@ class BaseSyncClient[
         found_match = False
         async for child_item, grandchild_items, target in self.map_media(item):
             found_match = True
-            grandchildren = tuple(grandchild_items)
+            grandchildren = (
+                grandchild_items
+                if isinstance(grandchild_items, tuple)
+                else tuple(grandchild_items)
+            )
             grandchild_ids = ItemIdentifier.from_items(grandchildren)
             entry = target.entry
             list_media_key = target.list_media_key
@@ -363,7 +367,7 @@ class BaseSyncClient[
         disabled_fields = {
             f.value for f in SyncField if self._sync_rule_engine.is_disabled(f.value)
         }
-        field_state = _FieldApplicationState(pinned_blocked_fields=set(skip_fields))
+        field_state = _FieldApplicationState(pinned_blocked_fields=skip_fields.copy())
 
         calc_kwargs = {
             "item": item,
@@ -833,9 +837,8 @@ class BaseSyncClient[
 
     def _render_diff(self, plan: BatchUpdate[ParentMediaT, ChildMediaT]) -> str:
         """Render a diff string for a planned update."""
-        return self._format_diff(
-            diff_snapshots(plan.before, plan.after, set(plan.after.to_dict().keys()))
-        )
+        after_fields = plan.after.to_dict()
+        return self._format_diff(diff_snapshots(plan.before, plan.after, after_fields))
 
     async def batch_sync(self) -> None:
         """Flush queued updates to the list provider.

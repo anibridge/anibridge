@@ -510,7 +510,7 @@ def _build_config_template_model(model_cls: type[BaseModel]) -> BaseModel:
         else:
             value = "..."
         payload[name] = value
-    return model_cls.model_construct(_fields_set=set(payload.keys()), **payload)
+    return model_cls.model_construct(_fields_set=set(payload), **payload)
 
 
 def _render_default_config_template() -> str:

@@ -109,6 +109,8 @@ def test_sync_stats_tracking_and_counts() -> None:
     assert stats.skipped == 1
     assert stats.pending == 0
     assert stats.total_items == 2
+    assert stats.count_items_by_outcome(SyncOutcome.SYNCED) == 1
+    assert stats.count_grandchild_items_by_outcome(SyncOutcome.SYNCED) == 2
     assert stats.coverage == 1.0
 
 

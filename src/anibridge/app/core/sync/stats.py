@@ -144,6 +144,16 @@ class SyncStats(BaseModel):
             if item_id not in self._item_outcomes:
                 self._item_outcomes[item_id] = SyncOutcome.PENDING
 
+    def count_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
+        """Count top-level items matching the requested outcome filter."""
+        allowed_outcomes = set(outcomes)
+        return sum(
+            1
+            for item_id, item_outcome in self._item_outcomes.items()
+            if item_id.media_kind in (MediaKind.SHOW, MediaKind.MOVIE)
+            and (not allowed_outcomes or item_outcome in allowed_outcomes)
+        )
+
     def get_items_by_outcome(self, *outcomes: SyncOutcome) -> list[ItemIdentifier]:
         """Get all items that had a specific outcome.
 
@@ -165,6 +175,16 @@ class SyncStats(BaseModel):
             if item_outcome in outcomes
             and item_id.media_kind in (MediaKind.SHOW, MediaKind.MOVIE)
         ]
+
+    def count_grandchild_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
+        """Count grandchild items matching the requested outcome filter."""
+        allowed_outcomes = set(outcomes)
+        return sum(
+            1
+            for item_id, item_outcome in self._item_outcomes.items()
+            if item_id.media_kind in (MediaKind.EPISODE, MediaKind.MOVIE)
+            and (not allowed_outcomes or item_outcome in allowed_outcomes)
+        )
 
     def get_grandchild_items_by_outcome(
         self, *outcome: SyncOutcome
@@ -193,64 +213,60 @@ class SyncStats(BaseModel):
     @property
     def synced(self) -> int:
         """Number of successfully synced items (including deleted)."""
-        return len(self.get_items_by_outcome(SyncOutcome.SYNCED))
+        return self.count_items_by_outcome(SyncOutcome.SYNCED)
 
     @property
     def deleted(self) -> int:
         """Number of items deleted from AniList."""
-        return len(self.get_items_by_outcome(SyncOutcome.DELETED))
+        return self.count_items_by_outcome(SyncOutcome.DELETED)
 
     @property
     def skipped(self) -> int:
         """Number of items skipped (no changes needed)."""
-        return len(self.get_items_by_outcome(SyncOutcome.SKIPPED))
+        return self.count_items_by_outcome(SyncOutcome.SKIPPED)
 
     @property
     def not_found(self) -> int:
         """Number of items where no matching AniList entry was found."""
-        return len(self.get_items_by_outcome(SyncOutcome.NOT_FOUND))
+        return self.count_items_by_outcome(SyncOutcome.NOT_FOUND)
 
     @property
     def failed(self) -> int:
         """Number of items that failed to process."""
-        return len(self.get_items_by_outcome(SyncOutcome.FAILED))
+        return self.count_items_by_outcome(SyncOutcome.FAILED)
 
     @property
     def pending(self) -> int:
         """Number of items that are still pending processing."""
-        return len(self.get_items_by_outcome(SyncOutcome.PENDING))
+        return self.count_items_by_outcome(SyncOutcome.PENDING)
 
     @property
     def total_processed(self) -> int:
         """Total number of items processed (excluding pending)."""
-        return len(
-            self.get_items_by_outcome(
-                SyncOutcome.SYNCED,
-                SyncOutcome.SKIPPED,
-                SyncOutcome.FAILED,
-                SyncOutcome.NOT_FOUND,
-                SyncOutcome.DELETED,
-            )
+        return self.count_items_by_outcome(
+            SyncOutcome.SYNCED,
+            SyncOutcome.SKIPPED,
+            SyncOutcome.FAILED,
+            SyncOutcome.NOT_FOUND,
+            SyncOutcome.DELETED,
         )
 
     @property
     def total_items(self) -> int:
         """Total number of items tracked (including unprocessed)."""
-        return len(self.get_items_by_outcome())
+        return self.count_items_by_outcome()
 
     @property
     def coverage(self) -> float:
         """Percentage of grandchild items that were successfully processed."""
-        total = len(self.get_grandchild_items_by_outcome())
+        total = self.count_grandchild_items_by_outcome()
         if not total:
             return 1.0
 
-        processed = len(
-            self.get_grandchild_items_by_outcome(
-                SyncOutcome.SYNCED,
-                SyncOutcome.SKIPPED,
-                SyncOutcome.DELETED,
-            )
+        processed = self.count_grandchild_items_by_outcome(
+            SyncOutcome.SYNCED,
+            SyncOutcome.SKIPPED,
+            SyncOutcome.DELETED,
         )
 
         return processed / total

@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from anibridge.utils.cache import cache
 from pydantic import BaseModel, Field
@@ -32,6 +33,9 @@ _PIN_LABELS: dict[str, str] = {
     SyncField.FINISHED_AT.value: "Finished Date",
 }
 
+_SYNC_FIELD_VALUES: tuple[str, ...] = tuple(field.value for field in SyncField)
+_SYNC_FIELD_SET: frozenset[str] = frozenset(_SYNC_FIELD_VALUES)
+
 
 class PinFieldOption(BaseModel):
     """Metadata for a selectable pin field."""
@@ -59,7 +63,6 @@ class UpdatePinPayload(BaseModel):
 
     def normalized(self) -> list[str]:
         """Return sanitized field names as SyncField values."""
-        allowed = {f.value for f in SyncField}
         values = []
         for field in self.fields:
             if isinstance(field, SyncField):
@@ -68,14 +71,15 @@ class UpdatePinPayload(BaseModel):
                 value = str(field).strip().lower()
             if not value:
                 continue
-            if value not in allowed:
+            if value not in _SYNC_FIELD_SET:
                 raise ValueError(f"Unsupported field '{field}'")
             values.append(value)
         # Preserve order based on SyncField declaration while ensuring uniqueness
         ordered: list[str] = []
-        for candidate in SyncField:
-            if candidate.value in values and candidate.value not in ordered:
-                ordered.append(candidate.value)
+        seen = set(values)
+        for candidate in _SYNC_FIELD_VALUES:
+            if candidate in seen and candidate not in ordered:
+                ordered.append(candidate)
         return ordered
 
 
@@ -83,7 +87,8 @@ class UpdatePinPayload(BaseModel):
 class PinService:
     """Service encapsulating pin CRUD operations."""
 
-    allowed_fields: tuple[str, ...] = tuple(field.value for field in SyncField)
+    allowed_fields: ClassVar[tuple[str, ...]] = _SYNC_FIELD_VALUES
+    allowed_field_set: ClassVar[frozenset[str]] = _SYNC_FIELD_SET
 
     def list_options(self) -> list[PinFieldOption]:
         """Return metadata for selectable fields."""
@@ -266,13 +271,12 @@ class PinService:
             ctx.session.commit()
 
     def _sanitize_fields(self, fields: Iterable[str]) -> list[str]:
-        allowed = set(self.allowed_fields)
         sanitized: list[str] = []
         for field in fields:
             value = str(field).strip().lower()
             if not value:
                 continue
-            if value not in allowed:
+            if value not in self.allowed_field_set:
                 raise ValueError(f"Unsupported field '{field}'")
             if value not in sanitized:
                 sanitized.append(value)

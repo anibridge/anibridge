@@ -139,7 +139,7 @@ class SyncCacheManager:
         )
 
         try:
-            entries = await self.list_provider.get_entries_batch(list(collected))
+            entries = await self.list_provider.get_entries_batch(tuple(collected))
         except Exception:
             log.error(
                 "[%s] Failed to prefetch list entries",

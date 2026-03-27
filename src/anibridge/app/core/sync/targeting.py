@@ -1,6 +1,6 @@
 """Helpers for resolving list targets from library mappings."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,14 +26,14 @@ __all__ = [
 def diff_snapshots(
     before: EntrySnapshot | None,
     after: EntrySnapshot | None,
-    fields: set[str],
+    fields: Iterable[str],
 ) -> dict[str, tuple[Any, Any]]:
     """Compute differences between two snapshots.
 
     Args:
         before (EntrySnapshot | None): Snapshot captured before mutation.
         after (EntrySnapshot | None): Snapshot captured after mutation.
-        fields (set[str]): Field names to compare.
+        fields (Iterable[str]): Field names to compare.
 
     Returns:
         dict[str, tuple[Any, Any]]: Changed fields mapped to before/after values.
@@ -185,7 +185,7 @@ async def resolve_list_targets_batch(
         return [tuple() for _ in normalized]
 
     grouped_edges = animap_client.resolve_edges_grouped(
-        list(all_descriptors),
+        tuple(all_descriptors),
         target_providers=list_provider.MAPPING_PROVIDERS,
     )
     mappings_by_target: dict[
@@ -211,11 +211,11 @@ async def resolve_list_targets_batch(
         if source_map:
             mappings_by_target[target_descriptor] = source_map
 
-    direct_targets = [
+    direct_targets = (
         descriptor
         for descriptor in all_descriptors
         if descriptor[0] in list_provider.MAPPING_PROVIDERS
-    ]
+    )
     target_descriptors = {
         *mappings_by_target.keys(),
         *direct_targets,
@@ -224,7 +224,7 @@ async def resolve_list_targets_batch(
         return [tuple() for _ in normalized]
 
     resolved_targets = await list_provider.resolve_mapping_descriptors(
-        list(target_descriptors)
+        tuple(target_descriptors)
     )
 
     grouped: dict[str, _GroupedTargets] = {}
@@ -249,15 +249,15 @@ async def resolve_list_targets_batch(
             )
             merged.mappings.extend(descriptor_mapping.mappings)
 
-    targets_by_key = {
-        key: _build_resolved_target(key, grouped[key]) for key in sorted(grouped.keys())
-    }
+    ordered_targets = tuple(
+        _build_resolved_target(key, grouped[key]) for key in sorted(grouped)
+    )
 
     results: list[tuple[ResolvedListTarget, ...]] = []
     for descriptor_set in normalized:
         filtered = tuple(
             ordered_target
-            for target in targets_by_key.values()
+            for target in ordered_targets
             if (
                 ordered_target := _order_target_for_descriptor_set(
                     descriptor_set, target

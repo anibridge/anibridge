@@ -116,7 +116,7 @@ class BasicAuthMiddleware:
 
         try:
             decoded = base64.b64decode(token, validate=True).decode("utf-8")
-        except (binascii.Error, UnicodeDecodeError, ValueError):
+        except binascii.Error, UnicodeDecodeError, ValueError:
             return None
 
         username, separator, password = decoded.partition(":")

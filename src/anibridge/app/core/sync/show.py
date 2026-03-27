@@ -220,16 +220,16 @@ class ShowSyncClient(BaseSyncClient[LibraryShow, LibrarySeason, LibraryEpisode])
             return None
 
         results = await self.list_provider.search(item.title)
-        tv_results = [
-            entry for entry in results if entry.media().media_type == ListMediaType.TV
-        ]
         episode_count = len(child_item.episodes())
-        filtered = [
-            entry
-            for entry in tv_results
-            if entry.media().total_units is None
-            or entry.media().total_units == episode_count
-        ]
+        tv_results: list[ListEntry] = []
+        filtered: list[ListEntry] = []
+        for entry in results:
+            media = entry.media()
+            if media.media_type != ListMediaType.TV:
+                continue
+            tv_results.append(entry)
+            if media.total_units is None or media.total_units == episode_count:
+                filtered.append(entry)
         candidates = filtered or tv_results
         return find_best_search_result(
             item.title,

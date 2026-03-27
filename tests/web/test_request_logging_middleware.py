@@ -233,7 +233,7 @@ async def test_request_logging_middleware_handles_body_read_errors(
     async def broken_body() -> bytes:
         raise RuntimeError("boom")
 
-    request.body = broken_body  # type: ignore[assignment]
+    request.body = broken_body  # ty:ignore[invalid-assignment]
 
     async def call_next(req: Request) -> Response:
         return Response(status_code=204)

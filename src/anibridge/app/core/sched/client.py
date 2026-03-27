@@ -284,7 +284,7 @@ class SchedulerClient:
             poll,
             source,
         )
-        profile_names = list(self.bridge_clients.keys())
+        profile_names = tuple(self.bridge_clients)
         if not profile_names:
             log.warning("No profiles available to sync")
             return

@@ -737,7 +737,7 @@ async def test_map_media_skips_missing_entries(
 
     monkeypatch.setattr(show_module, "resolve_list_targets_batch", _resolve_batch)
     monkeypatch.setattr(show_client._cache, "get_entry", _get_entry)
-    show_client.search_media = _search_media  # type: ignore[method-assign]
+    show_client.search_media = _search_media  # ty:ignore[invalid-assignment]
 
     results = [
         result
@@ -776,7 +776,7 @@ async def test_map_media_uses_search_fallback(
         cached["hit"] = True
 
     monkeypatch.setattr(show_module, "resolve_list_targets_batch", _resolve_batch)
-    show_client.search_media = _search_media  # type: ignore[method-assign]
+    show_client.search_media = _search_media  # ty:ignore[invalid-assignment]
     monkeypatch.setattr(show_client._cache, "cache_entry", _cache_entry)
 
     results = [
@@ -816,7 +816,7 @@ async def test_map_media_filters_out_empty_ranges(
 
     monkeypatch.setattr(show_module, "resolve_list_targets_batch", _resolve_batch)
     monkeypatch.setattr(show_client._cache, "get_entry", _get_entry)
-    show_client._filter_episodes_by_ranges = _filter_episodes_by_ranges  # type: ignore[method-assign]
+    show_client._filter_episodes_by_ranges = _filter_episodes_by_ranges  # ty:ignore[invalid-assignment]
 
     results = [
         result
@@ -867,7 +867,7 @@ async def test_map_media_skips_inactive_mapping_ranges_before_lookup(
 
     monkeypatch.setattr(show_module, "resolve_list_targets_batch", _resolve_batch)
     monkeypatch.setattr(show_client._cache, "get_entry", _get_entry)
-    show_client.search_media = _search_media  # type: ignore[method-assign]
+    show_client.search_media = _search_media  # ty:ignore[invalid-assignment]
 
     results = [
         result
@@ -927,7 +927,7 @@ async def test_map_media_uses_search_fallback_for_active_mapping_range(
     monkeypatch.setattr(show_module, "resolve_list_targets_batch", _resolve_batch)
     monkeypatch.setattr(show_client._cache, "get_entry", _get_entry)
     monkeypatch.setattr(show_client._cache, "cache_entry", _cache_entry)
-    show_client.search_media = _search_media  # type: ignore[method-assign]
+    show_client.search_media = _search_media  # ty:ignore[invalid-assignment]
 
     results = [
         result

@@ -281,7 +281,7 @@ class ProfileScheduler:
         self._running = False
         self.stop_event.set()
 
-        for task in list(self._tasks):
+        for task in tuple(self._tasks):
             if not task.done():
                 task.cancel()
 

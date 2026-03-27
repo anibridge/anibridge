@@ -65,7 +65,7 @@ class WebsocketLogHandler(logging.Handler):
             return
 
         with self._lock:
-            conns = list(self._connections)
+            conns = tuple(self._connections)
 
         if not conns:
             return

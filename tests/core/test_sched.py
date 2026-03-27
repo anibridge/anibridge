@@ -22,7 +22,7 @@ class FakeProfileConfig:
 
     poll_interval: int = 60
     scan_interval: int = 10
-    scan_modes: list[Any] = field(default_factory=list)  # type: ignore[assignment]
+    scan_modes: list[Any] = field(default_factory=list)
     full_scan: bool = False
     destructive_sync: bool = False
 

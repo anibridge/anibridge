@@ -327,7 +327,7 @@ class BridgeClient:
             profile_name=self.profile_name,
         )
 
-        sections = list(await self.library_provider.get_sections())
+        sections = await self.library_provider.get_sections()
         log.debug(
             "[%s] Retrieved %s library sections",
             self.profile_name,
@@ -385,7 +385,7 @@ class BridgeClient:
                 sync_stats.not_found,
                 sync_stats.failed,
                 sync_stats.coverage * 100,
-                len(sync_stats.get_grandchild_items_by_outcome()),
+                sync_stats.count_grandchild_items_by_outcome(),
                 duration.total_seconds(),
             )
 
@@ -398,7 +398,7 @@ class BridgeClient:
                 log.debug(
                     "[%s] Uncovered items: %s",
                     self.profile_name,
-                    ", ".join([repr(item) for item in uncovered_items]),
+                    ", ".join(repr(item) for item in uncovered_items),
                 )
 
         except Exception as exc:
@@ -492,13 +492,11 @@ class BridgeClient:
             section.title,
             debug_log_args,
         )
-        items = list(
-            await self.library_provider.list_items(
-                section,
-                min_last_modified=min_last_modified,
-                require_watched=not self.profile_config.full_scan,
-                keys=keys,
-            )
+        items = await self.library_provider.list_items(
+            section,
+            min_last_modified=min_last_modified,
+            require_watched=not self.profile_config.full_scan,
+            keys=keys,
         )
         log.debug(
             "[%s] Found %s items in section $$'%s'$$",

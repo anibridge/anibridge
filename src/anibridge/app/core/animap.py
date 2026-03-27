@@ -191,7 +191,7 @@ class AnimapClient:
         self, session: Session, desired: dict[int, list[str]]
     ) -> None:
         """Ensure provenance rows align with the desired mapping sources."""
-        mapping_ids = list(desired.keys())
+        mapping_ids = tuple(desired)
         if not mapping_ids:
             return
 
@@ -451,8 +451,8 @@ class AnimapClient:
                 is not None
             }
 
-            new_entry_keys = set(descriptors.keys())
-            existing_entry_keys = set(existing_entries.keys())
+            new_entry_keys = set(descriptors)
+            existing_entry_keys = set(existing_entries)
 
             to_delete_entries = existing_entry_keys - new_entry_keys
             to_insert_entries = new_entry_keys - existing_entry_keys
@@ -547,7 +547,7 @@ class AnimapClient:
             }
 
             new_keys = edge_id_keys
-            existing_keys = set(existing_mappings.keys())
+            existing_keys = set(existing_mappings)
 
             to_delete_mappings = existing_keys - new_keys
             to_insert_mappings = new_keys - existing_keys
@@ -650,7 +650,7 @@ class AnimapClient:
 
             ctx.session.commit()
 
-            current_mapping_keys = set(edges.keys())
+            current_mapping_keys = set(edges)
             existing_pairs = {
                 (src_desc, dst_desc)
                 for src_desc, dst_desc, _, _ in previous_mapping_keys

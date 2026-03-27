@@ -70,14 +70,14 @@ class SyncHistoryManager:
         if isinstance(value, ListStatus):
             return value.value
         if isinstance(value, (list, tuple, set)):
-            values = [
+            joined = ", ".join(
                 serialized
                 for serialized in (
                     SyncHistoryManager.stringify_info_value(item) for item in value
                 )
                 if serialized
-            ]
-            return ", ".join(values) if values else None
+            )
+            return joined or None
         text = str(value).strip()
         return text or None
 
@@ -241,8 +241,7 @@ class SyncHistoryManager:
         if not self._failure_history_cleanup_queue:
             return
 
-        targets = set(self._failure_history_cleanup_queue)
-        target_pairs = list(targets)
+        target_pairs = tuple(self._failure_history_cleanup_queue)
 
         with self._db_factory() as ctx:
             for start in range(
@@ -289,11 +288,11 @@ class SyncHistoryManager:
                     ).delete(synchronize_session=False)
             ctx.session.commit()
 
-        self._failure_history_cleanup_queue -= targets
+        self._failure_history_cleanup_queue.difference_update(target_pairs)
         log.debug(
             "[%s] Cleaned up failure history for %s cached targets",
             self.profile_name,
-            len(targets),
+            len(target_pairs),
         )
 
     def queue_failure_history_cleanup(

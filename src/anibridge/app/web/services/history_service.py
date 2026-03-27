@@ -89,12 +89,8 @@ class HistoryService:
 
         pin_map: dict[tuple[str, str], list[str]] = {}
         if list_pairs:
-            namespaces = list(list_pairs.keys())
-            keys = {
-                key
-                for namespace in namespaces
-                for key in list_pairs.get(namespace, set())
-            }
+            namespaces = tuple(list_pairs)
+            keys = {key for media_keys in list_pairs.values() for key in media_keys}
             if keys:
                 with db() as ctx:
                     pin_rows = (
@@ -102,7 +98,7 @@ class HistoryService:
                         .filter(
                             Pin.profile_name == profile,
                             Pin.list_namespace.in_(namespaces),
-                            Pin.list_media_key.in_(list(keys)),
+                            Pin.list_media_key.in_(tuple(keys)),
                         )
                         .all()
                     )
@@ -190,7 +186,7 @@ class HistoryService:
         if namespace != bridge.list_provider.NAMESPACE:
             return {}
 
-        entries = await bridge.list_provider.get_entries_batch(list(media_keys))
+        entries = await bridge.list_provider.get_entries_batch(media_keys)
         metadata: dict[str, ProviderMediaMetadata] = {}
         for entry in entries:
             if entry is None:

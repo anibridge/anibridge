@@ -152,7 +152,7 @@
 {/snippet}
 
 <div
-    class={`group relative flex items-stretch gap-3 overflow-hidden rounded-md border p-3 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md sm:p-4 border-slate-800 bg-slate-900/60 ${
+    class={`group relative flex items-stretch gap-3 overflow-hidden rounded-md border border-slate-800 bg-slate-900/60 p-3 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md sm:p-4 ${
         isEphemeral ? " opacity-80" : ""
     }`}>
     <div

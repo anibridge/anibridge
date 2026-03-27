@@ -7,7 +7,7 @@ from typing import Any
 from anibridge.library import MediaKind
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import ForeignKey, Index
-from sqlalchemy.sql.sqltypes import JSON, DateTime, Enum, Integer, String
+from sqlalchemy.sql.sqltypes import JSON, Boolean, DateTime, Enum, Integer, String
 
 from anibridge.app.models.db.base import Base
 
@@ -66,6 +66,7 @@ class SyncHistory(Base):
     error_message: Mapped[str | None] = mapped_column(
         String, default=None, nullable=True
     )
+    ephemeral: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC), index=True
     )

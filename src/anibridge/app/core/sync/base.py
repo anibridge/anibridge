@@ -928,6 +928,7 @@ class BaseSyncClient[
             outcome=outcome,
             error_message=error_message,
             info=info,
+            ephemeral=self.dry_run,
         )
 
     def flush_failure_history_cleanup(self) -> None:

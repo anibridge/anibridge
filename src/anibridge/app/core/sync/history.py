@@ -114,6 +114,7 @@ class SyncHistoryManager:
         outcome: SyncOutcome,
         error_message: str | None = None,
         info: Mapping[str, Any] | None = None,
+        ephemeral: bool = False,
     ) -> None:
         """Persist a sync history record.
 
@@ -131,6 +132,8 @@ class SyncHistoryManager:
             outcome (SyncOutcome): Final synchronization outcome.
             error_message (str | None): Optional failure message.
             info (Mapping[str, Any] | None): Additional diagnostic metadata.
+            ephemeral (bool): Whether this history record should be treated as
+                temporary and subject to cleanup.
 
         Returns:
             None: This method writes history rows and updates failure records.
@@ -224,6 +227,7 @@ class SyncHistoryManager:
                 after_state=after_state,
                 info=history_info,
                 error_message=error_message,
+                ephemeral=ephemeral,
             )
             ctx.session.add(history_record)
             ctx.session.commit()

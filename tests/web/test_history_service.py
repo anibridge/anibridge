@@ -246,10 +246,29 @@ async def test_history_service_get_page_enriches_metadata(history_env):
     assert item.list_media.title == "List lst1"
     assert item.pinned_fields == ["status"]
     assert item.info == {"source": "test-seed"}
+    assert item.ephemeral is False
 
     cache_info = service.get_cache_info()
     assert cache_info["list_cache"].hits >= 0
     await service.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_history_service_get_page_includes_ephemeral_flag(history_env):
+    """History pages should expose whether a row is ephemeral."""
+    _seed_history_row(ephemeral=True)
+    service = HistoryService()
+
+    page = await service.get_page(
+        profile="profile",
+        page=1,
+        per_page=10,
+        include_library_media=False,
+        include_list_media=False,
+    )
+
+    assert page.total == 1
+    assert page.items[0].ephemeral is True
 
 
 @pytest.mark.asyncio
@@ -396,6 +415,22 @@ async def test_history_service_undo_item_records_info(history_env):
 
 
 @pytest.mark.asyncio
+async def test_history_service_undo_item_in_dry_run_is_ephemeral(history_env):
+    """Undo history rows should be ephemeral when the profile is in dry-run mode."""
+    history_env.bridge.profile_config.destructive_sync = True
+    history_env.bridge.profile_config.dry_run = True
+    row_id = _seed_history_row(before_state=None)
+    service = HistoryService()
+
+    item = await service.undo_item("profile", row_id)
+
+    assert item.ephemeral is True
+    assert item.info is not None
+    assert item.info.get("operation") == "undo"
+    assert history_env.list_provider.deleted_entries == []
+
+
+@pytest.mark.asyncio
 async def test_history_service_undo_item_clears_cached_list_metadata(history_env):
     """Undoing a deletion should evict cached metadata for removed list entries."""
     history_env.bridge.profile_config.destructive_sync = True
@@ -459,6 +494,34 @@ async def test_history_service_clear_all_caches(history_env):
     info = service.get_cache_info()
     assert info["list_cache"].currsize == 0
     assert info["library_cache"].currsize == 0
+
+
+@pytest.mark.asyncio
+async def test_history_service_purge_ephemeral_items_removes_only_ephemeral(
+    history_env,
+):
+    """Purging ephemeral items should keep persisted history rows intact."""
+    _seed_history_row(ephemeral=True)
+    _seed_history_row(
+        clear=False,
+        library_media_key="lib2",
+        list_media_key="lst2",
+        ephemeral=False,
+    )
+    service = HistoryService()
+
+    removed = await service.purge_ephemeral_items()
+
+    assert removed == 1
+    with db() as ctx:
+        rows = (
+            ctx.session.query(SyncHistory)
+            .order_by(SyncHistory.library_media_key.asc())
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].library_media_key == "lib2"
+        assert rows[0].ephemeral is False
 
 
 def test_get_history_service_returns_singleton():

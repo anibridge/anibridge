@@ -2,15 +2,19 @@
 
 import base64
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from pytest import MonkeyPatch
 
+from anibridge.app.config.database import db
 from anibridge.app.config.settings import AnibridgeConfig, BasicAuthConfig, WebConfig
+from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
 from anibridge.app.web import app as app_module
 from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
+from anibridge.app.web.state import get_app_state
 
 
 def _basic_auth_header(username: str, password: str) -> dict[str, str]:
@@ -231,3 +235,66 @@ def test_create_app_registers_basic_auth_middleware_with_htpasswd(
 
     middleware_classes = {middleware.cls for middleware in app.user_middleware}
     assert BasicAuthMiddleware in middleware_classes
+
+
+def test_create_app_lifespan_purges_ephemeral_history_on_startup(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Starting the app should delete ephemeral history rows."""
+    with db() as ctx:
+        ctx.session.query(SyncHistory).delete()
+        ctx.session.add_all(
+            [
+                SyncHistory(
+                    profile_name="profile",
+                    library_namespace="lib",
+                    library_section_key="1",
+                    library_media_key="persisted",
+                    list_namespace="alist",
+                    list_media_key="persisted",
+                    media_kind="movie",
+                    outcome=SyncOutcome.SYNCED,
+                    ephemeral=False,
+                ),
+                SyncHistory(
+                    profile_name="profile",
+                    library_namespace="lib",
+                    library_section_key="1",
+                    library_media_key="ephemeral",
+                    list_namespace="alist",
+                    list_media_key="ephemeral",
+                    media_kind="movie",
+                    outcome=SyncOutcome.SYNCED,
+                    ephemeral=True,
+                ),
+            ]
+        )
+        ctx.session.commit()
+
+    index_file = tmp_path / "index.html"
+    index_file.write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
+
+    async def _ensure_public_anilist():
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        get_app_state(),
+        "ensure_public_anilist",
+        _ensure_public_anilist,
+        raising=True,
+    )
+
+    app = app_module.create_app()
+    with TestClient(app):
+        pass
+
+    with db() as ctx:
+        rows = (
+            ctx.session.query(SyncHistory)
+            .order_by(SyncHistory.library_media_key.asc())
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].library_media_key == "persisted"
+        assert rows[0].ephemeral is False

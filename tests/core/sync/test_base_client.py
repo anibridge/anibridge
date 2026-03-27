@@ -326,8 +326,8 @@ async def test_prefetch_entries_handles_provider_error(
     async def _boom(_keys):
         raise RuntimeError("boom")
 
-    stub_client._collect_prefetch_keys = _collect  # type: ignore[method-assign]
-    stub_client.list_provider.get_entries_batch = _boom  # type: ignore[method-assign]
+    stub_client._collect_prefetch_keys = _collect  # ty:ignore[invalid-assignment]
+    stub_client.list_provider.get_entries_batch = _boom  # ty:ignore[invalid-assignment]
 
     await stub_client.prefetch_entries([make_movie()])
 
@@ -705,10 +705,10 @@ async def test_sync_media_skips_when_no_status(
 
 
 @pytest.mark.asyncio
-async def test_apply_update_dry_run_returns_skipped(
-    stub_client: StubSyncClient,
+async def test_apply_update_dry_run_records_ephemeral_history(
+    stub_client: StubSyncClient, sync_db
 ) -> None:
-    """Dry-run updates should return SKIPPED without applying changes."""
+    """Dry-run updates should record ephemeral history without applying changes."""
     provider = cast(FakeListProvider, stub_client.list_provider)
     entry = FakeListEntry(
         provider=provider,
@@ -742,14 +742,24 @@ async def test_apply_update_dry_run_returns_skipped(
         debug_ids="id",
     )
 
-    assert outcome is SyncOutcome.SKIPPED
+    assert outcome is SyncOutcome.SYNCED
+    assert provider.updated_entries == []
+    with sync_db as ctx:
+        history = ctx.session.query(SyncHistory).all()
+        assert len(history) == 1
+        assert history[0].outcome is SyncOutcome.SYNCED
+        assert history[0].ephemeral is True
+        assert history[0].info is not None
+        assert history[0].info.get("operation") == "update_entry"
+        assert history[0].info.get("mode") == "single"
+        assert history[0].info.get("dry_run") == "true"
 
 
 @pytest.mark.asyncio
-async def test_batch_sync_dry_run_clears_queue(
-    stub_client: StubSyncClient,
+async def test_batch_sync_dry_run_clears_queue_and_records_history(
+    stub_client: StubSyncClient, sync_db
 ) -> None:
-    """Batch sync dry-run should clear the pending queue."""
+    """Batch sync dry-run should clear the pending queue and write history."""
     provider = cast(FakeListProvider, stub_client.list_provider)
     entry = FakeListEntry(
         provider=provider,
@@ -781,6 +791,15 @@ async def test_batch_sync_dry_run_clears_queue(
     await stub_client.batch_sync()
 
     assert stub_client._pending_updates == []
+    assert provider.batch_updates == []
+    with sync_db as ctx:
+        history = ctx.session.query(SyncHistory).all()
+        assert len(history) == 1
+        assert history[0].outcome is SyncOutcome.SYNCED
+        assert history[0].ephemeral is True
+        assert history[0].info is not None
+        assert history[0].info.get("mode") == "batch"
+        assert history[0].info.get("dry_run") == "true"
 
 
 @pytest.mark.asyncio
@@ -816,7 +835,7 @@ async def test_batch_sync_failure_raises(stub_client: StubSyncClient, sync_db) -
     async def _boom(_entries):
         raise RuntimeError("boom")
 
-    stub_client.list_provider.update_entries_batch = _boom  # type: ignore[method-assign]
+    stub_client.list_provider.update_entries_batch = _boom  # ty:ignore[invalid-assignment]
 
     with pytest.raises(RuntimeError):
         await stub_client.batch_sync()
@@ -925,7 +944,7 @@ async def test_apply_update_raises_on_provider_error(
     async def _boom(_key, _entry):
         raise RuntimeError("boom")
 
-    stub_client.list_provider.update_entry = _boom  # type: ignore[method-assign]
+    stub_client.list_provider.update_entry = _boom  # ty:ignore[invalid-assignment]
 
     with pytest.raises(RuntimeError):
         await stub_client._apply_update(
@@ -1434,6 +1453,46 @@ async def test_sync_media_deletes_when_destructive(
     with sync_db as ctx:
         history = ctx.session.query(SyncHistory).all()
         assert history[0].outcome == SyncOutcome.DELETED
+
+
+@pytest.mark.asyncio
+async def test_sync_media_dry_run_delete_records_ephemeral_history(
+    stub_client: StubSyncClient, sync_db
+) -> None:
+    """Dry-run destructive deletes should create ephemeral delete history."""
+    stub_client.destructive_sync = True
+    stub_client.dry_run = True
+    stub_client._status_override = None
+
+    movie = make_movie()
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    entry = FakeListEntry(
+        provider=provider,
+        key="movie-entry",
+        title="Movie",
+        media_type=ListMediaType.MOVIE,
+    )
+    entry.status = ListStatus.CURRENT
+
+    result = await stub_client.sync_media(
+        item=movie,
+        child_item=movie,
+        grandchild_items=(movie,),
+        entry=cast(ListEntryProtocol, entry),
+        list_media_key=entry.media().key,
+    )
+
+    assert result is SyncOutcome.DELETED
+    assert provider.deleted_keys == []
+
+    with sync_db as ctx:
+        history = ctx.session.query(SyncHistory).all()
+        assert len(history) == 1
+        assert history[0].outcome is SyncOutcome.DELETED
+        assert history[0].ephemeral is True
+        assert history[0].info is not None
+        assert history[0].info.get("operation") == "delete_entry"
+        assert history[0].info.get("dry_run") == "true"
 
 
 @pytest.mark.asyncio

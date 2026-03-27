@@ -414,7 +414,25 @@ class BaseSyncClient[
                         debug_title,
                         debug_ids,
                     )
-                    return SyncOutcome.SKIPPED
+                    await self._create_sync_history(
+                        item=item,
+                        child_item=child_item,
+                        grandchild_items=grandchild_items,
+                        snapshots=(before_snapshot, None),
+                        list_media_key=resolved_list_key,
+                        mapping_descriptors=mapping_descriptors,
+                        outcome=SyncOutcome.DELETED,
+                        info={
+                            "operation": "delete_entry",
+                            "reason": "status_resolved_to_none",
+                            "destructive_sync": self.destructive_sync,
+                            "disabled_fields": sorted(disabled_fields),
+                            "pinned_fields": ", ".join(sorted(skip_fields)),
+                            "mapping_descriptor_count": len(mapping_descriptors or ()),
+                            "dry_run": True,
+                        },
+                    )
+                    return SyncOutcome.DELETED
                 await self.list_provider.delete_entry(before_snapshot.media_key)
                 self._cache.remove_entry(before_snapshot.media_key)
                 await self._create_sync_history(
@@ -585,7 +603,22 @@ class BaseSyncClient[
                 debug_ids,
             )
             log.success("\tDRY RUN UPDATE: %s", diff_str)
-            return SyncOutcome.SKIPPED
+            await self._create_sync_history(
+                item=plan.item,
+                child_item=plan.child,
+                grandchild_items=plan.grandchildren,
+                snapshots=(plan.before, plan.after),
+                list_media_key=plan.list_media_key,
+                mapping_descriptors=plan.mapping_descriptors,
+                outcome=SyncOutcome.SYNCED,
+                info={
+                    **plan.diagnostics,
+                    "operation": "update_entry",
+                    "mode": "single",
+                    "dry_run": True,
+                },
+            )
+            return SyncOutcome.SYNCED
 
         try:
             await self.list_provider.update_entry(plan.after.media_key, plan.entry)
@@ -833,6 +866,21 @@ class BaseSyncClient[
                     self._debug_log_title(item=update.item, child_item=update.child),
                 )
                 log.success("\tDRY RUN BATCH UPDATE: %s", self._render_diff(update))
+                await self._create_sync_history(
+                    item=update.item,
+                    child_item=update.child,
+                    grandchild_items=update.grandchildren,
+                    snapshots=(update.before, update.after),
+                    list_media_key=update.list_media_key,
+                    mapping_descriptors=update.mapping_descriptors,
+                    outcome=SyncOutcome.SYNCED,
+                    info={
+                        **update.diagnostics,
+                        "operation": "update_entry",
+                        "mode": "batch",
+                        "dry_run": True,
+                    },
+                )
             self._pending_updates.clear()
             return
 

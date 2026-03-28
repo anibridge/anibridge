@@ -143,7 +143,7 @@ class HistoryService:
                 )
 
             dto_items.append(
-                HistoryItem(
+                HistoryItem.model_construct(
                     id=row.id,
                     profile_name=row.profile_name,
                     library_namespace=row.library_namespace,
@@ -328,7 +328,7 @@ class HistoryService:
             include_list_media=include_list_media,
         )
 
-        page_obj = HistoryPage(
+        page_obj = HistoryPage.model_construct(
             items=dto_items,
             total=total,
             page=page,

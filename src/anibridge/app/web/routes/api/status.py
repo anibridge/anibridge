@@ -9,6 +9,7 @@ __all__ = [
     "ProfileConfigModel",
     "ProfileRuntimeStatusModel",
     "ProfileStatusModel",
+    "construct_profile_status",
     "router",
 ]
 
@@ -59,14 +60,32 @@ async def status() -> StatusResponse:
     """
     scheduler = get_app_state().scheduler
     if not scheduler:
-        return StatusResponse(profiles={}, scheduler=None)
+        return StatusResponse.model_construct(profiles={}, scheduler=None)
     raw = await scheduler.get_status()
     runtime_metrics = await scheduler.get_runtime_metrics()
-    converted: dict[str, ProfileStatusModel] = {}
-    for name, data in raw.items():
-        cfg = data.get("config", {})
-        st = data.get("status", {})
-        converted[name] = ProfileStatusModel(
-            config=ProfileConfigModel(**cfg), status=ProfileRuntimeStatusModel(**st)
-        )
-    return StatusResponse(profiles=converted, scheduler=runtime_metrics)
+    converted = {name: construct_profile_status(data) for name, data in raw.items()}
+    return StatusResponse.model_construct(profiles=converted, scheduler=runtime_metrics)
+
+
+def construct_profile_status(data: dict) -> ProfileStatusModel:
+    """Build trusted scheduler profile payloads without re-validating them."""
+    cfg = data.get("config", {})
+    st = data.get("status", {})
+    return ProfileStatusModel.model_construct(
+        config=ProfileConfigModel.model_construct(
+            library_namespace=cfg.get("library_namespace"),
+            list_namespace=cfg.get("list_namespace"),
+            library_user=cfg.get("library_user"),
+            list_user=cfg.get("list_user"),
+            poll_interval=cfg.get("poll_interval"),
+            scan_interval=cfg.get("scan_interval"),
+            scan_modes=list(cfg.get("scan_modes") or []),
+            full_scan=cfg.get("full_scan"),
+            destructive_sync=cfg.get("destructive_sync"),
+        ),
+        status=ProfileRuntimeStatusModel.model_construct(
+            running=bool(st.get("running")),
+            last_synced=st.get("last_synced"),
+            current_sync=st.get("current_sync"),
+        ),
+    )

@@ -12,16 +12,7 @@ from anibridge.app.web.services.history_service import (
 
 router = APIRouter()
 
-
-class GetHistoryResponse(BaseModel):
-    """Paginated history response (flattened)."""
-
-    items: list[HistoryItem]
-    page: int
-    per_page: int
-    total: int
-    pages: int
-    stats: dict[str, int] = {}
+GetHistoryResponse = HistoryPage
 
 
 class OkResponse(BaseModel):
@@ -72,7 +63,7 @@ async def get_history(
         SchedulerNotInitializedError: If the scheduler is not running.
         ProfileNotFoundError: If the profile is unknown.
     """
-    hp: HistoryPage = await get_history_service().get_page(
+    return await get_history_service().get_page(
         profile=profile,
         page=page,
         per_page=per_page,
@@ -80,7 +71,6 @@ async def get_history(
         library_namespace=library_namespace,
         list_namespace=list_namespace,
     )
-    return GetHistoryResponse(**hp.model_dump())
 
 
 @router.delete("/{profile}/{item_id}", response_model=OkResponse)

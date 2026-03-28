@@ -21,9 +21,8 @@ from anibridge.app.exceptions import AnibridgeError, SchedulerUnavailableError
 from anibridge.app.utils.human import human_duration
 from anibridge.app.web.routes.api.config import require_config_api_access
 from anibridge.app.web.routes.api.status import (
-    ProfileConfigModel,
-    ProfileRuntimeStatusModel,
     ProfileStatusModel,
+    construct_profile_status,
 )
 from anibridge.app.web.state import get_app_state
 
@@ -105,17 +104,21 @@ def api_settings() -> SettingsResponse:
     """
     scheduler = get_app_state().scheduler
     if not scheduler:
-        return SettingsResponse(global_config={}, profiles=[])
+        return SettingsResponse.model_construct(global_config={}, profiles=[])
 
     global_config = scheduler.global_config.model_dump(
         mode="json", exclude={"profiles"}
     )
     profiles = [
-        SettingsProfileModel(name=name, settings=pdata.model_dump(mode="json"))
+        SettingsProfileModel.model_construct(
+            name=name, settings=pdata.model_dump(mode="json")
+        )
         for name, pdata in scheduler.global_config.profiles.items()
     ]
 
-    return SettingsResponse(global_config=global_config, profiles=profiles)
+    return SettingsResponse.model_construct(
+        global_config=global_config, profiles=profiles
+    )
 
 
 @router.get(
@@ -164,7 +167,7 @@ async def api_about() -> AboutResponse:
         uptime_seconds = int(delta.total_seconds())
         human_uptime = human_duration(uptime_seconds)
 
-    info = AboutInfoModel(
+    info = AboutInfoModel.model_construct(
         version=__version__,
         git_hash=__git_hash__,
         python=platform.python_version(),
@@ -184,11 +187,7 @@ async def api_about() -> AboutResponse:
     most_recent_sync_profile: str | None = None
 
     for name, data in status.items():
-        cfg = data.get("config", {})
-        st = data.get("status", {})
-        converted[name] = ProfileStatusModel(
-            config=ProfileConfigModel(**cfg), status=ProfileRuntimeStatusModel(**st)
-        )
+        converted[name] = construct_profile_status(data)
 
         if converted[name].status.running:
             running_profiles += 1
@@ -222,7 +221,7 @@ async def api_about() -> AboutResponse:
         else 0
     )
 
-    scheduler_summary = SchedulerSummaryModel(
+    scheduler_summary = SchedulerSummaryModel.model_construct(
         running=scheduler_running,
         configured_profiles=configured_profiles,
         total_profiles=len(converted),
@@ -248,9 +247,11 @@ async def api_about() -> AboutResponse:
             else:
                 memory_mb = round(rss / 1024, 2)
 
-    process_info = ProcessInfoModel(pid=pid, cpu_count=cpu_count, memory_mb=memory_mb)
+    process_info = ProcessInfoModel.model_construct(
+        pid=pid, cpu_count=cpu_count, memory_mb=memory_mb
+    )
 
-    return AboutResponse(
+    return AboutResponse.model_construct(
         info=info,
         process=process_info,
         scheduler=scheduler_summary,
@@ -265,7 +266,7 @@ def meta() -> MetaResponse:
     Returns:
         dict[str, str]: The application metadata.
     """
-    return MetaResponse(version=__version__, git_hash=__git_hash__)
+    return MetaResponse.model_construct(version=__version__, git_hash=__git_hash__)
 
 
 @router.post(
@@ -294,7 +295,7 @@ def api_restart() -> RestartResponse:
     app_state.request_restart()
     scheduler.request_shutdown()
 
-    return RestartResponse(
+    return RestartResponse.model_construct(
         ok=True,
         message="Restart requested. AniBridge will restart shortly.",
     )

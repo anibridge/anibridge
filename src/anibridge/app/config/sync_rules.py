@@ -172,8 +172,11 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
             SyncRuleDefinition.model_validate(
                 {
                     "name": "Don't sync dropped or paused status changes",
-                    "if": 'computed.status in ("dropped", "paused")',
-                    "set": '"current" if current.status is None else current.status',
+                    "if": "computed.status in (ListStatus.DROPPED, ListStatus.PAUSED)",
+                    "set": (
+                        "ListStatus.CURRENT if current.status is None "
+                        "else current.status"
+                    ),
                 }
             ),
         ],
@@ -263,10 +266,11 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
                 {
                     "name": "Promote rewatch to repeating",
                     "if": (
-                        "current.status in ('completed', 'repeating') and "
-                        "computed.status == 'current'"
+                        "current.status in (ListStatus.COMPLETED, "
+                        "ListStatus.REPEATING) and "
+                        "computed.status == ListStatus.CURRENT"
                     ),
-                    "set": "'repeating'",
+                    "set": "ListStatus.REPEATING",
                 }
             )
         ],

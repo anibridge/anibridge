@@ -23,10 +23,10 @@ def test_context_namespace_normalizes_values_and_missing_access() -> None:
         missing_value=None,
     )
 
-    assert namespace["status"] == "current"
-    assert namespace.nested.status == "planning"
-    assert namespace["items"][0] == "completed"
-    assert namespace["items"][1].status == "dropped"
+    assert namespace["status"] == ListStatus.CURRENT
+    assert namespace.nested.status == ListStatus.PLANNING
+    assert namespace["items"][0] == ListStatus.COMPLETED
+    assert namespace["items"][1].status == ListStatus.DROPPED
     assert list(iter(namespace)) == ["status", "nested", "items"]
     assert len(namespace) == 3
 
@@ -78,7 +78,7 @@ def test_sync_rule_engine_reports_rule_state_and_invalid_status_outputs() -> Non
         computed_values={"progress": 2},
     ) == SyncRuleDecision(allowed=True, value=2)
 
-    with pytest.raises(ValueError, match="invalid status value"):
+    with pytest.raises(ValueError, match="must return a ListStatus or null"):
         engine.evaluate_field(
             field_name="status",
             current_values={"status": ListStatus.PLANNING},
@@ -87,15 +87,42 @@ def test_sync_rule_engine_reports_rule_state_and_invalid_status_outputs() -> Non
         )
 
 
-def test_sync_rule_engine_rejects_non_string_status_values() -> None:
-    """Status rules must resolve to strings, null, or ListStatus values."""
+def test_sync_rule_engine_rejects_non_enum_status_values() -> None:
+    """Status rules must resolve to ListStatus values or null."""
     engine = SyncRuleEngine(
         field_rules={"status": [{"set": 123}]},
     )
 
-    with pytest.raises(ValueError, match="must return a string or null"):
+    with pytest.raises(ValueError, match="must return a ListStatus or null"):
         engine.evaluate_field(
             field_name="status",
             current_values={"status": None},
             computed_values={"status": None},
         )
+
+
+def test_sync_rule_engine_supports_liststatus_class_in_status_rules() -> None:
+    """Status rules should evaluate ListStatus enum members directly."""
+    engine = SyncRuleEngine(
+        field_rules={
+            "status": [
+                {
+                    "name": "prevent regression",
+                    "if": (
+                        "current.status == ListStatus.COMPLETED and "
+                        "computed.status == ListStatus.CURRENT"
+                    ),
+                    "set": "ListStatus.COMPLETED",
+                }
+            ]
+        }
+    )
+
+    result = engine.evaluate_field(
+        field_name="status",
+        current_values={"status": ListStatus.COMPLETED},
+        computed_values={"status": ListStatus.CURRENT},
+    )
+
+    assert result.value == ListStatus.COMPLETED
+    assert result.reason == "prevent regression"

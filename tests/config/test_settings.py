@@ -153,7 +153,7 @@ def test_get_profile_raises_for_unknown_name(
 
 
 def test_sync_rules_accept_declarative_field_rules() -> None:
-    """Declarative sync rules should validate and preserve runtime aliases."""
+    """Declarative sync rules should validate and preserve runtime expressions."""
     rules = SyncRulesConfig.model_validate(
         {
             "vars": {
@@ -166,9 +166,10 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
                 {
                     "name": "Promote rewatch",
                     "if": (
-                        'current.status == "completed" and computed.status == "current"'
+                        "current.status == ListStatus.COMPLETED and "
+                        "computed.status == ListStatus.CURRENT"
                     ),
-                    "set": "repeating",
+                    "set": "ListStatus.REPEATING",
                 }
             ],
             "review": [
@@ -186,9 +187,10 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
     review_rules = cast(list[dict[str, object]], field_rules["review"])
 
     assert status_rules[0]["if"] == (
-        'current.status == "completed" and computed.status == "current"'
+        "current.status == ListStatus.COMPLETED and "
+        "computed.status == ListStatus.CURRENT"
     )
-    assert status_rules[0]["set"] == "repeating"
+    assert status_rules[0]["set"] == "ListStatus.REPEATING"
     assert "set" in review_rules[0]
     assert review_rules[0]["set"] is None
 
@@ -225,9 +227,11 @@ def test_sync_rules_disable_dropped_and_paused_template_adds_status_guard() -> N
     status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
 
     assert status_rules[0]["name"] == "Don't sync dropped or paused status changes"
-    assert status_rules[0]["if"] == 'computed.status in ("dropped", "paused")'
+    assert status_rules[0]["if"] == (
+        "computed.status in (ListStatus.DROPPED, ListStatus.PAUSED)"
+    )
     assert status_rules[0]["set"] == (
-        '"current" if current.status is None else current.status'
+        "ListStatus.CURRENT if current.status is None else current.status"
     )
 
 
@@ -243,9 +247,10 @@ def test_sync_rules_promote_rewatch_template_adds_status_promotion_rule() -> Non
 
     assert status_rules[0]["name"] == "Promote rewatch to repeating"
     assert status_rules[0]["if"] == (
-        "current.status in ('completed', 'repeating') and computed.status == 'current'"
+        "current.status in (ListStatus.COMPLETED, ListStatus.REPEATING) and "
+        "computed.status == ListStatus.CURRENT"
     )
-    assert status_rules[0]["set"] == "'repeating'"
+    assert status_rules[0]["set"] == "ListStatus.REPEATING"
 
 
 def test_sync_rules_disable_review_and_rating_template_overrides_defaults() -> None:

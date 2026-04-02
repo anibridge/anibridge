@@ -62,9 +62,22 @@ def history_manager(history_db_factory) -> SyncHistoryManager:
     )
 
 
+class FakeItem:
+    def __init__(self, key: str):
+        self.key = key
+        self.media_kind = MediaKind.MOVIE
+        self._section = SimpleNamespace(key="section-1")
+
+    def section(self):
+        return self._section
+
+    def media(self):
+        return self
+
+
 def _item(key: str = "lib1") -> Any:
-    section = SimpleNamespace(key="section-1")
-    return SimpleNamespace(key=key, media_kind=MediaKind.MOVIE, section=lambda: section)
+
+    return FakeItem(key)
 
 
 def test_stringify_info_value_and_normalize_info(

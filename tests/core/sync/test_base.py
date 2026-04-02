@@ -346,7 +346,7 @@ async def test_sync_media_does_not_hydrate_unused_ctx_media_fields(
             "status": [
                 {
                     "name": "status without ctx",
-                    "if": 'computed.status == "current"',
+                    "if": "computed.status == ListStatus.CURRENT",
                     "set": "computed.status",
                 }
             ]
@@ -1008,7 +1008,7 @@ async def test_sync_media_info_reports_rule_and_status_blocks(
             "progress": [
                 {
                     "name": "Freeze progress if status is planning",
-                    "if": "current.status == 'planning'",
+                    "if": "current.status == ListStatus.PLANNING",
                     "set": "current.progress",
                 }
             ],
@@ -1056,8 +1056,11 @@ async def test_sync_media_info_reports_applied_sync_rules(
             "status": [
                 {
                     "name": "Promote completed movie",
-                    "if": "computed.status == 'current' and computed.progress == 1",
-                    "set": "completed",
+                    "if": (
+                        "computed.status == ListStatus.CURRENT "
+                        "and computed.progress == 1"
+                    ),
+                    "set": "ListStatus.COMPLETED",
                 }
             ]
         },
@@ -1143,10 +1146,11 @@ async def test_sync_media_applies_declarative_rules(
                 {
                     "name": "Promote rewatch to completed",
                     "if": (
-                        'current.status in ("repeating", "completed") '
-                        'and computed.status == "current"'
+                        "current.status in (ListStatus.REPEATING, "
+                        "ListStatus.COMPLETED) and "
+                        "computed.status == ListStatus.CURRENT"
                     ),
-                    "set": "repeating",
+                    "set": "ListStatus.REPEATING",
                 }
             ],
             "review": [
@@ -1203,10 +1207,11 @@ async def test_sync_media_allows_vars_to_reference_missing_computed_fields(
                 {
                     "name": "Promote rewatch",
                     "if": (
-                        'not vars.has_review and current.status == "completed" '
-                        'and computed.status == "current"'
+                        "not vars.has_review and "
+                        "current.status == ListStatus.COMPLETED and "
+                        "computed.status == ListStatus.CURRENT"
                     ),
-                    "set": "repeating",
+                    "set": "ListStatus.REPEATING",
                 }
             ],
         },
@@ -1289,7 +1294,7 @@ async def test_sync_media_exposes_ctx_item_child_and_grandchildren(
                         "and ctx.grandchildren[1].index == 2 "
                         "and ctx.grandchildren[0].season_index == 1"
                     ),
-                    "set": "completed",
+                    "set": "ListStatus.COMPLETED",
                 }
             ]
         },

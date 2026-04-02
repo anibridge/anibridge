@@ -34,6 +34,10 @@ _SAFE_FUNCTIONS: dict[str, Any] = {
     "timedelta": timedelta,
 }
 
+_SAFE_GLOBALS: dict[str, Any] = {
+    "ListStatus": ListStatus,
+}
+
 _SAFE_METHODS = {
     "astimezone",
     "capitalize",
@@ -62,11 +66,18 @@ _ALIASES = {
     "none": None,
     "null": None,
     "true": True,
-    **{status.value: status.value for status in ListStatus},
 }
 
 _ALLOWED_NAMES = frozenset(
-    {"computed", "current", "ctx", "vars", *_SAFE_FUNCTIONS, *_ALIASES}
+    {
+        "computed",
+        "current",
+        "ctx",
+        "vars",
+        *_SAFE_FUNCTIONS,
+        *_SAFE_GLOBALS,
+        *_ALIASES,
+    }
 )
 _ALLOWED_NODES = (
     ast.Add,
@@ -148,8 +159,6 @@ class _ContextNamespace(Mapping[str, Any]):
 
     def _normalize(self, value: Any) -> Any:
         """Normalize values before exposing them to expressions."""
-        if isinstance(value, ListStatus):
-            return value.value
         if isinstance(value, Mapping):
             return _ContextNamespace(value, missing_value=self._missing_value)
         if isinstance(value, Sequence) and not isinstance(
@@ -424,6 +433,7 @@ class SyncRuleEngine:
         variables: dict[str, Any] = {}
         base_environment: dict[str, Any] = {
             **_SAFE_FUNCTIONS,
+            **_SAFE_GLOBALS,
             **_ALIASES,
             "current": current,
             "computed": computed,
@@ -458,14 +468,7 @@ class SyncRuleEngine:
         )
         if field_name != "status" or value is None or isinstance(value, ListStatus):
             return value
-        if isinstance(value, str):
-            try:
-                return ListStatus(value)
-            except ValueError as exc:
-                raise ValueError(
-                    f"invalid status value produced by sync rule: {value!r}"
-                ) from exc
         raise ValueError(
-            "sync rule for status must return a string or null, got "
+            "sync rule for status must return a ListStatus or null, got "
             f"{type(value).__name__}"
         )

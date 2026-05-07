@@ -573,6 +573,28 @@ class SchedulerClient:
             _reinitialize, timeout_=_MAINTENANCE_TIMEOUT
         )
 
+    async def remove_profile(self, profile_name: str) -> None:
+        """Stop and remove a single profile bridge and scheduler."""
+
+        async def _remove() -> None:
+            log.info("[%s] Removing profile from runtime scheduler", profile_name)
+
+            existing_scheduler = self.profile_schedulers.pop(profile_name, None)
+            if existing_scheduler is not None:
+                await existing_scheduler.stop(set_stop_event=False)
+
+            existing_bridge = self.bridge_clients.pop(profile_name, None)
+            if existing_bridge is not None:
+                await existing_bridge.close()
+
+            self.failed_profile_errors.pop(profile_name, None)
+            self.get_profiles_for_library_provider.cache_clear()
+            log.success("[%s] Profile removed from runtime scheduler", profile_name)
+
+        await self._sync_coordinator.run_maintenance(
+            _remove, timeout_=_MAINTENANCE_TIMEOUT
+        )
+
     @lru_cache(maxsize=128)
     def get_profiles_for_library_provider(self, namespace: str) -> Sequence[str]:
         """Find all profile names and their configs by provider account id.

@@ -2,16 +2,51 @@
 
 import asyncio
 from collections.abc import Mapping
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 
 import yaml
 from anibridge.utils.cache import cache
+from pydantic import BaseModel, SecretStr
 
 from anibridge.app import log
-from anibridge.app.config.settings import AnibridgeConfig, find_yaml_config_file
+from anibridge.app.config.settings import (
+    AnibridgeConfig,
+    find_yaml_config_file,
+    get_config,
+)
+from anibridge.app.exceptions import SchedulerUnavailableError
+from anibridge.app.web.state import get_app_state
 
 __all__ = ["ConfigurationService", "get_configuration_service"]
+
+_RESTART_REQUIRED_FIELDS: tuple[str, ...] = (
+    "log_level",
+    "provider_classes",
+    "threads",
+    "web.enabled",
+    "web.host",
+    "web.port",
+    "web.basic_auth",
+)
+
+
+def _normalize_value(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return {
+            field_name: _normalize_value(getattr(value, field_name))
+            for field_name in value.__class__.model_fields
+        }
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _normalize_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_value(item) for item in value]
+    return value
 
 
 class ConfigurationService:
@@ -26,12 +61,6 @@ class ConfigurationService:
     def config_path(self) -> Path:
         """Return the resolved configuration path."""
         return self._config_path
-
-    def _load_raw_text(self) -> str:
-        """Return the raw YAML content of the configuration file."""
-        if not self._config_path.exists():
-            return ""
-        return self._config_path.read_text(encoding="utf-8")
 
     def _get_mtime_ms(self) -> int | None:
         """Return the modification time of the configuration file in milliseconds."""
@@ -62,17 +91,89 @@ class ConfigurationService:
     def load_document_text(self) -> dict[str, Any]:
         """Return the raw YAML content alongside file metadata."""
         file_exists = self._config_path.exists()
-        content = self._load_raw_text()
         return {
             "config_path": str(self._config_path),
             "file_exists": file_exists,
-            "content": content,
+            "content": ""
+            if not file_exists
+            else self._config_path.read_text(encoding="utf-8"),
             "mtime": self._get_mtime_ms(),
         }
 
+    async def _apply_runtime_config(self, next_config: AnibridgeConfig) -> bool:
+        runtime_config = get_config()
+        scheduler = get_app_state().scheduler
+
+        requires_restart = any(
+            _normalize_value(attrgetter(field_path)(runtime_config))
+            != _normalize_value(attrgetter(field_path)(next_config))
+            for field_path in _RESTART_REQUIRED_FIELDS
+        )
+        current_profiles = {
+            profile_name: _normalize_value(profile)
+            for profile_name, profile in runtime_config.profiles.items()
+        }
+        next_profiles = {
+            profile_name: _normalize_value(profile)
+            for profile_name, profile in next_config.profiles.items()
+        }
+
+        removed_profiles = sorted(set(current_profiles) - set(next_profiles))
+        changed_profiles = sorted(
+            profile_name
+            for profile_name, profile_snapshot in next_profiles.items()
+            if current_profiles.get(profile_name) != profile_snapshot
+        )
+
+        mappings_url_changed = runtime_config.mappings_url != next_config.mappings_url
+        global_defaults_changed = _normalize_value(
+            runtime_config.global_config
+        ) != _normalize_value(next_config.global_config)
+
+        if global_defaults_changed:
+            runtime_config.global_config = next_config.global_config.model_copy(
+                deep=True
+            )
+
+        runtime_config.mappings_url = next_config.mappings_url
+        runtime_config.web.allow_config_without_auth = (
+            next_config.web.allow_config_without_auth
+        )
+
+        for profile_name in removed_profiles:
+            runtime_config.profiles.pop(profile_name, None)
+
+        for profile_name in changed_profiles:
+            profile = next_config.get_profile(profile_name).model_copy(deep=True)
+            profile._parent = runtime_config
+            runtime_config.profiles[profile_name] = profile
+
+        if scheduler is None:
+            return requires_restart
+
+        for profile_name in removed_profiles:
+            await scheduler.remove_profile(profile_name)
+
+        for profile_name in changed_profiles:
+            await scheduler.reinitialize_profile(profile_name)
+
+        if mappings_url_changed:
+            scheduler.shared_animap_client.upstream_url = next_config.mappings_url
+            scheduler.shared_animap_client.mappings_client.upstream_url = (
+                next_config.mappings_url
+            )
+            try:
+                await scheduler.trigger_database_sync(source="api:config:mappings_url")
+            except TimeoutError as exc:
+                raise SchedulerUnavailableError(
+                    "Timed out while refreshing mappings after config update"
+                ) from exc
+
+        return requires_restart
+
     async def save_document_text(
         self, content: str, *, expected_mtime: int | None = None
-    ) -> tuple[AnibridgeConfig, int | None]:
+    ) -> tuple[AnibridgeConfig, bool, int | None]:
         """Persist YAML text after validation and return the updated config."""
         async with self._lock:
             if expected_mtime is not None:
@@ -93,7 +194,8 @@ class ConfigurationService:
                 f"{self._config_path}",
             )
 
-            return config, self._get_mtime_ms()
+            requires_restart = await self._apply_runtime_config(config)
+            return config, requires_restart, self._get_mtime_ms()
 
 
 @cache

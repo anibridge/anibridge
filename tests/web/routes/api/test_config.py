@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import BaseModel, ValidationError
 
+from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.routes.api import config as config_api_module
 
 
@@ -145,6 +146,7 @@ async def test_update_configuration_success_and_error_translation(
             assert expected_mtime == 123
             return (
                 type("Cfg", (), {"profiles": {"b": object(), "a": object()}})(),
+                False,
                 456,
             )
 
@@ -153,12 +155,14 @@ async def test_update_configuration_success_and_error_translation(
     )
     response = await config_api_module.update_configuration(request)
     assert response.profiles == ["a", "b"]
+    assert response.requires_restart is False
     assert response.mtime == 456
 
     for exc, status_code in [
         (FileExistsError("stale"), 409),
         (ValueError("bad"), 400),
         (_validation_error(), 422),
+        (SchedulerUnavailableError("busy"), 503),
     ]:
 
         class _ErrorService:

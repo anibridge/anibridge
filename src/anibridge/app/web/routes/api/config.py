@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
 
 from anibridge.app.config.settings import AnibridgeConfig, get_config
+from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.services.configuration_service import get_configuration_service
 
 __all__ = ["router"]
@@ -94,7 +95,11 @@ async def update_configuration(
         ConfigUpdateResponse: The result of the update operation.
     """
     try:
-        config, mtime = await get_configuration_service().save_document_text(
+        (
+            config,
+            requires_restart,
+            mtime,
+        ) = await get_configuration_service().save_document_text(
             request.content,
             expected_mtime=request.expected_mtime,
         )
@@ -108,6 +113,11 @@ async def update_configuration(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=exc.errors(),
         ) from exc
+    except SchedulerUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -117,7 +127,7 @@ async def update_configuration(
     return ConfigUpdateResponse(
         ok=True,
         profiles=sorted(config.profiles.keys()),
-        requires_restart=True,
+        requires_restart=requires_restart,
         mtime=mtime,
     )
 

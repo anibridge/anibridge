@@ -153,13 +153,15 @@
 
         saving = true;
         try {
-            await apiJson<ConfigUpdateResponse>("/api/config", {
+            const response = await apiJson<ConfigUpdateResponse>("/api/config", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
             toast(
-                "Configuration saved. Restart AniBridge to apply changes.",
+                response.requires_restart
+                    ? "Configuration saved. A restart is required to apply all changes."
+                    : "Configuration saved and applied.",
                 "success",
             );
             await loadConfig();

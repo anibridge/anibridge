@@ -15,10 +15,11 @@
         type ColumnConfig,
     } from "$lib/components/mappings/columns";
     import EditModal from "$lib/components/mappings/edit-modal.svelte";
+    import IncludesModal from "$lib/components/mappings/includes-modal.svelte";
     import MappingsTable from "$lib/components/mappings/mappings-table.svelte";
     import SearchBar from "$lib/components/mappings/tool-bar.svelte";
     import Pagination from "$lib/components/pagination.svelte";
-    import type { Mapping } from "$lib/types/api";
+    import type { Mapping, MappingConfig } from "$lib/types/api";
     import { apiFetch, isAbortError } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
 
@@ -36,6 +37,7 @@
     let editorOpen = $state(false);
     let editorMode = $state<"create" | "edit">("create");
     let editorTarget = $state<Mapping | null>(null);
+    let includesOpen = $state(false);
 
     let pendingReplaceState: boolean | null = null;
     let searchBarKey = $state(0);
@@ -130,6 +132,10 @@
         editorOpen = true;
     }
 
+    function openIncludesEditor() {
+        includesOpen = true;
+    }
+
     function handleEdit({ mapping }: { mapping: Mapping }) {
         editorMode = "edit";
         editorTarget = mapping;
@@ -138,6 +144,13 @@
 
     async function handleSaved() {
         editorOpen = false;
+        clearCapabilitiesCache();
+        searchBarKey += 1;
+        await load();
+    }
+
+    async function handleIncludesSaved(_config: MappingConfig) {
+        includesOpen = false;
         clearCapabilitiesCache();
         searchBarKey += 1;
         await load();
@@ -255,6 +268,7 @@
                 onLoad={load}
                 onCancel={cancelLoad}
                 onCreate={openCreateEditor}
+                onIncludes={openIncludesEditor}
                 onSubmit={handleSearchSubmit} />
         {/key}
     </div>
@@ -358,3 +372,7 @@
     mode={editorMode}
     mapping={editorTarget}
     onSaved={handleSaved} />
+
+<IncludesModal
+    bind:open={includesOpen}
+    onSaved={handleIncludesSaved} />

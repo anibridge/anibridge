@@ -55,6 +55,10 @@ export interface MappingOverridePayload {
     targets: TargetPayload[];
 }
 
+export interface MappingConfigPayload {
+    includes: string[];
+}
+
 export type RangeOrigin = "upstream" | "custom";
 export type TargetOrigin = "upstream" | "custom" | "mixed";
 
@@ -90,6 +94,13 @@ export interface MappingDetail {
     scope: string | null;
     layers: MappingLayers;
     targets: MappingTarget[];
+}
+
+export interface MappingConfig {
+    mappings_url: string;
+    includes: string[];
+    path: string;
+    format: string;
 }
 
 export interface ListMappingsResponse {

@@ -69,7 +69,22 @@ def test_load_document_text_reports_missing_file(tmp_path: Path):
     assert payload["config_path"] == str(config_path)
     assert payload["file_exists"] is False
     assert payload["content"] == ""
+    assert payload["settings"] == {}
+    assert payload["settings_error"] is None
     assert payload["mtime"] is None
+
+
+def test_load_document_text_reports_structured_parse_errors(tmp_path: Path):
+    """Broken YAML should still load raw text while surfacing a UI parse error."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("profiles:\n  default: [\n", encoding="utf-8")
+    service = ConfigurationService(config_path=config_path)
+
+    payload = service.load_document_text()
+
+    assert payload["content"] == "profiles:\n  default: [\n"
+    assert payload["settings"] is None
+    assert payload["settings_error"] is not None
 
 
 @pytest.mark.asyncio
@@ -172,6 +187,55 @@ async def test_save_document_text_applies_live_profile_and_mapping_updates(
         scheduler.shared_animap_client.mappings_client.upstream_url
         == "https://example.com/mappings-b.json"
     )
+
+
+@pytest.mark.asyncio
+async def test_save_settings_payload_rewrites_yaml_and_discards_comments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Structured saves should rewrite the YAML document without preserving comments."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "# top comment\n"
+        "mappings_url: https://example.com/mappings-a.json # keep me\n"
+        "profiles:\n"
+        "    default: # profile comment\n"
+        "        library_provider: mocklib # lib comment\n"
+        "        list_provider: mocklist\n",
+        encoding="utf-8",
+    )
+    service = ConfigurationService(config_path=config_path)
+    runtime_config = _runtime_config(config_path.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(
+        configuration_service_module, "get_config", lambda: runtime_config
+    )
+    monkeypatch.setattr(
+        configuration_service_module,
+        "get_app_state",
+        lambda: type("State", (), {"scheduler": None})(),
+    )
+
+    _, requires_restart, _ = await service.save_settings_payload(
+        {
+            "mappings_url": "https://example.com/mappings-b.json",
+            "profiles": {
+                "default": {
+                    "library_provider": "mocklib",
+                    "list_provider": "mocklist",
+                    "scan_interval": 120,
+                }
+            },
+        }
+    )
+
+    saved = config_path.read_text(encoding="utf-8")
+    assert requires_restart is False
+    assert "# top comment" not in saved
+    assert "# keep me" not in saved
+    assert "# profile comment" not in saved
+    assert "# lib comment" not in saved
+    assert "scan_interval: 120" in saved
 
 
 @pytest.mark.asyncio

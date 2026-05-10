@@ -46,6 +46,32 @@ class ConfigDocumentResponse(msgspec.Struct):
             examples=[{"title": "AnibridgeConfig", "type": "object"}],
         ),
     ]
+    settings: (
+        Annotated[
+            dict[str, object],
+            msgspec.Meta(
+                description=(
+                    "Parsed configuration mapping for the guided UI. Null when the "
+                    "current YAML cannot be parsed into a mapping."
+                ),
+                examples=[{"global_config": {}, "profiles": {}}],
+            ),
+        ]
+        | None
+    ) = None
+    settings_error: (
+        Annotated[
+            str,
+            msgspec.Meta(
+                description=(
+                    "Parsing error for the guided UI when the current YAML cannot be "
+                    "represented as structured settings."
+                ),
+                examples=["Invalid YAML syntax: expected <block end>"],
+            ),
+        ]
+        | None
+    ) = None
     mtime: (
         Annotated[
             int,
@@ -78,6 +104,30 @@ class ConfigDocumentUpdateRequest(msgspec.Struct):
                 description=(
                     "Last known file modification time used for "
                     "optimistic concurrency checks."
+                ),
+                examples=[1715179200000],
+            ),
+        ]
+        | None
+    ) = None
+
+
+class ConfigStructuredUpdateRequest(msgspec.Struct):
+    settings: Annotated[
+        dict[str, object],
+        msgspec.Meta(
+            description="Structured AniBridge configuration payload for the guided UI.",
+            examples=[{"global_config": {}, "profiles": {}}],
+        ),
+    ]
+    expected_mtime: (
+        Annotated[
+            int,
+            msgspec.Meta(
+                ge=0,
+                description=(
+                    "Last known file modification time used for optimistic "
+                    "concurrency checks."
                 ),
                 examples=[1715179200000],
             ),
@@ -219,18 +269,62 @@ async def update_configuration(
     )
 
 
-@get(path="/openapi.json", sync_to_thread=True)
-def get_openapi_schema() -> dict[str, object]:
-    """Return the OpenAPI schema for the configuration API.
+@post(path="/structured", status_code=200)
+async def update_configuration_structured(
+    data: Annotated[ConfigStructuredUpdateRequest, Body()],
+) -> ConfigUpdateResponse:
+    """Persist the provided structured configuration payload.
+
+    Args:
+        data (ConfigStructuredUpdateRequest): The structured configuration update.
 
     Returns:
-        dict: OpenAPI schema
+        ConfigUpdateResponse: The result of the update operation.
     """
     require_config_api_access()
-    return AnibridgeConfig.model_json_schema()
+    try:
+        (
+            config,
+            requires_restart,
+            mtime,
+        ) = await get_configuration_service().save_settings_payload(
+            data.settings,
+            expected_mtime=data.expected_mtime,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc.errors()),
+        ) from exc
+    except SchedulerUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return ConfigUpdateResponse(
+        ok=True,
+        profiles=sorted(config.profiles.keys()),
+        requires_restart=requires_restart,
+        mtime=mtime,
+    )
 
 
 router = Router(
     path="/config",
-    route_handlers=[get_configuration, update_configuration, get_openapi_schema],
+    route_handlers=[
+        get_configuration,
+        update_configuration,
+        update_configuration_structured,
+    ],
 )

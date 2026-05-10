@@ -34,7 +34,7 @@ def test_config_api_access_policy(
     )
 
     response = api_client_factory(config_api_module.router, "/api/config").get(
-        "/api/config/openapi.json"
+        "/api/config"
     )
 
     assert response.status_code == expected_status
@@ -90,6 +90,8 @@ def test_get_configuration_success_and_error_translation(
                     "config_path": "/tmp/config.yaml",
                     "file_exists": True,
                     "content": "profiles: {}",
+                    "settings": {"profiles": {}},
+                    "settings_error": None,
                     "mtime": 123,
                 }
             },
@@ -98,6 +100,7 @@ def test_get_configuration_success_and_error_translation(
 
     response = get_configuration()
     assert response.file_exists is True
+    assert response.settings == {"profiles": {}}
     assert "title" in response.schema
 
     monkeypatch.setattr(
@@ -182,4 +185,59 @@ async def test_update_configuration_success_and_error_translation(
         )
         with pytest.raises(HTTPException) as excinfo:
             await config_api_module.update_configuration.fn(request)
+        assert excinfo.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_update_configuration_structured_success_and_error_translation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = config_api_module.ConfigStructuredUpdateRequest(
+        settings={"profiles": {}}, expected_mtime=123
+    )
+
+    class _Service:
+        async def save_settings_payload(
+            self,
+            settings: dict[str, object],
+            expected_mtime: int | None,
+        ):
+            assert settings == {"profiles": {}}
+            assert expected_mtime == 123
+            return (
+                type("Cfg", (), {"profiles": {"b": object(), "a": object()}})(),
+                True,
+                456,
+            )
+
+    monkeypatch.setattr(
+        config_api_module, "get_configuration_service", lambda: _Service()
+    )
+    response = await config_api_module.update_configuration_structured.fn(request)
+    assert response.profiles == ["a", "b"]
+    assert response.requires_restart is True
+    assert response.mtime == 456
+
+    for exc, status_code in [
+        (FileExistsError("stale"), 409),
+        (ValueError("bad"), 400),
+        (_validation_error(), 422),
+        (SchedulerUnavailableError("busy"), 503),
+    ]:
+
+        class _ErrorService:
+            async def save_settings_payload(
+                self,
+                settings: dict[str, object],
+                expected_mtime: int | None,
+                *,
+                error=exc,
+            ):
+                raise error
+
+        monkeypatch.setattr(
+            config_api_module, "get_configuration_service", lambda: _ErrorService()
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            await config_api_module.update_configuration_structured.fn(request)
         assert excinfo.value.status_code == status_code

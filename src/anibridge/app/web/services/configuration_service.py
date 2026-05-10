@@ -12,6 +12,7 @@ from pydantic import BaseModel, SecretStr
 
 from anibridge.app.config.settings import (
     AnibridgeConfig,
+    _ConfigDumper,
     find_yaml_config_file,
     get_config,
 )
@@ -40,6 +41,8 @@ class ConfigDocumentPayload(TypedDict):
     file_exists: bool
     content: str
     mtime: int | None
+    settings: dict[str, object] | None
+    settings_error: str | None
 
 
 def _normalize_value(value: object) -> object:
@@ -98,16 +101,43 @@ class ConfigurationService:
         except Exception as exc:
             raise ValueError(f"Unable to parse configuration: {exc}") from exc
 
+    def _build_settings_snapshot(
+        self, content: str
+    ) -> tuple[dict[str, object] | None, str | None]:
+        """Parse the config YAML with error logging."""
+        if not content.strip():
+            return {}, None
+        try:
+            payload = self._parse_yaml(content)
+            return dict(payload), None
+        except ValueError as exc:
+            return None, str(exc)
+
+    def _render_settings_payload(self, settings: Mapping[str, object]) -> str:
+        """Render structured settings back into YAML format."""
+        content = yaml.dump(
+            dict(settings),
+            Dumper=_ConfigDumper,
+            sort_keys=False,
+            allow_unicode=False,
+            default_flow_style=False,
+        )
+        return content if content.endswith("\n") else f"{content}\n"
+
     def load_document_text(self) -> ConfigDocumentPayload:
         """Return the raw YAML content alongside file metadata."""
         file_exists = self._config_path.exists()
+        content = (
+            "" if not file_exists else self._config_path.read_text(encoding="utf-8")
+        )
+        settings, settings_error = self._build_settings_snapshot(content)
         return {
             "config_path": str(self._config_path),
             "file_exists": file_exists,
-            "content": ""
-            if not file_exists
-            else self._config_path.read_text(encoding="utf-8"),
+            "content": content,
             "mtime": self._get_mtime_ms(),
+            "settings": settings,
+            "settings_error": settings_error,
         }
 
     async def _apply_runtime_config(self, next_config: AnibridgeConfig) -> bool:
@@ -199,6 +229,35 @@ class ConfigurationService:
             self._config_path.parent.mkdir(parents=True, exist_ok=True)
             normalized_content = content if content.endswith("\n") else f"{content}\n"
             self._config_path.write_text(normalized_content, encoding="utf-8")
+            log.info(
+                f"Configuration updated with {len(config.profiles)} profile(s) at "
+                f"{self._config_path}",
+            )
+
+            requires_restart = await self._apply_runtime_config(config)
+            return config, requires_restart, self._get_mtime_ms()
+
+    async def save_settings_payload(
+        self,
+        settings: Mapping[str, object],
+        *,
+        expected_mtime: int | None = None,
+    ) -> tuple[AnibridgeConfig, bool, int | None]:
+        """Persist structured settings by rewriting the YAML document."""
+        async with self._lock:
+            if expected_mtime is not None:
+                current_mtime = self._get_mtime_ms()
+                if current_mtime is not None and current_mtime != expected_mtime:
+                    raise FileExistsError(
+                        "Configuration file modified on disk; reload to continue."
+                    )
+
+            payload = {str(key): value for key, value in settings.items()}
+            config = self._build_config_instance(payload)
+            rendered = self._render_settings_payload(payload)
+
+            self._config_path.parent.mkdir(parents=True, exist_ok=True)
+            self._config_path.write_text(rendered, encoding="utf-8")
             log.info(
                 f"Configuration updated with {len(config.profiles)} profile(s) at "
                 f"{self._config_path}",

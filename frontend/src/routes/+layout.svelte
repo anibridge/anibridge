@@ -23,7 +23,7 @@
     import { Tooltip } from "bits-ui";
 
     import ToastHost from "$lib/components/toast-host.svelte";
-    import { apiFetch } from "$lib/utils/api";
+    import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
 
     let { children } = $props();
     let version = $state("?");
@@ -54,8 +54,7 @@
         try {
             ws?.close();
         } catch {}
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        ws = new WebSocket(proto + "//" + location.host + "/ws/status");
+        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
         ws.onopen = () => {
             isWsOpen = true;
         };

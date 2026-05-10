@@ -26,7 +26,7 @@
         HistoryItem,
         StatusResponse,
     } from "$lib/types/api";
-    import { apiFetch, apiJson } from "$lib/utils/api";
+    import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
 
     const { params } = $props<{ params: { profile: string } }>();
@@ -431,12 +431,11 @@
         } catch {}
         resetWsReconnectTimer();
 
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
         const query = new SvelteURLSearchParams();
         if (outcomeFilter) query.set("outcome", outcomeFilter);
         const querySuffix = query.toString() ? `?${query}` : "";
         ws = new WebSocket(
-            `${proto}//${location.host}/ws/history/${params.profile}${querySuffix}`,
+            buildWebSocketUrl(`/ws/history/${params.profile}${querySuffix}`),
         );
         ws.onmessage = (ev) => {
             try {
@@ -462,8 +461,7 @@
         try {
             statusWs?.close();
         } catch {}
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        statusWs = new WebSocket(`${proto}//${location.host}/ws/status`);
+        statusWs = new WebSocket(buildWebSocketUrl("/ws/status"));
         statusWs.onmessage = (ev) => {
             try {
                 const data = JSON.parse(ev.data);

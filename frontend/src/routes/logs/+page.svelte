@@ -17,7 +17,7 @@
     import { Tabs } from "bits-ui";
 
     import type { LogEntry, LogFile } from "$lib/types/api";
-    import { apiFetch } from "$lib/utils/api";
+    import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
 
     let tab = $state<"live" | "history">("live");
@@ -122,8 +122,7 @@
         try {
             ws?.close();
         } catch {}
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        ws = new WebSocket(proto + "//" + location.host + "/ws/logs");
+        ws = new WebSocket(buildWebSocketUrl("/ws/logs"));
         ws.onopen = () => {
             isWsOpen = true;
         };

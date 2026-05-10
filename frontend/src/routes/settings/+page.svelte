@@ -22,7 +22,7 @@
         setAniListTitleLang,
         type TitleLanguage,
     } from "$lib/utils/anilist";
-    import { apiFetch, apiJson } from "$lib/utils/api";
+    import { apiFetch, apiJson, buildAppPath } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
 
     let loading = $state(true);
@@ -69,7 +69,7 @@
     }
 
     async function checkServerHealth(): Promise<boolean> {
-        const response = await fetchWithTimeout(`/livez?t=${Date.now()}`, {
+        const response = await fetchWithTimeout(buildAppPath(`/livez?t=${Date.now()}`), {
             headers: { Accept: "application/json" },
         });
         if (!response.ok) return false;

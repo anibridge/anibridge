@@ -15,7 +15,7 @@
     import { goto } from "$app/navigation";
     import { resolve } from "$app/paths";
     import type { ProfileStatus, StatusResponse } from "$lib/types/api";
-    import { apiFetch, apiJson } from "$lib/utils/api";
+    import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
 
     let profiles: StatusResponse["profiles"] = $state({});
@@ -91,9 +91,7 @@
         try {
             ws?.close();
         } catch {}
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        const url = `${proto}//${location.host}/ws/status`;
-        ws = new WebSocket(url);
+        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
         ws.onmessage = (ev) => {
             try {
                 const data = JSON.parse(ev.data);

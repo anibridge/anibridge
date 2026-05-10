@@ -69,9 +69,10 @@
     }
 
     async function checkServerHealth(): Promise<boolean> {
-        const response = await fetchWithTimeout(buildAppPath(`/livez?t=${Date.now()}`), {
-            headers: { Accept: "application/json" },
-        });
+        const response = await fetchWithTimeout(
+            buildAppPath(`/livez?t=${Date.now()}`),
+            { headers: { Accept: "application/json" } },
+        );
         if (!response.ok) return false;
 
         const payload = (await response.json().catch(() => null)) as {

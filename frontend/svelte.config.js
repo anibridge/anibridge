@@ -6,7 +6,10 @@ const config = {
     // Consult https://svelte.dev/docs/kit/integrations
     // for more information about preprocessors
     preprocess: vitePreprocess(),
-    kit: { adapter: adapter({ fallback: "index.html", strict: false }) },
+    kit: {
+        adapter: adapter({ fallback: "index.html", strict: false }),
+        paths: { relative: true },
+    },
 };
 
 export default config;

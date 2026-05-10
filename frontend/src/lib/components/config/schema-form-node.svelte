@@ -370,7 +370,8 @@
                 objectValue[key],
             )}
             {@const extraEntryCanAdd =
-                getAdditionalPropertiesSchema(extraEntrySchema, rootSchema) !== null}
+                getAdditionalPropertiesSchema(extraEntryResolvedSchema, rootSchema) !==
+                null}
             {@const extraEntryIsArray = extraEntryResolvedSchema.type === "array"}
             {@const extraEntryUnionOptions = getAnyOfOptions(
                 extraEntrySchema,
@@ -403,7 +404,7 @@
                                         : addObjectEntry(
                                               [...path, key],
                                               objectValue[key],
-                                              extraEntrySchema,
+                                              extraEntryResolvedSchema,
                                               "New entry name",
                                           )}>
                                 <CirclePlus class="inline h-4 w-4" />

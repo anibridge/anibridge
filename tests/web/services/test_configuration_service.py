@@ -242,6 +242,43 @@ async def test_save_document_text_marks_nested_restart_only_fields_pending(
 
 
 @pytest.mark.asyncio
+async def test_save_document_text_marks_path_prefix_restart_pending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Changing the web path prefix should require a restart."""
+    config_path = tmp_path / "config.yaml"
+    service = ConfigurationService(config_path=config_path)
+
+    initial_text = _config_text()
+    updated_text = (
+        "mappings_url: https://example.com/mappings-a.json\n"
+        "web:\n"
+        "  path_prefix: /anibridge\n"
+        "profiles:\n"
+        "  default:\n"
+        "    library_provider: mocklib\n"
+        "    list_provider: mocklist\n"
+    )
+    runtime_config = _runtime_config(initial_text)
+    scheduler = _SchedulerStub()
+
+    monkeypatch.setattr(
+        configuration_service_module, "get_config", lambda: runtime_config
+    )
+    monkeypatch.setattr(
+        configuration_service_module,
+        "get_app_state",
+        lambda: type("State", (), {"scheduler": scheduler})(),
+    )
+
+    _, requires_restart, _ = await service.save_document_text(updated_text)
+
+    assert requires_restart is True
+    assert runtime_config.web.path_prefix == ""
+    assert scheduler.reinitialized_profiles == []
+
+
+@pytest.mark.asyncio
 async def test_save_document_text_adds_and_removes_profiles_live(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

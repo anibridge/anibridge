@@ -7,7 +7,7 @@ from typing import Any, Literal, get_args, get_origin
 
 import yaml
 from anibridge.utils.cache import cache, lru_cache
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic.json_schema import (
     DEFAULT_REF_TEMPLATE,
     GenerateJsonSchema,
@@ -125,6 +125,10 @@ class WebConfig(BaseModel):
     enabled: bool = Field(default=True, description="Enable the AniBridge web server")
     host: str = Field(default="", description="Host for the web server")
     port: int = Field(default=4848, description="Port for the web server")
+    path_prefix: str = Field(
+        default="",
+        description="Web serverpath prefix that AniBridge should be served from",
+    )
     allow_config_without_auth: bool = Field(
         default=False,
         description=(
@@ -137,6 +141,22 @@ class WebConfig(BaseModel):
     basic_auth: BasicAuthConfig = Field(
         default_factory=BasicAuthConfig, description="Authentication settings"
     )
+
+    @field_validator("path_prefix", mode="before")
+    @classmethod
+    def normalize_path_prefix(cls, value: object) -> object:
+        """Normalize optional path prefixes to a root-relative form."""
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        if not normalized or normalized == "/":
+            return ""
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        return normalized.rstrip("/")
 
     @property
     def has_auth(self) -> bool:

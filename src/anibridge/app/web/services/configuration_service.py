@@ -29,6 +29,7 @@ _RESTART_REQUIRED_FIELDS: tuple[str, ...] = (
     "threads",
     "web.enabled",
     "web.host",
+    "web.path_prefix",
     "web.port",
     "web.basic_auth",
 )

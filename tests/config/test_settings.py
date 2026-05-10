@@ -88,6 +88,22 @@ def test_config_creates_default_profile_from_globals() -> None:
     assert profile.library_provider_config["plex"]["sections"] == ["Anime"]
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param("", "", id="empty"),
+        pytest.param("/", "", id="root"),
+        pytest.param("anibridge", "/anibridge", id="adds-leading-slash"),
+        pytest.param("/anibridge/", "/anibridge", id="strips-trailing-slash"),
+        pytest.param(" /nested/path/ ", "/nested/path", id="trims-whitespace"),
+    ],
+)
+def test_web_config_normalizes_path_prefix(raw: str, expected: str) -> None:
+    config = WebConfig(path_prefix=raw)
+
+    assert config.path_prefix == expected
+
+
 def test_config_profile_inherits_global_values() -> None:
     """Test that a profile inherits global settings from AnibridgeConfig."""
     config = AnibridgeConfig(

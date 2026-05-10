@@ -10,11 +10,11 @@
         getArrayItemSchema,
         getObjectProperties,
         getPreferredSchema,
-        getPrimitiveTypes,
         getRequiredKeys,
         humanizeKey,
         makeDefaultValue,
         resolveSchema,
+        schemaMatchesValue,
         type JsonPath,
         type SchemaObject,
     } from "./schema-form";
@@ -30,6 +30,8 @@
         depth?: number;
         showHeader?: boolean;
         addLabel?: string;
+        suppressHeaderlessAddAction?: boolean;
+        suppressHeaderlessUnionSelector?: boolean;
         onChange: (path: JsonPath, value: unknown) => void;
         onDelete?: (path: JsonPath) => void;
     }
@@ -44,22 +46,20 @@
         depth = 0,
         showHeader = true,
         addLabel = undefined,
+        suppressHeaderlessAddAction = false,
+        suppressHeaderlessUnionSelector = false,
         onChange,
         onDelete = undefined,
     }: Props = $props();
 
-    function schemaMatchesValue(option: SchemaObject, candidate: unknown): boolean {
-        if (candidate === null) return option.type === "null";
-        if (Array.isArray(candidate)) return option.type === "array";
-        if (typeof candidate === "boolean") return option.type === "boolean";
-        if (typeof candidate === "number") {
-            return option.type === "number" || option.type === "integer";
-        }
-        if (typeof candidate === "string") return option.type === "string";
-        if (candidate && typeof candidate === "object") {
-            return option.type === "object" || typeof option.properties === "object";
-        }
-        return false;
+    const unionSelectorClass =
+        "flex max-w-full flex-wrap items-center rounded-md border border-slate-700/80 bg-slate-900/80 p-0.5";
+
+    function getUnionIndex(options: SchemaObject[], candidate: unknown): number {
+        return Math.max(
+            options.findIndex((option) => schemaMatchesValue(option, candidate)),
+            options.length > 0 ? 0 : -1,
+        );
     }
 
     function getUnionOptionLabel(option: SchemaObject, index: number): string {
@@ -95,21 +95,7 @@
     const currentUnionValue = $derived(
         value === undefined ? baseSchema.default : value,
     );
-    const currentUnionIndex = $derived(
-        Math.max(
-            anyOfOptions.findIndex((option) =>
-                schemaMatchesValue(option, currentUnionValue),
-            ),
-            anyOfOptions.length > 0 ? 0 : -1,
-        ),
-    );
-    const unionEntries = $derived(
-        anyOfOptions.map((option, index) => ({
-            index,
-            label: getUnionOptionLabel(option, index),
-            schema: option,
-        })),
-    );
+    const currentUnionIndex = $derived(getUnionIndex(anyOfOptions, currentUnionValue));
     const title = $derived(
         (typeof resolvedSchema.title === "string" && resolvedSchema.title) ||
             label ||
@@ -139,7 +125,6 @@
     );
     const itemSchema = $derived(getArrayItemSchema(resolvedSchema, rootSchema));
     const arrayValue = $derived(Array.isArray(value) ? value : []);
-    const primitiveTypes = $derived(getPrimitiveTypes(resolvedSchema, rootSchema));
     const isObject = $derived(
         resolvedSchema.type === "object" ||
             knownKeys.length > 0 ||
@@ -152,19 +137,68 @@
     const isNumeric = $derived(
         resolvedSchema.type === "integer" || resolvedSchema.type === "number",
     );
+    const allowsNull = $derived(
+        isNull || anyOfOptions.some((option) => option.type === "null"),
+    );
+    const pathKey = $derived(String(path.join(".")));
+    const showHeaderlessUnionSelector = $derived(
+        !showHeader && !suppressHeaderlessUnionSelector && anyOfOptions.length > 1,
+    );
+
+    function promptForEntryKey(message: string, currentValue: unknown): string | null {
+        const nextKey = window.prompt(message);
+        const normalized = nextKey?.trim();
+        const currentEntryValue = asRecord(currentValue);
+        return !normalized || currentEntryValue[normalized] !== undefined
+            ? null
+            : normalized;
+    }
+
+    function addObjectEntry(
+        entryPath: JsonPath,
+        currentValue: unknown,
+        entrySchema: SchemaObject,
+        promptMessage: string,
+    ) {
+        const entryAdditionalSchema = getAdditionalPropertiesSchema(
+            entrySchema,
+            rootSchema,
+        );
+        if (!entryAdditionalSchema) return;
+
+        const nextKey = promptForEntryKey(promptMessage, currentValue);
+        if (!nextKey) return;
+
+        onChange(
+            [...entryPath, nextKey],
+            makeDefaultValue(entryAdditionalSchema, rootSchema),
+        );
+    }
 
     function promptAddObjectEntry() {
-        if (!additionalSchema) return;
-
-        const nextKey = window.prompt(`New ${addLabel ?? "entry"} name`);
-        const normalized = nextKey?.trim();
-        if (!normalized || objectValue[normalized] !== undefined) return;
-
-        onChange([...path, normalized], makeDefaultValue(additionalSchema, rootSchema));
+        addObjectEntry(
+            path,
+            objectValue,
+            resolvedSchema,
+            `New ${addLabel ?? "entry"} name`,
+        );
     }
 
     function addArrayItem() {
         onChange(path, [...arrayValue, makeDefaultValue(itemSchema, rootSchema)]);
+    }
+
+    function addArrayItemAt(
+        entryPath: JsonPath,
+        currentValue: unknown,
+        entrySchema: SchemaObject,
+    ) {
+        const currentItems = Array.isArray(currentValue) ? currentValue : [];
+        const nextItemSchema = getArrayItemSchema(entrySchema, rootSchema);
+        onChange(entryPath, [
+            ...currentItems,
+            makeDefaultValue(nextItemSchema, rootSchema),
+        ]);
     }
 
     function removeArrayItem(index: number) {
@@ -174,12 +208,17 @@
         );
     }
 
-    function updateUnionSelection(nextIndex: number) {
-        const entry = unionEntries[nextIndex];
-        if (!entry) return;
+    function selectUnionOption(
+        entryPath: JsonPath,
+        parentSchema: SchemaObject,
+        currentValue: unknown,
+        options: SchemaObject[],
+        nextIndex: number,
+    ) {
+        const option = options[nextIndex];
+        if (!option || schemaMatchesValue(option, currentValue)) return;
 
-        if (schemaMatchesValue(entry.schema, currentUnionValue)) return;
-        onChange(path, getUnionOptionDefault(entry.schema, baseSchema));
+        onChange(entryPath, getUnionOptionDefault(option, parentSchema));
     }
 
     const wrapperClass = $derived(
@@ -187,52 +226,126 @@
             ? "space-y-4"
             : "space-y-4 rounded-md border border-slate-800/70 bg-slate-950/40 p-4",
     );
+
+    const addButtonClass =
+        "inline-flex items-center rounded-md border border-slate-700/60 bg-slate-900/60 p-1 text-[12px] font-semibold text-emerald-200 shadow-sm transition-colors hover:border-emerald-400 hover:text-emerald-100 focus:outline-none disabled:pointer-events-none disabled:opacity-50 disabled:hover:border-slate-700/60 disabled:hover:text-emerald-200";
+    const removeButtonClass =
+        "inline-flex items-center rounded-md border border-slate-700/60 bg-slate-900/60 p-1 text-[12px] font-semibold text-rose-200 transition-colors hover:border-rose-500 focus:outline-none disabled:pointer-events-none disabled:opacity-50 disabled:hover:border-slate-700/60 disabled:hover:text-rose-200";
 </script>
+
+{#snippet renderHeaderDetails(
+    headerTitle: string | undefined,
+    headerDescription: string | null,
+    headerRequired: boolean,
+)}
+    {#if headerDescription}
+        <Tooltip
+            class="z-20 max-w-xs rounded-md border border-slate-800/70 bg-slate-900/95 px-2 py-1.5 text-[11px] leading-relaxed text-slate-100 shadow-xl">
+            {#snippet trigger()}
+                <button
+                    type="button"
+                    class="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:outline-none"
+                    aria-label={`${headerTitle} description`}>
+                    <Info class="h-3.5 w-3.5" />
+                </button>
+            {/snippet}
+            {headerDescription}
+        </Tooltip>
+    {/if}
+    {#if headerRequired}
+        <span
+            class="rounded-full border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-blue-200">
+            Required
+        </span>
+    {/if}
+{/snippet}
+
+{#snippet renderUnionSelector(
+    options: SchemaObject[],
+    activeIndex: number,
+    keyPrefix: string,
+    entryPath: JsonPath,
+    parentSchema: SchemaObject,
+    currentValue: unknown,
+)}
+    <div class={unionSelectorClass}>
+        {#each options as option, index (`${keyPrefix}:${index}`)}
+            <button
+                type="button"
+                class={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${index === activeIndex ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+                onclick={() =>
+                    selectUnionOption(
+                        entryPath,
+                        parentSchema,
+                        currentValue,
+                        options,
+                        index,
+                    )}>
+                {getUnionOptionLabel(option, index)}
+            </button>
+        {/each}
+    </div>
+{/snippet}
 
 {#if isObject}
     <div class={wrapperClass}>
         {#if showHeader && title}
             <div class="space-y-1">
-                <div class="flex items-center justify-between gap-3">
+                <div
+                    class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div class="flex min-w-0 items-center gap-2">
+                        {#if additionalSchema}
+                            <button
+                                type="button"
+                                class={addButtonClass}
+                                title={`Add ${addLabel ?? "entry"}`}
+                                aria-label={`Add ${addLabel ?? "entry"}`}
+                                onclick={promptAddObjectEntry}>
+                                <CirclePlus class="inline h-4 w-4" />
+                            </button>
+                        {/if}
                         <h3 class="truncate text-sm font-semibold text-slate-100">
                             {title}
                         </h3>
-                        {#if description}
-                            <Tooltip
-                                class="z-20 max-w-xs rounded-md border border-slate-800/70 bg-slate-900/95 px-2 py-1.5 text-[11px] leading-relaxed text-slate-100 shadow-xl">
-                                {#snippet trigger()}
-                                    <button
-                                        type="button"
-                                        class="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:outline-none"
-                                        aria-label={`${title} description`}>
-                                        <Info class="h-3.5 w-3.5" />
-                                    </button>
-                                {/snippet}
-                                {description}
-                            </Tooltip>
-                        {/if}
-                        {#if required}
-                            <span
-                                class="rounded-full border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-blue-200">
-                                Required
-                            </span>
-                        {/if}
+                        {@render renderHeaderDetails(title, description, required)}
                     </div>
-                    {#if unionEntries.length > 1}
-                        <div
-                            class="inline-flex shrink-0 items-center rounded-md border border-slate-700/80 bg-slate-900/80 p-0.5">
-                            {#each unionEntries as entry (`${String(path.join("."))}:${entry.index}`)}
-                                <button
-                                    type="button"
-                                    class={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${entry.index === currentUnionIndex ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                                    onclick={() => updateUnionSelection(entry.index)}>
-                                    {entry.label}
-                                </button>
-                            {/each}
-                        </div>
+                    {#if anyOfOptions.length > 1}
+                        {@render renderUnionSelector(
+                            anyOfOptions,
+                            currentUnionIndex,
+                            pathKey,
+                            path,
+                            baseSchema,
+                            currentUnionValue,
+                        )}
                     {/if}
                 </div>
+            </div>
+        {/if}
+
+        {#if showHeaderlessUnionSelector}
+            <div class="flex justify-start">
+                {@render renderUnionSelector(
+                    anyOfOptions,
+                    currentUnionIndex,
+                    pathKey,
+                    path,
+                    baseSchema,
+                    currentUnionValue,
+                )}
+            </div>
+        {/if}
+
+        {#if additionalSchema && (!showHeader || !title) && !suppressHeaderlessAddAction}
+            <div class="flex justify-end">
+                <button
+                    type="button"
+                    class={addButtonClass}
+                    title={`Add ${addLabel ?? "entry"}`}
+                    aria-label={`Add ${addLabel ?? "entry"}`}
+                    onclick={promptAddObjectEntry}>
+                    <CirclePlus class="inline h-4 w-4" />
+                </button>
             </div>
         {/if}
 
@@ -250,167 +363,239 @@
         {/each}
 
         {#each extraKeys as key (key)}
+            {@const extraEntrySchema = additionalSchema ?? {}}
+            {@const extraEntryResolvedSchema = getPreferredSchema(
+                extraEntrySchema,
+                rootSchema,
+                objectValue[key],
+            )}
+            {@const extraEntryCanAdd =
+                getAdditionalPropertiesSchema(extraEntrySchema, rootSchema) !== null}
+            {@const extraEntryIsArray = extraEntryResolvedSchema.type === "array"}
+            {@const extraEntryUnionOptions = getAnyOfOptions(
+                extraEntrySchema,
+                rootSchema,
+            )}
+            {@const extraEntryUnionIndex = getUnionIndex(
+                extraEntryUnionOptions,
+                objectValue[key],
+            )}
             <div
                 class="space-y-3 rounded-md border border-slate-800/70 bg-slate-950/40 p-4">
-                <div class="flex items-center justify-between gap-3">
-                    <div>
-                        <h4 class="text-sm font-semibold text-slate-100">{key}</h4>
-                        <p class="text-xs text-slate-500">Custom entry</p>
+                <div
+                    class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="flex min-w-0 items-center gap-2">
+                        {#if extraEntryCanAdd || extraEntryIsArray}
+                            <button
+                                type="button"
+                                class={addButtonClass}
+                                title={extraEntryIsArray ? "Add item" : "Add entry"}
+                                aria-label={extraEntryIsArray
+                                    ? "Add item"
+                                    : "Add entry"}
+                                onclick={() =>
+                                    extraEntryIsArray
+                                        ? addArrayItemAt(
+                                              [...path, key],
+                                              objectValue[key],
+                                              extraEntryResolvedSchema,
+                                          )
+                                        : addObjectEntry(
+                                              [...path, key],
+                                              objectValue[key],
+                                              extraEntrySchema,
+                                              "New entry name",
+                                          )}>
+                                <CirclePlus class="inline h-4 w-4" />
+                            </button>
+                        {/if}
+                        <h4 class="truncate text-sm font-semibold text-slate-100">
+                            {key}
+                        </h4>
                     </div>
-                    {#if onDelete}
-                        <button
-                            type="button"
-                            class="inline-flex items-center gap-1 rounded-md border border-rose-900/70 bg-rose-950/40 px-2.5 py-1 text-[11px] font-medium text-rose-100 hover:bg-rose-900/40"
-                            onclick={() => onDelete?.([...path, key])}>
-                            <Trash2 class="h-3.5 w-3.5" /> Remove
-                        </button>
-                    {/if}
+                    <div
+                        class="flex max-w-full flex-wrap items-center gap-2 sm:justify-end">
+                        {#if extraEntryUnionOptions.length > 1}
+                            {@render renderUnionSelector(
+                                extraEntryUnionOptions,
+                                extraEntryUnionIndex,
+                                `${pathKey}.${key}`,
+                                [...path, key],
+                                extraEntrySchema,
+                                objectValue[key],
+                            )}
+                        {/if}
+                        {#if onDelete}
+                            <button
+                                type="button"
+                                class={removeButtonClass}
+                                title="Remove custom entry"
+                                aria-label="Remove custom entry"
+                                onclick={() => onDelete?.([...path, key])}>
+                                <Trash2 class="inline h-4 w-4" />
+                            </button>
+                        {/if}
+                    </div>
                 </div>
                 <SchemaFormNode
                     {rootSchema}
-                    schema={additionalSchema ?? {}}
+                    schema={extraEntrySchema}
                     value={objectValue[key]}
                     path={[...path, key]}
                     label={key}
                     depth={depth + 1}
                     showHeader={false}
+                    suppressHeaderlessAddAction={extraEntryCanAdd || extraEntryIsArray}
+                    suppressHeaderlessUnionSelector={extraEntryUnionOptions.length > 1}
                     {onChange}
                     {onDelete} />
             </div>
         {/each}
-
-        {#if additionalSchema}
-            <button
-                type="button"
-                class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800/70"
-                onclick={promptAddObjectEntry}>
-                <CirclePlus class="h-3.5 w-3.5" /> Add {addLabel ?? "entry"}
-            </button>
-        {/if}
     </div>
 {:else if isArray}
     <div class={wrapperClass}>
         {#if showHeader && title}
             <div class="space-y-1">
-                <div class="flex items-center justify-between gap-3">
+                <div
+                    class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div class="flex min-w-0 items-center gap-2">
+                        <button
+                            type="button"
+                            class={addButtonClass}
+                            title="Add item"
+                            aria-label="Add item"
+                            onclick={addArrayItem}>
+                            <CirclePlus class="inline h-4 w-4" />
+                        </button>
                         <h3 class="truncate text-sm font-semibold text-slate-100">
                             {title}
                         </h3>
-                        {#if description}
-                            <Tooltip
-                                class="z-20 max-w-xs rounded-md border border-slate-800/70 bg-slate-900/95 px-2 py-1.5 text-[11px] leading-relaxed text-slate-100 shadow-xl">
-                                {#snippet trigger()}
-                                    <button
-                                        type="button"
-                                        class="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:outline-none"
-                                        aria-label={`${title} description`}>
-                                        <Info class="h-3.5 w-3.5" />
-                                    </button>
-                                {/snippet}
-                                {description}
-                            </Tooltip>
-                        {/if}
-                        {#if required}
-                            <span
-                                class="rounded-full border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-blue-200">
-                                Required
-                            </span>
-                        {/if}
+                        {@render renderHeaderDetails(title, description, required)}
                     </div>
-                    {#if unionEntries.length > 1}
-                        <div
-                            class="inline-flex shrink-0 items-center rounded-md border border-slate-700/80 bg-slate-900/80 p-0.5">
-                            {#each unionEntries as entry (`${String(path.join("."))}:${entry.index}`)}
-                                <button
-                                    type="button"
-                                    class={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${entry.index === currentUnionIndex ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                                    onclick={() => updateUnionSelection(entry.index)}>
-                                    {entry.label}
-                                </button>
-                            {/each}
-                        </div>
+                    {#if anyOfOptions.length > 1}
+                        {@render renderUnionSelector(
+                            anyOfOptions,
+                            currentUnionIndex,
+                            pathKey,
+                            path,
+                            baseSchema,
+                            currentUnionValue,
+                        )}
                     {/if}
                 </div>
             </div>
         {/if}
 
-        <div class="flex flex-wrap gap-3">
-            {#each arrayValue as item, index (`${String(path.join("."))}:${index}`)}
-                <div
-                    class="min-w-[18rem] flex-1 space-y-3 rounded-md border border-slate-800/70 bg-slate-950/40 p-4">
-                    <div class="flex items-center justify-between gap-3">
-                        <p class="text-xs font-medium text-slate-300">
-                            Item {index + 1}
-                        </p>
-                        <button
-                            type="button"
-                            class="inline-flex items-center gap-1 rounded-md border border-rose-900/70 bg-rose-950/40 px-2.5 py-1 text-[11px] font-medium text-rose-100 hover:bg-rose-900/40"
-                            onclick={() => removeArrayItem(index)}>
-                            <Trash2 class="h-3.5 w-3.5" /> Remove
-                        </button>
-                    </div>
-                    <SchemaFormNode
-                        {rootSchema}
-                        schema={itemSchema}
-                        value={item}
-                        path={[...path, index]}
-                        depth={depth + 1}
-                        showHeader={false}
-                        {onChange}
-                        {onDelete} />
-                </div>
-            {/each}
-        </div>
+        {#if showHeaderlessUnionSelector}
+            <div class="flex justify-start">
+                {@render renderUnionSelector(
+                    anyOfOptions,
+                    currentUnionIndex,
+                    pathKey,
+                    path,
+                    baseSchema,
+                    currentUnionValue,
+                )}
+            </div>
+        {/if}
 
-        <button
-            type="button"
-            class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800/70"
-            onclick={addArrayItem}>
-            <CirclePlus class="h-3.5 w-3.5" /> Add item
-        </button>
+        {#if (!showHeader || !title) && !suppressHeaderlessAddAction}
+            <div class="flex justify-end">
+                <button
+                    type="button"
+                    class={addButtonClass}
+                    title="Add item"
+                    aria-label="Add item"
+                    onclick={addArrayItem}>
+                    <CirclePlus class="inline h-4 w-4" />
+                </button>
+            </div>
+        {/if}
+
+        {#if arrayValue.length > 0}
+            <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                {#each arrayValue as item, index (`${pathKey}:${index}`)}
+                    {@const itemUnionOptions = getAnyOfOptions(itemSchema, rootSchema)}
+                    {@const itemUnionIndex = getUnionIndex(itemUnionOptions, item)}
+                    <div
+                        class="min-w-0 flex-1 space-y-3 rounded-md border border-slate-800/70 bg-slate-950/40 p-4 sm:min-w-[18rem]">
+                        <div
+                            class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="flex min-w-0 items-center gap-2">
+                                <p class="text-xs font-medium text-slate-300">
+                                    #{index + 1}
+                                </p>
+                            </div>
+                            <div
+                                class="flex max-w-full flex-wrap items-center gap-2 sm:justify-end">
+                                {#if itemUnionOptions.length > 1}
+                                    {@render renderUnionSelector(
+                                        itemUnionOptions,
+                                        itemUnionIndex,
+                                        `${pathKey}:${index}`,
+                                        [...path, index],
+                                        itemSchema,
+                                        item,
+                                    )}
+                                {/if}
+                                <button
+                                    type="button"
+                                    class={removeButtonClass}
+                                    title="Remove item"
+                                    aria-label="Remove item"
+                                    onclick={() => removeArrayItem(index)}>
+                                    <Trash2 class="inline h-4 w-4" />
+                                </button>
+                            </div>
+                        </div>
+                        <SchemaFormNode
+                            {rootSchema}
+                            schema={itemSchema}
+                            value={item}
+                            path={[...path, index]}
+                            depth={depth + 1}
+                            showHeader={false}
+                            suppressHeaderlessUnionSelector={itemUnionOptions.length >
+                                1}
+                            {onChange}
+                            {onDelete} />
+                    </div>
+                {/each}
+            </div>
+        {/if}
     </div>
 {:else}
     <label class="block space-y-1.5">
-        {#if title}
-            <div class="flex items-center justify-between gap-3">
+        {#if showHeader && title}
+            <div
+                class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div
-                    class="flex min-w-0 items-center gap-2 text-xs font-medium tracking-wide text-slate-200">
+                    class="flex min-w-0 flex-wrap items-center gap-2 text-xs font-medium tracking-wide text-slate-200">
                     <span class="truncate">{title}</span>
-                    {#if description}
-                        <Tooltip
-                            class="z-20 max-w-xs rounded-md border border-slate-800/70 bg-slate-900/95 px-2 py-1.5 text-[11px] leading-relaxed text-slate-100 shadow-xl">
-                            {#snippet trigger()}
-                                <button
-                                    type="button"
-                                    class="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:outline-none"
-                                    aria-label={`${title} description`}>
-                                    <Info class="h-3.5 w-3.5" />
-                                </button>
-                            {/snippet}
-                            {description}
-                        </Tooltip>
-                    {/if}
-                    {#if required}
-                        <span
-                            class="rounded-full border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-blue-200">
-                            Required
-                        </span>
-                    {/if}
+                    {@render renderHeaderDetails(title, description, required)}
                 </div>
-                {#if unionEntries.length > 1}
-                    <div
-                        class="inline-flex shrink-0 items-center rounded-md border border-slate-700/80 bg-slate-900/80 p-0.5">
-                        {#each unionEntries as entry (`${String(path.join("."))}:${entry.index}`)}
-                            <button
-                                type="button"
-                                class={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${entry.index === currentUnionIndex ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                                onclick={() => updateUnionSelection(entry.index)}>
-                                {entry.label}
-                            </button>
-                        {/each}
-                    </div>
+                {#if anyOfOptions.length > 1}
+                    {@render renderUnionSelector(
+                        anyOfOptions,
+                        currentUnionIndex,
+                        pathKey,
+                        path,
+                        baseSchema,
+                        currentUnionValue,
+                    )}
                 {/if}
+            </div>
+        {/if}
+        {#if showHeaderlessUnionSelector}
+            <div class="flex justify-start">
+                {@render renderUnionSelector(
+                    anyOfOptions,
+                    currentUnionIndex,
+                    pathKey,
+                    path,
+                    baseSchema,
+                    currentUnionValue,
+                )}
             </div>
         {/if}
         {#if isBoolean}
@@ -433,7 +618,7 @@
                 value={String(value ?? resolvedSchema.default ?? enumOptions[0] ?? "")}
                 onchange={(event) =>
                     onChange(path, (event.currentTarget as HTMLSelectElement).value)}>
-                {#each enumOptions as option (`${String(path.join("."))}:${String(option)}`)}
+                {#each enumOptions as option (`${pathKey}:${String(option)}`)}
                     <option value={String(option)}>{String(option)}</option>
                 {/each}
             </select>
@@ -461,7 +646,7 @@
                 value={String(value ?? resolvedSchema.default ?? "")}
                 placeholder={resolvedSchema.default !== undefined
                     ? String(resolvedSchema.default)
-                    : primitiveTypes.has("null")
+                    : allowsNull
                       ? "Select None above to clear this field"
                       : ""}
                 onchange={(event) =>

@@ -190,10 +190,17 @@ export interface ConfigDocumentResponse {
     content: string;
     mtime?: number | null;
     schema?: Record<string, unknown> | null;
+    settings?: Record<string, unknown> | null;
+    settings_error?: string | null;
 }
 
 export interface ConfigDocumentUpdateRequest {
     content: string;
+    expected_mtime?: number | null;
+}
+
+export interface ConfigStructuredUpdateRequest {
+    settings: Record<string, unknown>;
     expected_mtime?: number | null;
 }
 

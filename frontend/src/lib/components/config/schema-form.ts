@@ -2,8 +2,31 @@ export type JsonPath = Array<string | number>;
 
 export type SchemaObject = Record<string, unknown>;
 
+const flexibleJsonOptions: SchemaObject[] = [
+    { type: "string" },
+    { type: "number" },
+    { type: "boolean" },
+    { type: "object", additionalProperties: true },
+    { type: "array", items: {} },
+    { type: "null" },
+];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function schemaMatchesValue(schema: SchemaObject, candidate: unknown): boolean {
+    if (candidate === null) return schema.type === "null";
+    if (Array.isArray(candidate)) return schema.type === "array";
+    if (typeof candidate === "boolean") return schema.type === "boolean";
+    if (typeof candidate === "number") {
+        return schema.type === "number" || schema.type === "integer";
+    }
+    if (typeof candidate === "string") return schema.type === "string";
+    if (isRecord(candidate)) {
+        return schema.type === "object" || isRecord(schema.properties);
+    }
+    return false;
 }
 
 function sortJson(value: unknown): unknown {
@@ -37,6 +60,21 @@ function resolveRef(rootSchema: unknown, ref: string): SchemaObject {
         current = current[segment];
     }
     return isRecord(current) ? current : {};
+}
+
+function supportsAnyJsonType(schema: SchemaObject): boolean {
+    return (
+        typeof schema.type !== "string" &&
+        !Array.isArray(schema.anyOf) &&
+        !Array.isArray(schema.enum) &&
+        !Array.isArray(schema.oneOf) &&
+        !Array.isArray(schema.allOf) &&
+        !Array.isArray(schema.prefixItems) &&
+        schema.const === undefined &&
+        !isRecord(schema.properties) &&
+        schema.additionalProperties === undefined &&
+        schema.items === undefined
+    );
 }
 
 export function resolveSchema(schema: unknown, rootSchema: unknown): SchemaObject {
@@ -120,22 +158,11 @@ export function getArrayItemSchema(schema: unknown, rootSchema: unknown): Schema
 
 export function getAnyOfOptions(schema: unknown, rootSchema: unknown): SchemaObject[] {
     const resolved = resolveSchema(schema, rootSchema);
-    return Array.isArray(resolved.anyOf)
-        ? resolved.anyOf.map((option) => resolveSchema(option, rootSchema))
-        : [];
-}
-
-export function getPrimitiveTypes(schema: unknown, rootSchema: unknown): Set<string> {
-    const resolved = resolveSchema(schema, rootSchema);
-    if (typeof resolved.type === "string") return new Set([resolved.type]);
-
-    const primitiveTypes = new Set<string>();
-    for (const option of getAnyOfOptions(resolved, rootSchema)) {
-        if (typeof option.type === "string") {
-            primitiveTypes.add(option.type);
-        }
+    if (Array.isArray(resolved.anyOf)) {
+        return resolved.anyOf.map((option) => resolveSchema(option, rootSchema));
     }
-    return primitiveTypes;
+
+    return supportsAnyJsonType(resolved) ? flexibleJsonOptions : [];
 }
 
 export function getPreferredSchema(
@@ -147,21 +174,9 @@ export function getPreferredSchema(
     const options = getAnyOfOptions(resolved, rootSchema);
     if (options.length === 0) return resolved;
 
-    const matcher = (option: SchemaObject) => {
-        if (value === null) return option.type === "null";
-        if (Array.isArray(value)) return option.type === "array";
-        if (isRecord(value))
-            return option.type === "object" || isRecord(option.properties);
-        if (typeof value === "boolean") return option.type === "boolean";
-        if (typeof value === "number") {
-            return option.type === "number" || option.type === "integer";
-        }
-        if (typeof value === "string") return option.type === "string";
-        return false;
-    };
-
     const preferred =
-        options.find(matcher) ?? options.find((option) => option.type !== "null");
+        options.find((option) => schemaMatchesValue(option, value)) ??
+        options.find((option) => option.type !== "null");
     return preferred ? { ...omitKeys(resolved, ["anyOf"]), ...preferred } : resolved;
 }
 

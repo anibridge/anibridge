@@ -19,7 +19,7 @@
     import MappingsTable from "$lib/components/mappings/mappings-table.svelte";
     import SearchBar from "$lib/components/mappings/tool-bar.svelte";
     import Pagination from "$lib/components/pagination.svelte";
-    import type { Mapping, MappingConfig } from "$lib/types/api";
+    import type { Mapping } from "$lib/types/api";
     import { apiFetch, isAbortError } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
 
@@ -149,7 +149,7 @@
         await load();
     }
 
-    async function handleIncludesSaved(_config: MappingConfig) {
+    async function handleIncludesSaved() {
         includesOpen = false;
         clearCapabilitiesCache();
         searchBarKey += 1;

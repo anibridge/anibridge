@@ -11,6 +11,7 @@ import pytest
 from litestar.response.base import Response
 from litestar.testing.client.sync_client import TestClient
 
+from anibridge.app.config.settings import AnibridgeConfig, WebConfig
 from anibridge.app.exceptions import AnibridgeError, ProfileNotFoundError
 from anibridge.app.web import app as app_module
 from tests.web.support import SchedulerStub
@@ -228,6 +229,68 @@ def test_create_app_exposes_openapi_json_and_docs(
 
     assert docs_response.status_code == 200
     assert docs_response.headers["content-type"].startswith("text/html")
+
+
+def test_create_app_mounts_spa_and_api_under_path_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    index_file = tmp_path / "index.html"
+    index_file.write_text(
+        """<!doctype html>
+<html lang=\"en\">
+    <head>
+        <link rel=\"icon\" href=\"/favicon.ico\" />
+        <link href=\"/_app/immutable/entry/start.test.js\" rel=\"modulepreload\" />
+    </head>
+    <body>
+        <div style=\"display: contents\">
+            <script>
+                {
+                    __sveltekit_test = { base: \"\" };
+                    Promise.all([import(\"/_app/immutable/entry/start.test.js\")]);
+                }
+            </script>
+        </div>
+    </body>
+</html>
+""",
+        encoding="utf-8",
+    )
+    css_asset = tmp_path / "_app" / "immutable" / "assets" / "0.test.css"
+    css_asset.parent.mkdir(parents=True)
+    css_asset.write_text("body { color: red; }\n", encoding="utf-8")
+    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(app_module.log, "level", logging.INFO)
+    monkeypatch.setattr(
+        app_module,
+        "get_config",
+        lambda: AnibridgeConfig(web=WebConfig(path_prefix="/anibridge")),
+    )
+
+    app = app_module.create_app()
+
+    with TestClient(app) as client:
+        spa_response = client.get("/anibridge/missing")
+        asset_response = client.get("/anibridge/_app/immutable/assets/0.test.css")
+        status_response = client.get("/anibridge/api/status")
+        docs_response = client.get("/anibridge/docs")
+
+    assert spa_response.status_code == 200
+    assert 'window.__ANIBRIDGE_PATH_PREFIX = "/anibridge"' in spa_response.text
+    assert 'href="/anibridge/favicon.ico"' in spa_response.text
+    assert 'href="/anibridge/_app/immutable/entry/start.test.js"' in spa_response.text
+    assert (
+        'import("/anibridge/_app/immutable/entry/start.test.js")' in spa_response.text
+    )
+    assert "base: window.__ANIBRIDGE_PATH_PREFIX" in spa_response.text
+    assert asset_response.text == "body { color: red; }\n"
+    assert status_response.status_code == 200
+    assert docs_response.status_code == 200
+
+    with TestClient(app) as client:
+        assert client.get("/api/status").status_code == 404
+        assert client.get("/docs").status_code == 404
 
 
 def test_create_app_uses_builtin_logging_middleware_in_debug(

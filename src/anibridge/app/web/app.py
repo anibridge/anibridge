@@ -1,22 +1,26 @@
 """Litestar application factory and setup."""
 
 import asyncio
+import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import DEBUG
+from pathlib import Path
 
+import msgspec
 from litestar.app import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.connection.request import Request as LitestarRequest
-from litestar.file_system import BaseLocalFileSystem
+from litestar.enums import MediaType
+from litestar.exceptions.http_exceptions import NotFoundException
 from litestar.handlers.http_handlers.decorators import get
 from litestar.middleware.base import ASGIMiddleware, DefineMiddleware
 from litestar.middleware.logging import LoggingMiddlewareConfig
 from litestar.openapi.config import OpenAPIConfig
 from litestar.openapi.plugins import ScalarRenderPlugin
 from litestar.response.base import Response as LitestarResponse
-from litestar.response.file import ASGIFileResponse
-from litestar.static_files.base import StaticFiles
+from litestar.response.file import File
+from litestar.router import Router
 from litestar.types.internal_types import ControllerRouterHandler
 
 from anibridge.app import __version__
@@ -37,8 +41,10 @@ from anibridge.app.web.state import get_app_state
 
 __all__ = ["create_app"]
 
-FRONTEND_BUILD_DIR = PROJECT_ROOT / "frontend" / "build"
 log = get_logger(APP_LOGGER_NAME)
+
+FRONTEND_BUILD_DIR = PROJECT_ROOT / "frontend" / "build"
+_ROOT_RELATIVE_URL_RE = re.compile(r'((?:href|src)=["\']|import\(")/')
 
 
 @asynccontextmanager
@@ -103,31 +109,68 @@ def litestar_domain_exception_handler(
     )
 
 
-async def _serve_frontend_asset(
-    path: str, *, is_head_response: bool = False
-) -> ASGIFileResponse:
-    return await StaticFiles(
-        is_html_mode=False,
-        directories=[FRONTEND_BUILD_DIR],
-        file_system=BaseLocalFileSystem(),
-        send_as_attachment=False,
-    ).handle(
-        path=path,
-        is_head_response=is_head_response,
+def _render_frontend_spa(path_prefix: str) -> str:
+    """Render the built SPA entrypoint with a runtime path prefix.
+
+    SvelteKit always emits absolute asset paths in SPA fallback pages, even when
+    `kit.paths.relative` is enabled, so the fallback HTML must be rewritten
+    before it is returned from the backend.
+    """
+    index_html = (FRONTEND_BUILD_DIR / "index.html").read_text(encoding="utf-8")
+    safe_path_prefix = msgspec.json.encode(path_prefix).decode()
+    runtime_script = (
+        f"<script>window.__ANIBRIDGE_PATH_PREFIX = {safe_path_prefix};</script>"
+    )
+    if "window.__ANIBRIDGE_PATH_PREFIX" not in index_html:
+        index_html = index_html.replace(
+            "</head>", f"        {runtime_script}\n    </head>", 1
+        )
+
+    index_html = _ROOT_RELATIVE_URL_RE.sub(rf"\1{path_prefix}/", index_html)
+    return index_html.replace('base: ""', "base: window.__ANIBRIDGE_PATH_PREFIX", 1)
+
+
+def _serve_frontend_asset(path: str) -> File:
+    """Serve a static asset from the frontend build directory."""
+    root_dir = FRONTEND_BUILD_DIR.resolve()
+    file_path = (root_dir / path).resolve()
+    try:
+        file_path.relative_to(root_dir)
+    except ValueError as exc:
+        raise NotFoundException(
+            "Asset path is outside the frontend build directory"
+        ) from exc
+
+    if not file_path.is_file():
+        raise NotFoundException(f"Asset not found: {path}")
+
+    return File(
+        path=file_path,
+        filename=Path(path).name,
+        content_disposition_type="inline",
     )
 
 
 @get(path=["/", "/{path:path}"], include_in_schema=False)
 async def serve_spa(
     path: str = "",
-) -> ASGIFileResponse:
+) -> LitestarResponse[bytes] | LitestarResponse[str]:
     """Serve built frontend assets and fall back to the SPA entrypoint."""
     normalized_path = path.lstrip("/")
+    path_prefix = get_config().web.path_prefix
 
-    if bool(normalized_path) and "." in normalized_path.rsplit("/", 1)[-1]:
-        return await _serve_frontend_asset(normalized_path)
+    if (
+        not normalized_path
+        or normalized_path == "index.html"
+        or not Path(normalized_path).suffix
+    ):
+        return LitestarResponse(
+            content=_render_frontend_spa(path_prefix),
+            media_type=MediaType.HTML,
+            headers={"content-disposition": "inline"},
+        )
 
-    return await _serve_frontend_asset("index.html")
+    return _serve_frontend_asset(normalized_path)
 
 
 def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
@@ -177,13 +220,20 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
         z_router,
     ]
 
-    index_file = FRONTEND_BUILD_DIR / "index.html"
     if not FRONTEND_BUILD_DIR.exists():
         log.warning("Frontend build directory does not exist; no SPA will be served")
-    elif not index_file.exists():
+    elif not (FRONTEND_BUILD_DIR / "index.html").exists():
         log.error("Frontend index file does not exist; no SPA will be served")
     else:
         route_handlers.append(serve_spa)
+
+    if config.web.path_prefix:
+        log.info(
+            "Serving AniBridge web UI under path prefix %s", config.web.path_prefix
+        )
+        route_handlers = [
+            Router(path=config.web.path_prefix, route_handlers=route_handlers)
+        ]
 
     app = Litestar(
         route_handlers=route_handlers,
@@ -195,7 +245,9 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
             description="AniBridge web API.",
             version=__version__,
             use_handler_docstrings=True,
-            path="/docs",
+            path=(
+                f"{config.web.path_prefix}/docs" if config.web.path_prefix else "/docs"
+            ),
             render_plugins=[ScalarRenderPlugin()],
         ),
         exception_handlers={AnibridgeError: litestar_domain_exception_handler},

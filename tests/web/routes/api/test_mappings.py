@@ -108,6 +108,14 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
             )
 
     class _OverridesService:
+        async def get_mapping_config(self):
+            return {
+                "mappings_url": "https://example.com/mappings.json",
+                "includes": ["./community.yaml"],
+                "path": "/tmp/mappings.json",
+                "format": "json",
+            }
+
         async def get_mapping_detail(self, descriptor: str):
             return {
                 "descriptor": descriptor,
@@ -126,6 +134,14 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
                 "scope": None,
                 "layers": {},
                 "targets": [],
+            }
+
+        async def save_mapping_config(self, **kwargs):
+            return {
+                "mappings_url": "https://example.com/mappings.json",
+                "includes": kwargs["includes"],
+                "path": "/tmp/mappings.json",
+                "format": "json",
             }
 
     monkeypatch.setattr(
@@ -153,6 +169,11 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
     assert listed.status_code == 200
     assert listed.json()["pages"] == 3
 
+    config = client.get("/api/mappings/config")
+    assert config.status_code == 200
+    assert config.json()["mappings_url"] == "https://example.com/mappings.json"
+    assert config.json()["includes"] == ["./community.yaml"]
+
     detail = client.get("/api/mappings/anilist:1")
     assert detail.status_code == 200
 
@@ -161,6 +182,16 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
         json={"descriptor": "anilist:1", "targets": []},
     )
     assert created.status_code == 200
+
+    updated_config = client.put(
+        "/api/mappings/config",
+        json={"includes": ["./community.yaml", "https://example.com/base.json"]},
+    )
+    assert updated_config.status_code == 200
+    assert updated_config.json()["includes"] == [
+        "./community.yaml",
+        "https://example.com/base.json",
+    ]
 
     updated = asyncio.run(
         update_mapping(

@@ -326,6 +326,55 @@ class MappingOverridePayload(msgspec.Struct):
     ] = msgspec.field(default_factory=list)
 
 
+class MappingConfigPayload(msgspec.Struct):
+    """Payload for updating top-level mappings configuration."""
+
+    includes: Annotated[
+        list[str],
+        msgspec.Meta(
+            description="Top-level mapping sources loaded via the $includes field.",
+            examples=[
+                ["/example/path/to/mappings.json", "https://example.com/mappings.json"]
+            ],
+        ),
+    ] = msgspec.field(default_factory=list)
+
+
+class MappingConfigModel(msgspec.Struct):
+    """Editable top-level mappings configuration."""
+
+    path: Annotated[
+        str,
+        msgspec.Meta(
+            min_length=1,
+            description="Filesystem path of the custom mappings file being edited.",
+            examples=["/data/mappings.json"],
+        ),
+    ]
+    format: Annotated[
+        str,
+        msgspec.Meta(
+            min_length=1,
+            description="Serialization format of the custom mappings file.",
+            examples=["json"],
+        ),
+    ]
+    includes: Annotated[
+        list[str],
+        msgspec.Meta(
+            description="Resolved include entries from the custom mappings file.",
+            examples=[["./mappings.yaml", "https://example.com/mappings.json"]],
+        ),
+    ] = msgspec.field(default_factory=list)
+    mappings_url: Annotated[
+        str,
+        msgspec.Meta(
+            description="Upstream mappings source configured for the app.",
+            examples=["https://example.com/mappings.json"],
+        ),
+    ] = ""
+
+
 class MappingRangeViewModel(msgspec.Struct):
     source_range: Annotated[
         str,
@@ -673,6 +722,13 @@ async def get_mapping(descriptor: str) -> MappingDetailModel:
     return msgspec.convert(data, type=MappingDetailModel)
 
 
+@get(path="/config")
+async def get_mapping_config() -> MappingConfigModel:
+    svc = get_mapping_overrides_service()
+    data = await svc.get_mapping_config()
+    return msgspec.convert(data, type=MappingConfigModel)
+
+
 @post(path="", status_code=200)
 async def create_mapping(
     data: Annotated[MappingOverridePayload, Body()],
@@ -701,13 +757,24 @@ async def update_mapping(
     return msgspec.convert(saved, type=MappingDetailModel)
 
 
+@put(path="/config")
+async def update_mapping_config(
+    data: Annotated[MappingConfigPayload, Body()],
+) -> MappingConfigModel:
+    svc = get_mapping_overrides_service()
+    saved = await svc.save_mapping_config(includes=list(data.includes))
+    return msgspec.convert(saved, type=MappingConfigModel)
+
+
 router = Router(
     path="/mappings",
     route_handlers=[
         list_mappings,
         query_capabilities,
+        get_mapping_config,
         get_mapping,
         create_mapping,
         update_mapping,
+        update_mapping_config,
     ],
 )

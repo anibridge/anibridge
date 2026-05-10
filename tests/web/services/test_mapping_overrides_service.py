@@ -278,6 +278,11 @@ def test_mapping_overrides_service_normalizes_and_builds_views() -> None:
     assert len(views) == 2
     assert views[0]["origin"] in {"mixed", "deleted"}
     assert {view["descriptor"] for view in views} == {"tmdb:1", "tvdb:2"}
+    assert service._normalize_includes([" ./a.yaml ", "", 123, None]) == [
+        "./a.yaml",
+        "123",
+    ]
+    assert service._normalize_includes("bad") == []
 
 
 def test_mapping_overrides_service_validation_errors() -> None:
@@ -317,3 +322,69 @@ async def test_save_override_requires_descriptor_and_removes_entry(
     assert result["layers"]["custom"] == {}
     raw = json.loads((tmp_path / "mappings.json").read_text(encoding="utf-8"))
     assert raw == {}
+
+
+@pytest.mark.asyncio
+async def test_mapping_config_round_trips_includes_and_preserves_overrides(
+    overrides_env: tuple[Path, DummyScheduler],
+) -> None:
+    """Saving mapping config should only touch the top-level include list."""
+    tmp_path, scheduler = overrides_env
+    (tmp_path / "mappings.json").write_text(
+        json.dumps(
+            {
+                "$includes": ["./old.yaml"],
+                "anilist:123": {"tmdb:456": {"1": "1"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = MappingOverridesService()
+
+    loaded = await service.get_mapping_config()
+    assert loaded["mappings_url"] == get_config().mappings_url
+    assert loaded["includes"] == ["./old.yaml"]
+    assert loaded["format"] == "json"
+
+    saved = await service.save_mapping_config(
+        includes=[" ./community.yaml ", "https://example.com/base.json", ""]
+    )
+
+    assert saved["includes"] == [
+        "./community.yaml",
+        "https://example.com/base.json",
+    ]
+    assert saved["mappings_url"] == get_config().mappings_url
+    assert scheduler.sync_sources == ["service:mapping_overrides"]
+
+    raw = json.loads((tmp_path / "mappings.json").read_text(encoding="utf-8"))
+    assert raw == {
+        "$includes": ["./community.yaml", "https://example.com/base.json"],
+        "anilist:123": {"tmdb:456": {"1": "1"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_mapping_config_removes_empty_includes_key(
+    overrides_env: tuple[Path, DummyScheduler],
+) -> None:
+    """Saving an empty include list should drop the top-level key."""
+    tmp_path, _scheduler = overrides_env
+    (tmp_path / "mappings.json").write_text(
+        json.dumps(
+            {
+                "$includes": ["./old.yaml"],
+                "anilist:123": {"tmdb:456": {"1": "1"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = MappingOverridesService()
+    saved = await service.save_mapping_config(includes=[])
+
+    assert saved["mappings_url"] == get_config().mappings_url
+    assert saved["includes"] == []
+    raw = json.loads((tmp_path / "mappings.json").read_text(encoding="utf-8"))
+    assert raw == {"anilist:123": {"tmdb:456": {"1": "1"}}}

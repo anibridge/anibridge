@@ -141,6 +141,20 @@ class MappingOverridesService:
             cleaned[target_str] = normalized_ranges
         return cleaned
 
+    def _normalize_includes(self, raw: Any) -> list[str]:
+        """Normalize the top-level include list from the raw mappings payload."""
+        if not isinstance(raw, list):
+            return []
+
+        includes: list[str] = []
+        for item in raw:
+            if item is None:
+                continue
+            value = str(item).strip()
+            if value:
+                includes.append(value)
+        return includes
+
     def _merge_targets(
         self,
         upstream: dict[str, dict[str, str | None] | None],
@@ -304,6 +318,18 @@ class MappingOverridesService:
             ),
         }
 
+    async def get_mapping_config(self) -> dict[str, Any]:
+        """Return top-level mappings configuration editable from the web UI."""
+        async with self._lock:
+            raw, path, fmt = self._load_raw()
+
+        return {
+            "mappings_url": self._config.mappings_url or "",
+            "includes": self._normalize_includes(raw.get("$includes")),
+            "path": str(path),
+            "format": fmt,
+        }
+
     def _validate_ranges(
         self, ranges: list[dict[str, Any]] | None
     ) -> dict[str, str | None]:
@@ -397,6 +423,23 @@ class MappingOverridesService:
 
         await self._sync_database()
         return await self.get_mapping_detail(descriptor_str)
+
+    async def save_mapping_config(
+        self, *, includes: list[str] | None
+    ) -> dict[str, Any]:
+        """Persist top-level mappings configuration and trigger DB sync."""
+        normalized_includes = self._normalize_includes(includes or [])
+
+        async with self._lock:
+            raw, path, fmt = self._load_raw()
+            if normalized_includes:
+                raw["$includes"] = normalized_includes
+            else:
+                raw.pop("$includes", None)
+            self._write_raw(raw, path, fmt)
+
+        await self._sync_database()
+        return await self.get_mapping_config()
 
 
 @cache

@@ -1,10 +1,11 @@
 """Tests for settings configuration utilities."""
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import yaml
+from anibridge.provider.base import Progress, Rating, RecordField, Status
 from pydantic import SecretStr
 
 from anibridge.app.config import settings as settings_module
@@ -13,7 +14,6 @@ from anibridge.app.config.settings import (
     AnibridgeProfileConfig,
     BasicAuthConfig,
     ScanMode,
-    SyncField,
     SyncRulesConfig,
     SyncRuleTemplateId,
     WebConfig,
@@ -48,14 +48,14 @@ def test_find_yaml_config_file_prefers_data_path(
 def test_profile_parent_requires_assignment() -> None:
     """Test that accessing parent on unassigned profile raises ProfileConfigError."""
     profile = AnibridgeProfileConfig(
-        library_provider_config={
+        source_provider_config={
             "plex": {
                 "token": SecretStr("plex-token"),
                 "user": "eliasbenb",
                 "url": "http://plex:32400",
             },
         },
-        list_provider_config={"anilist": {"token": SecretStr("anilist-token")}},
+        target_provider_config={"anilist": {"token": SecretStr("anilist-token")}},
     )
 
     with pytest.raises(ProfileConfigError):
@@ -66,7 +66,7 @@ def test_config_creates_default_profile_from_globals() -> None:
     """Test that AnibridgeConfig creates a default profile from global settings."""
     config = AnibridgeConfig(
         global_config=AnibridgeProfileConfig(
-            library_provider_config={
+            source_provider_config={
                 "plex": {
                     "token": "plex-token",
                     "user": "eliasbenb",
@@ -74,18 +74,20 @@ def test_config_creates_default_profile_from_globals() -> None:
                     "sections": ["Anime"],
                 },
             },
-            list_provider_config={"anilist": {"token": "anilist-token"}},
+            target_provider_config={"anilist": {"token": "anilist-token"}},
         )
     )
 
     profile = config.get_profile("default")
+    target_config = cast(dict[str, Any], profile.target_provider_config["anilist"])
+    source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
 
     assert profile.parent is config
-    assert profile.list_provider_config["anilist"]["token"] == "anilist-token"
-    assert profile.library_provider_config["plex"]["token"] == "plex-token"
-    assert profile.library_provider_config["plex"]["user"] == "eliasbenb"
-    assert profile.library_provider_config["plex"]["url"] == "http://plex:32400"
-    assert profile.library_provider_config["plex"]["sections"] == ["Anime"]
+    assert target_config["token"] == "anilist-token"
+    assert source_config["token"] == "plex-token"
+    assert source_config["user"] == "eliasbenb"
+    assert source_config["url"] == "http://plex:32400"
+    assert source_config["sections"] == ["Anime"]
 
 
 @pytest.mark.parametrize(
@@ -108,13 +110,13 @@ def test_config_profile_inherits_global_values() -> None:
     """Test that a profile inherits global settings from AnibridgeConfig."""
     config = AnibridgeConfig(
         global_config=AnibridgeProfileConfig(
-            library_provider_config={
+            source_provider_config={
                 "plex": {"url": "http://global"},
             }
         ),
         profiles={
             "primary": AnibridgeProfileConfig(
-                library_provider_config={
+                source_provider_config={
                     "anilist": {"token": "anilist-token"},
                 }
             )
@@ -122,15 +124,16 @@ def test_config_profile_inherits_global_values() -> None:
     )
 
     profile = config.get_profile("primary")
+    source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
 
-    assert profile.library_provider_config["plex"]["url"] == "http://global"
+    assert source_config["url"] == "http://global"
 
 
 def test_provider_config_merges_one_level_per_namespace() -> None:
     """Test provider config merge keeps global keys and applies profile overrides."""
     config = AnibridgeConfig(
         global_config=AnibridgeProfileConfig(
-            library_provider_config={
+            source_provider_config={
                 "plex": {
                     "url": "http://global",
                     "token": "global-token",
@@ -140,7 +143,7 @@ def test_provider_config_merges_one_level_per_namespace() -> None:
         ),
         profiles={
             "primary": AnibridgeProfileConfig(
-                library_provider_config={
+                source_provider_config={
                     "plex": {
                         "sections": ["Anime"],
                         "advanced": {"timeout": 60},
@@ -151,11 +154,23 @@ def test_provider_config_merges_one_level_per_namespace() -> None:
     )
 
     profile = config.get_profile("primary")
+    source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
 
-    assert profile.library_provider_config["plex"]["url"] == "http://global"
-    assert profile.library_provider_config["plex"]["token"] == "global-token"
-    assert profile.library_provider_config["plex"]["sections"] == ["Anime"]
-    assert profile.library_provider_config["plex"]["advanced"] == {"timeout": 60}
+    assert source_config["url"] == "http://global"
+    assert source_config["token"] == "global-token"
+    assert source_config["sections"] == ["Anime"]
+    assert source_config["advanced"] == {"timeout": 60}
+
+
+def test_provider_config_requires_namespace_mapping() -> None:
+    """Provider config payloads should be keyed by provider namespace."""
+    with pytest.raises(ValueError):
+        AnibridgeProfileConfig(
+            source_provider_config={
+                "url": "http://plex:32400",
+                "token": "plex-token",
+            }  # ty:ignore[invalid-argument-type]
+        )
 
 
 def test_get_profile_raises_for_unknown_name(
@@ -173,25 +188,23 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
     rules = SyncRulesConfig.model_validate(
         {
             "vars": {
-                "has_review": (
-                    "computed.review is not None and len(computed.review) > 0"
-                ),
-                "is_special_item": 'ctx.item.title == "Movie"',
+                "has_notes": ("computed.notes is not None and len(computed.notes) > 0"),
+                "is_special_item": 'ctx.node.title == "Movie"',
             },
             "status": [
                 {
                     "name": "Promote rewatch",
                     "if": (
-                        "current.status == ListStatus.COMPLETED and "
-                        "computed.status == ListStatus.CURRENT"
+                        "current.status == Status.COMPLETED and "
+                        "computed.status == Status.ACTIVE"
                     ),
-                    "set": "ListStatus.REPEATING",
+                    "set": "Status.REPEATING",
                 }
             ],
-            "review": [
+            "notes": [
                 {
-                    "name": "Clear empty review",
-                    "if": "not vars.has_review",
+                    "name": "Clear empty notes",
+                    "if": "not vars.has_notes",
                     "set": None,
                 }
             ],
@@ -200,15 +213,14 @@ def test_sync_rules_accept_declarative_field_rules() -> None:
 
     field_rules = rules.field_rules()
     status_rules = cast(list[dict[str, object]], field_rules["status"])
-    review_rules = cast(list[dict[str, object]], field_rules["review"])
+    notes_rules = cast(list[dict[str, object]], field_rules["notes"])
 
     assert status_rules[0]["if"] == (
-        "current.status == ListStatus.COMPLETED and "
-        "computed.status == ListStatus.CURRENT"
+        "current.status == Status.COMPLETED and computed.status == Status.ACTIVE"
     )
-    assert status_rules[0]["set"] == "ListStatus.REPEATING"
-    assert "set" in review_rules[0]
-    assert review_rules[0]["set"] is None
+    assert status_rules[0]["set"] == "Status.REPEATING"
+    assert "set" in notes_rules[0]
+    assert notes_rules[0]["set"] is None
 
 
 def test_sync_rules_user_rules_precede_template_rules() -> None:
@@ -244,11 +256,17 @@ def test_sync_rules_disable_dropped_and_paused_template_adds_status_guard() -> N
 
     assert status_rules[0]["name"] == "Don't sync dropped or paused status changes"
     assert status_rules[0]["if"] == (
-        "computed.status in (ListStatus.DROPPED, ListStatus.PAUSED)"
+        "computed.status in (Status.DROPPED, Status.PAUSED)"
     )
-    assert status_rules[0]["set"] == (
-        "ListStatus.CURRENT if current.status is None else current.status"
+    assert status_rules[0]["set"] == "current.status"
+
+    decision = SyncRuleEngine(field_rules=rules.field_rules()).evaluate_field(
+        field=RecordField.STATUS,
+        current_values={},
+        computed_values={RecordField.STATUS: Status.DROPPED},
     )
+
+    assert decision.value is None
 
 
 def test_sync_rules_promote_rewatch_template_adds_status_promotion_rule() -> None:
@@ -263,35 +281,35 @@ def test_sync_rules_promote_rewatch_template_adds_status_promotion_rule() -> Non
 
     assert status_rules[0]["name"] == "Promote rewatch to repeating"
     assert status_rules[0]["if"] == (
-        "current.status in (ListStatus.COMPLETED, ListStatus.REPEATING) and "
-        "computed.status == ListStatus.CURRENT"
+        "current.status in (Status.COMPLETED, Status.REPEATING) and "
+        "computed.status == Status.ACTIVE"
     )
-    assert status_rules[0]["set"] == "ListStatus.REPEATING"
+    assert status_rules[0]["set"] == "Status.REPEATING"
 
 
-def test_sync_rules_disable_review_and_rating_template_overrides_defaults() -> None:
-    """The disable template should force review and user_rating off."""
+def test_sync_rules_disable_notes_and_rating_template_overrides_defaults() -> None:
+    """The disable template should force notes and rating off."""
     rules = SyncRulesConfig.model_validate(
-        {"templates": [SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW]}
+        {"templates": [SyncRuleTemplateId.DISABLE_RATING_AND_NOTES]}
     )
 
-    assert rules.field_rules()["review"] is False
-    assert rules.field_rules()["user_rating"] is False
-    assert rules.templates == [SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW]
+    assert rules.field_rules()["notes"] is False
+    assert rules.field_rules()["rating"] is False
+    assert rules.templates == [SyncRuleTemplateId.DISABLE_RATING_AND_NOTES]
 
 
-def test_sync_rules_default_templates_disable_review_and_gate_ratings() -> None:
-    """Defaults should disable reviews and ratings without user overrides."""
+def test_sync_rules_default_templates_disable_notes_and_gate_ratings() -> None:
+    """Defaults should disable notes and ratings without user overrides."""
     rules = SyncRulesConfig()
 
     field_rules = rules.field_rules()
 
     assert rules.templates[:2] == [
-        SyncRuleTemplateId.USER_RATING_REQUIRES_COMPLETED,
-        SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW,
+        SyncRuleTemplateId.RATING_REQUIRES_COMPLETED,
+        SyncRuleTemplateId.DISABLE_RATING_AND_NOTES,
     ]
-    assert field_rules["review"] is False
-    assert field_rules["user_rating"] is False
+    assert field_rules["notes"] is False
+    assert field_rules["rating"] is False
 
 
 def test_sync_rules_prevent_regressions_template_adds_guard_rules() -> None:
@@ -306,13 +324,54 @@ def test_sync_rules_prevent_regressions_template_adds_guard_rules() -> None:
 
     assert progress_rules[0]["if"] == (
         "current.progress is not None and "
-        "(computed.progress is None or computed.progress < current.progress)"
+        "current.progress.current is not None and "
+        "(computed.progress is None or computed.progress.current is None or "
+        "computed.progress.current < current.progress.current)"
     )
     assert progress_rules[0]["set"] == "current.progress"
     assert status_rules[0]["if"] == (
         "current.status is not None and "
-        "(computed.status is None or computed.status < current.status)"
+        "status_rank(computed.status) < status_rank(current.status)"
     )
+
+
+def test_sync_rules_prevent_regressions_ignores_unknown_current_progress() -> None:
+    """Progress regression guard should not compare against unknown progress."""
+    rules = SyncRulesConfig.model_validate(
+        {"templates": [SyncRuleTemplateId.PREVENT_REGRESSIONS]}
+    )
+
+    decision = SyncRuleEngine(field_rules=rules.field_rules()).evaluate_field(
+        field=RecordField.PROGRESS,
+        current_values={RecordField.PROGRESS: Progress(current=None, total=12)},
+        computed_values={RecordField.PROGRESS: Progress(current=1, total=12)},
+    )
+
+    assert decision.value == Progress(current=1, total=12)
+    assert decision.reason == "default"
+
+
+def test_sync_rules_rating_gate_considers_current_completed_status() -> None:
+    """Rating gate should allow ratings when current status will be preserved."""
+    rules = SyncRulesConfig.model_validate(
+        {"templates": [SyncRuleTemplateId.RATING_REQUIRES_COMPLETED]}
+    )
+    rating = Rating(8, (0, 10, 1))
+
+    decision = SyncRuleEngine(field_rules=rules.field_rules()).evaluate_field(
+        field=RecordField.RATING,
+        current_values={
+            RecordField.STATUS: Status.COMPLETED,
+            RecordField.RATING: Rating(7, (0, 10, 1)),
+        },
+        computed_values={
+            RecordField.STATUS: Status.ACTIVE,
+            RecordField.RATING: rating,
+        },
+    )
+
+    assert decision.value == rating
+    assert decision.reason == "default"
 
 
 def test_sync_rules_explicit_false_overrides_template_field_rules() -> None:
@@ -350,9 +409,9 @@ def test_sync_rules_reject_rule_without_set() -> None:
     with pytest.raises(ValueError):
         SyncRulesConfig.model_validate(
             {
-                "review": [
+                "notes": [
                     {
-                        "if": "computed.review is not None",
+                        "if": "computed.notes is not None",
                     }
                 ]
             }
@@ -377,28 +436,28 @@ def test_sync_rules_yaml_set_values_preserve_null_and_none_semantics(
     payload = yaml.safe_load(
         "global_config:\n"
         "  sync_rules:\n"
-        "    review:\n"
-        "      - name: Clear review\n"
+        "    notes:\n"
+        "      - name: Clear notes\n"
         f"        set: {yaml_set_value}\n"
     )
 
     rules = SyncRulesConfig.model_validate(payload["global_config"]["sync_rules"])
-    review_rules = cast(list[dict[str, object]], rules.field_rules()["review"])
+    notes_rules = cast(list[dict[str, object]], rules.field_rules()["notes"])
 
-    assert review_rules[0]["set"] == expected_rule_set
+    assert notes_rules[0]["set"] == expected_rule_set
 
     decision = SyncRuleEngine(
         variables=rules.resolved_vars(),
         field_rules=rules.field_rules(),
     ).evaluate_field(
-        field_name="review",
-        current_values={"review": "existing"},
-        computed_values={"review": "computed"},
+        field=RecordField.NOTES,
+        current_values={RecordField.NOTES: "existing"},
+        computed_values={RecordField.NOTES: "computed"},
     )
 
     assert decision.allowed is True
     assert decision.value is None
-    assert decision.reason == "Clear review"
+    assert decision.reason == "Clear notes"
 
 
 def test_web_config_reports_auth_configuration_state(tmp_path: Path) -> None:
@@ -436,11 +495,6 @@ def test_config_schema_includes_extra_behavior_metadata() -> None:
     )
     assert definitions["WebConfig"]["x-anibridge-extraBehavior"] == "ignore"
     assert definitions["BasicAuthConfig"]["x-anibridge-extraBehavior"] == "ignore"
-
-
-def test_sync_field_names_returns_all_enum_values() -> None:
-    """SyncField.field_names should expose every enum value once."""
-    assert SyncField.field_names() == tuple(field.value for field in SyncField)
 
 
 def test_profile_merge_globals_no_parent_returns_self() -> None:
@@ -526,7 +580,7 @@ def test_threads_defaults_to_two_with_implicit_default_profile() -> None:
     """Implicit default profile from globals should count toward thread default."""
     config = AnibridgeConfig(
         global_config=AnibridgeProfileConfig(
-            library_provider_config={"plex": {"url": "http://plex:32400"}},
+            source_provider_config={"plex": {"url": "http://plex:32400"}},
         )
     )
 

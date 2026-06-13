@@ -1,5 +1,7 @@
 """Tests for the booru query parser and evaluator."""
 
+from typing import cast
+
 import pytest
 
 from anibridge.app.exceptions import BooruQuerySyntaxError
@@ -250,3 +252,66 @@ def test_evaluate_handles_empty_and_and_nested_parse_results() -> None:
         universe_ids=None,
     )
     assert grouped.ids == {1, 2}
+
+
+def test_collect_helpers_walk_parse_results() -> None:
+    """Collectors should tolerate pyparsing grouped nodes."""
+    grouped = bq.pp.ParseResults(
+        [bq.And([bq.BareTerm("naruto"), bq.KeyTerm("id", "1")])]
+    )
+
+    node = cast(bq.Node, grouped)
+
+    assert bq.collect_bare_terms(node) == ["naruto"]
+    assert [term.value for term in bq.collect_key_terms(node)] == ["1"]
+
+
+def test_evaluate_uses_lazy_universe_only_for_not_queries() -> None:
+    """Universe factories should be lazy and only needed for NOT evaluation."""
+    calls = 0
+
+    def universe_factory() -> set[int]:
+        nonlocal calls
+        calls += 1
+        return {1, 2, 3}
+
+    positive = bq.evaluate(
+        bq.BareTerm("naruto"),
+        db_resolver=lambda _term: set(),
+        anilist_resolver=lambda _term: [1],
+        universe_factory=universe_factory,
+    )
+    negative = bq.evaluate(
+        bq.Not(bq.KeyTerm("id", "1")),
+        db_resolver=lambda _term: {1},
+        anilist_resolver=lambda _term: [],
+        universe_factory=universe_factory,
+    )
+
+    assert positive.ids == {1}
+    assert negative.ids == {2, 3}
+    assert calls == 1
+
+
+def test_evaluate_empty_intersection_and_order_hint_min_rank() -> None:
+    """AND evaluation should exit on empty sets and keep best bare-term ranks."""
+    result = bq.evaluate(
+        bq.And([bq.BareTerm("first"), bq.BareTerm("second"), bq.KeyTerm("genre", "x")]),
+        db_resolver=lambda _term: set(),
+        anilist_resolver=lambda term: [2, 1] if term == "first" else [1, 2],
+    )
+
+    assert result.ids == set()
+    assert result.order_hint == {2: 0, 1: 0}
+    assert result.used_bare is True
+
+
+def test_evaluate_unknown_node_returns_empty() -> None:
+    """Unknown AST values should evaluate to an empty set."""
+    result = bq.evaluate(
+        cast(bq.Node, object()),
+        db_resolver=lambda _term: {1},
+        anilist_resolver=lambda _term: [1],
+    )
+
+    assert result.ids == set()

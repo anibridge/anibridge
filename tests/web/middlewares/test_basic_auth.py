@@ -440,23 +440,19 @@ def test_create_app_lifespan_purges_ephemeral_history_on_startup(
             [
                 SyncHistory(
                     profile_name="profile",
-                    library_namespace="lib",
-                    library_section_key="1",
-                    library_media_key="persisted",
-                    list_namespace="alist",
-                    list_media_key="persisted",
-                    media_kind="movie",
+                    source_namespace="lib",
+                    source_ref={"key": "persisted", "path": []},
+                    target_namespace="alist",
+                    target_ref={"key": "persisted", "path": []},
                     outcome=SyncOutcome.SYNCED,
                     ephemeral=False,
                 ),
                 SyncHistory(
                     profile_name="profile",
-                    library_namespace="lib",
-                    library_section_key="1",
-                    library_media_key="ephemeral",
-                    list_namespace="alist",
-                    list_media_key="ephemeral",
-                    media_kind="movie",
+                    source_namespace="lib",
+                    source_ref={"key": "ephemeral", "path": []},
+                    target_namespace="alist",
+                    target_ref={"key": "ephemeral", "path": []},
                     outcome=SyncOutcome.SYNCED,
                     ephemeral=True,
                 ),
@@ -484,10 +480,8 @@ def test_create_app_lifespan_purges_ephemeral_history_on_startup(
 
     with db() as ctx:
         rows = (
-            ctx.session.query(SyncHistory)
-            .order_by(SyncHistory.library_media_key.asc())
-            .all()
+            ctx.session.query(SyncHistory).order_by(SyncHistory.source_ref.asc()).all()
         )
         assert len(rows) == 1
-        assert rows[0].library_media_key == "persisted"
+        assert rows[0].source_ref["key"] == "persisted"
         assert rows[0].ephemeral is False

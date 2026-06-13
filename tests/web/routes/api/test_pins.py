@@ -4,8 +4,14 @@ from datetime import UTC, datetime
 
 import pytest
 
+from anibridge.app.core.sync.refs import RefPayload
+from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.web.routes.api import pins as pins_api_module
-from anibridge.app.web.services.pin_service import PinEntry, PinFieldOption
+from anibridge.app.web.services.pin_service import (
+    PinEntry,
+    PinFieldOption,
+    PinSearchResult,
+)
 
 
 class _FakePinService:
@@ -20,8 +26,8 @@ class _FakePinService:
         return [
             PinEntry(
                 profile_name=profile,
-                list_namespace="anilist",
-                list_media_key="123",
+                target_namespace="anilist",
+                target_ref=RefPayload("123"),
                 fields=["status"],
                 created_at=datetime(2026, 1, 1, tzinfo=UTC),
                 updated_at=datetime(2026, 1, 2, tzinfo=UTC),
@@ -35,8 +41,8 @@ class _FakePinService:
             return None
         return PinEntry(
             profile_name=profile,
-            list_namespace="anilist",
-            list_media_key=media_key,
+            target_namespace="anilist",
+            target_ref=RefPayload(media_key),
             fields=["status"],
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 2, tzinfo=UTC),
@@ -50,8 +56,8 @@ class _FakePinService:
             raise ValueError("Unsupported field")
         return PinEntry(
             profile_name=profile,
-            list_namespace="anilist",
-            list_media_key=media_key,
+            target_namespace="anilist",
+            target_ref=RefPayload(media_key),
             fields=fields,
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 2, tzinfo=UTC),
@@ -59,6 +65,24 @@ class _FakePinService:
 
     def delete_pin(self, profile: str, media_key: str) -> None:
         self.deleted.append((profile, media_key))
+
+    async def search_pins(
+        self,
+        profile: str,
+        q: str,
+        *,
+        limit: int,
+    ) -> list[PinSearchResult]:
+        return [
+            PinSearchResult(
+                media=ProviderMediaMetadata(
+                    namespace="anilist",
+                    key="456",
+                    title=f"Result {q}",
+                ),
+                pin=None,
+            )
+        ][:limit]
 
 
 @pytest.fixture
@@ -83,7 +107,26 @@ def test_get_pin_fields_returns_service_options(pins_client, fake_pin_service):
 def test_list_pin_route_returns_service_items(pins_client, fake_pin_service) -> None:
     listed = pins_client.get("/api/pins/default", params={"with_media": "true"})
     assert listed.status_code == 200
-    assert listed.json()["pins"][0]["list_media_key"] == "123"
+    assert listed.json()["pins"][0]["target_ref"]["key"] == "123"
+
+
+def test_search_pin_route_returns_target_results(pins_client, fake_pin_service) -> None:
+    response = pins_client.get("/api/pins/default/search", params={"q": "bebop"})
+
+    assert response.status_code == 200
+    assert response.json()["results"] == [
+        {
+            "media": {
+                "namespace": "anilist",
+                "key": "456",
+                "title": "Result bebop",
+                "poster_url": None,
+                "external_url": None,
+                "labels": None,
+            },
+            "pin": None,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -107,7 +150,7 @@ def test_get_pin_route_handles_found_and_missing_entries(
 
     assert fetched.status_code == expected_status
     if expected_status == 200:
-        assert fetched.json()["list_media_key"] == media_key
+        assert fetched.json()["target_ref"]["key"] == media_key
     else:
         assert fetched.json()["detail"] == "Pin not found"
 

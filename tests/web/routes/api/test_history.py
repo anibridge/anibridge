@@ -9,7 +9,6 @@ from anibridge.app.web.services.history_service import HistoryItem, HistoryPage
 class _FakeHistoryService:
     def __init__(self) -> None:
         self.deleted: list[tuple[str, int]] = []
-        self.undone: list[tuple[str, int]] = []
         self.retried: list[tuple[str, int]] = []
         self.page_requests: list[dict] = []
 
@@ -32,15 +31,6 @@ class _FakeHistoryService:
 
     async def delete_item(self, profile: str, item_id: int) -> None:
         self.deleted.append((profile, item_id))
-
-    async def undo_item(self, profile: str, item_id: int) -> HistoryItem:
-        self.undone.append((profile, item_id))
-        return HistoryItem(
-            id=item_id,
-            profile_name=profile,
-            outcome="deleted",
-            timestamp="2026-01-01T00:00:00+00:00",
-        )
 
     async def retry_item(self, profile: str, item_id: int) -> None:
         self.retried.append((profile, item_id))
@@ -70,8 +60,8 @@ def test_history_page_route_delegates_filters_to_service(
             "after_id": 2,
             "include_stats": "false",
             "outcome": "synced",
-            "library_namespace": "plex",
-            "list_namespace": "anilist",
+            "source_namespace": "plex",
+            "target_namespace": "anilist",
         },
     )
 
@@ -101,18 +91,9 @@ def test_history_page_route_delegates_filters_to_service(
         ),
         pytest.param(
             "post",
-            "/api/history/default/13/undo",
-            "undone",
-            ("default", 13),
-            "item",
-            13,
-            id="undo",
-        ),
-        pytest.param(
-            "post",
-            "/api/history/default/14/retry",
+            "/api/history/default/12/retry",
             "retried",
-            ("default", 14),
+            ("default", 12),
             None,
             {"ok": True},
             id="retry",

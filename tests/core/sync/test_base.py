@@ -1,1930 +1,1226 @@
-"""Tests covering helper utilities on `anibridge.app.core.sync.base`."""
+"""Focused tests for page-level sync batching helpers."""
 
-import logging
-from collections.abc import Sequence
-from datetime import UTC, datetime
-from typing import Any, cast
+from collections.abc import Mapping
+from typing import cast
 
 import pytest
-from anibridge.library import MediaKind
-from anibridge.list import ListEntry as ListEntryProtocol
-from anibridge.list import ListMediaType, ListStatus
-from anibridge.utils.mappings import AnibridgeDescriptorMapping
+from anibridge.provider.base import (
+    Capabilities,
+    Descriptor,
+    ExternalId,
+    FieldSpec,
+    Match,
+    Node,
+    Page,
+    Progress,
+    ProgressConstraint,
+    Provider,
+    Rating,
+    Record,
+    RecordField,
+    RecordKind,
+    RecordQuery,
+    RecordWrite,
+    Ref,
+    Role,
+    ScanItem,
+    ScanQuery,
+    State,
+    Status,
+    SupportsMapping,
+    SupportsRecordReads,
+    SupportsRecordWrites,
+    SupportsScan,
+    UpsertRecord,
+    Value,
+    WriteOp,
+    WriteResult,
+)
+from anibridge.utils.mappings import AnibridgeMapping
 
-from anibridge.app.config.settings import SyncField, SyncRulesConfig
-from anibridge.app.core.sync.base import BaseSyncClient
+import anibridge.app.core.sync.base as base_module
+from anibridge.app.config.sync_rules import SyncRulesConfig
+from anibridge.app.core.animap import AnimapClient
+from anibridge.app.core.sync.base import SyncClient
+from anibridge.app.core.sync.history import SyncHistoryManager
+from anibridge.app.core.sync.planner import (
+    PreparedRecordUpdate,
+    RecordPlanner,
+    SyncLogContext,
+)
+from anibridge.app.core.sync.refs import ref_to_json
+from anibridge.app.core.sync.request import SourceScan, SyncTrigger
 from anibridge.app.core.sync.rules import SyncRuleEngine
-from anibridge.app.core.sync.stats import BatchUpdate, EntrySnapshot, ItemIdentifier
-from anibridge.app.core.sync.targeting import SyncTarget
+from anibridge.app.core.sync.stats import PlannedWrite, RecordSnapshot
+from anibridge.app.core.sync.targeting import ResolvedTarget
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
-from anibridge.app.utils.terminal import ARROW
-from tests.core.sync.conftest import (
-    FakeAnimapClient,
-    FakeLibraryEpisode,
-    FakeLibraryMovie,
-    FakeLibraryProvider,
-    FakeLibrarySeason,
-    FakeLibraryShow,
-    FakeListEntry,
-    FakeListProvider,
-)
+
+_PROGRESS_KIND = "progress"
 
 
-class StubSyncClient(BaseSyncClient[Any, Any, Any]):
-    """Concrete implementation of BaseSyncClient for exercising helpers."""
+def _capabilities(
+    *,
+    role: Role,
+    readable: bool,
+    writable: bool,
+    statuses: tuple[Status, ...] = (Status.ACTIVE, Status.COMPLETED),
+    progress_constraints: tuple[ProgressConstraint, ...] = (),
+) -> Capabilities:
+    status_values = tuple(Descriptor(status.value, status) for status in statuses)
+    return Capabilities(
+        roles=frozenset({role}),
+        external_authorities=frozenset({"target"}),
+        record_kinds=(Descriptor(_PROGRESS_KIND, RecordKind.PROGRESS),),
+        record_fields={
+            RecordField.STATUS: FieldSpec(
+                RecordField.STATUS,
+                readable=readable,
+                writable=writable,
+                values=status_values,
+            ),
+            RecordField.PROGRESS: FieldSpec(
+                RecordField.PROGRESS,
+                readable=readable,
+                writable=writable,
+                constraints=progress_constraints,
+            ),
+            RecordField.RATING: FieldSpec(
+                RecordField.RATING,
+                readable=readable,
+                writable=writable,
+            ),
+            RecordField.NOTES: FieldSpec(
+                RecordField.NOTES,
+                readable=readable,
+                writable=writable,
+            ),
+        },
+        write_ops=frozenset({WriteOp.UPSERT_RECORD}) if writable else frozenset(),
+    )
 
-    def __init__(self, *args, **kwargs) -> None:
-        """Initialize the stub and capture queued mapping results."""
-        super().__init__(*args, **kwargs)
-        self._mapping_targets: list[
-            tuple[
-                Any,
-                Sequence[Any],
-                SyncTarget,
-            ]
-        ] = []
-        self._search_targets: list[
-            tuple[
-                Any,
-                Sequence[Any],
-                SyncTarget,
-            ]
-        ] = []
-        self._trackable_items: list[ItemIdentifier] = []
-        self._status_override: ListStatus | None = ListStatus.CURRENT
-        self._progress_override: int | None = 1
-        self._repeats_override: int | None = 0
-        self._review_override: str | None = None
-        self._user_rating_override: int | None = 50
-        self._started_at_override: datetime | None = None
-        self._finished_at_override: datetime | None = None
 
-    async def _get_all_trackable_items(self, item: Any) -> list[ItemIdentifier]:
-        return list(self._trackable_items)
+class FakeScanProvider(SupportsScan):
+    """Source provider double that records scan field projections."""
 
-    async def _collect_prefetch_keys(self, item: Any) -> Sequence[str]:
-        return []
+    NAMESPACE = "source"
 
-    async def resolve_mapping_targets(
-        self, item: Any
-    ) -> Sequence[tuple[Any, Sequence[Any], SyncTarget]]:
-        """Return queued mapping targets for testing purposes."""
-        del item
-        return tuple(self._mapping_targets)
+    def __init__(
+        self,
+        statuses: tuple[Status, ...] = (Status.ACTIVE, Status.COMPLETED),
+    ) -> None:
+        self.queries: list[ScanQuery] = []
+        self.statuses = statuses
+        self.pages: list[Page[ScanItem]] = [Page(items=())]
+        self.cleared = False
 
-    async def resolve_search_targets(
-        self, item: Any
-    ) -> Sequence[tuple[Any, Sequence[Any], SyncTarget]]:
-        """Return queued search targets for testing purposes."""
-        del item
-        return tuple(self._search_targets)
+    def capabilities(self) -> Capabilities:
+        return _capabilities(
+            role=Role.SOURCE,
+            readable=True,
+            writable=False,
+            statuses=self.statuses,
+        )
 
-    async def _calculate_status(self, **kwargs):
-        return self._status_override
+    async def scan(self, query: ScanQuery) -> Page[ScanItem]:
+        self.queries.append(query)
+        if self.pages:
+            return self.pages.pop(0)
+        return Page(items=())
 
-    async def _calculate_user_rating(self, **kwargs):
-        return self._user_rating_override
+    async def clear_cache(self) -> None:
+        self.cleared = True
 
-    async def _calculate_progress(self, **kwargs):
-        return self._progress_override
 
-    async def _calculate_repeats(self, **kwargs):
-        return self._repeats_override
+class FakeTargetProvider(
+    SupportsMapping,
+    SupportsRecordReads,
+    SupportsRecordWrites,
+):
+    """Target provider double that records read and write projections."""
 
-    async def _calculate_started_at(self, **kwargs):
-        return self._started_at_override
+    NAMESPACE = "target"
 
-    async def _calculate_finished_at(self, **kwargs):
-        return self._finished_at_override
+    def __init__(
+        self,
+        statuses: tuple[Status, ...] = (Status.ACTIVE, Status.COMPLETED),
+    ) -> None:
+        self.queries: list[RecordQuery] = []
+        self.statuses = statuses
+        self.records: dict[tuple[str, str], Record] = {}
+        self.writes: list[RecordWrite] = []
+        self.write_results: tuple[WriteResult, ...] | None = None
+        self.write_error: Exception | None = None
+        self.cleared = False
 
-    async def _calculate_review(self, **kwargs):
-        return self._review_override
+    def capabilities(self) -> Capabilities:
+        return _capabilities(
+            role=Role.TARGET,
+            readable=True,
+            writable=True,
+            statuses=self.statuses,
+        )
 
-    def _debug_log_title(self, item: Any, child_item: Any | None = None) -> str:
-        return str(item)
+    async def fetch_records(self, query: RecordQuery) -> Page[Record]:
+        self.queries.append(query)
+        return Page(
+            items=tuple(
+                record
+                for ref in query.refs
+                for kind in query.native_record_kinds
+                if (record := self.records.get((ref.key, kind))) is not None
+            )
+        )
 
-    def _debug_log_ids(
+    async def resolve(self, ids) -> tuple[Match, ...]:
+        return tuple(
+            Match(
+                external_id=item,
+                ref=Ref.anchor(item.value),
+                confidence=1.0,
+            )
+            for item in ids
+            if isinstance(item, ExternalId) and item.authority == "target"
+        )
+
+    async def write_records(self, writes) -> tuple[WriteResult, ...]:
+        self.writes.extend(writes)
+        if self.write_error is not None:
+            raise self.write_error
+        if self.write_results is not None:
+            return self.write_results
+        return tuple(WriteResult(ok=True, op=WriteOp.UPSERT_RECORD) for _ in writes)
+
+    async def clear_cache(self) -> None:
+        self.cleared = True
+
+
+class FakeRecordReader(SupportsRecordReads):
+    """Target provider double that records batched read queries."""
+
+    NAMESPACE = "target"
+
+    def __init__(self) -> None:
+        self.queries: list[RecordQuery] = []
+
+    async def fetch_records(self, query: RecordQuery) -> Page[Record]:
+        self.queries.append(query)
+        return Page(
+            items=tuple(
+                Record(ref=ref, kind="", values={RecordField.NOTES: "existing"})
+                for ref in query.refs
+            )
+        )
+
+
+class FakeWriteOnlyTarget(SupportsRecordWrites):
+    """Target provider double missing mapping support."""
+
+    NAMESPACE = "target"
+
+    def capabilities(self) -> Capabilities:
+        return _capabilities(role=Role.TARGET, readable=True, writable=True)
+
+    async def write_records(self, writes) -> tuple[WriteResult, ...]:
+        return tuple(WriteResult(ok=True, op=WriteOp.UPSERT_RECORD) for _ in writes)
+
+
+class FakeHistory:
+    """History manager double that records calls without touching the database."""
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+        self.cleanup: list[tuple[Ref, Ref]] = []
+        self.flushed = False
+
+    async def create_sync_history(self, **kwargs) -> None:
+        self.created.append(kwargs)
+
+    def queue_failure_history_cleanup(
         self,
         *,
-        item: Any,
-        child_item: Any,
-        entry: ListEntryProtocol | None,
-        media_key=None,
-    ) -> str:
-        return f"library_key: {getattr(child_item, 'key', 'unknown')}"
+        source_ref: Ref,
+        target_ref: Ref,
+    ) -> None:
+        self.cleanup.append((source_ref, target_ref))
+
+    def flush_failure_history_cleanup(self) -> None:
+        self.flushed = True
 
 
-@pytest.fixture
-def stub_client() -> StubSyncClient:
-    """Instantiate a sync client with fake providers for helper tests."""
-    provider = FakeListProvider()
-    library_provider = FakeLibraryProvider()
-    animap = FakeAnimapClient()
-    return StubSyncClient(
-        library_provider=library_provider,
-        list_provider=provider,
-        animap_client=animap,
+def _sync_client(
+    *,
+    source: FakeScanProvider | None = None,
+    target: FakeTargetProvider | None = None,
+    destructive_sync: bool = False,
+    dry_run: bool = False,
+) -> SyncClient:
+    client = SyncClient(
+        source_provider=cast(Provider, source or FakeScanProvider()),
+        target_provider=cast(Provider, target or FakeTargetProvider()),
+        animap_client=cast(AnimapClient, object()),
         full_scan=False,
-        destructive_sync=False,
-        search_fallback_threshold=70,
-        batch_requests=False,
-        dry_run=False,
-        profile_name="tester",
+        destructive_sync=destructive_sync,
+        dry_run=dry_run,
+        profile_name="profile",
+        sync_rules=SyncRulesConfig(),
+    )
+    client._history = cast(SyncHistoryManager, FakeHistory())
+    return client
+
+
+def _scan_item(
+    key: str,
+    *,
+    records: tuple[Record, ...] | None = None,
+) -> ScanItem:
+    return ScanItem(
+        node=Node(ref=Ref.anchor(key), title=key.title(), kind="anime"),
+        records=records or (),
     )
 
 
-def make_movie(**kwargs) -> FakeLibraryMovie:
-    """Helper to construct fake movie instances succinctly."""
-    return FakeLibraryMovie(key=kwargs.pop("key", "movie-1"), title="Movie", **kwargs)
-
-
-def set_sync_rules(stub_client: StubSyncClient, payload: dict[str, Any]) -> None:
-    """Attach declarative sync rules to the stub client."""
-    rules = SyncRulesConfig.model_validate(payload)
-    stub_client._sync_rule_engine = SyncRuleEngine(
-        variables=rules.resolved_vars(),
-        field_rules=rules.field_rules(),
-    )
-    stub_client._disabled_fields = frozenset(
-        field.value
-        for field in SyncField
-        if stub_client._sync_rule_engine.is_disabled(field.value)
-    )
-    stub_client._rule_context_fields = {
-        field.value: stub_client._sync_rule_engine.context_media_fields(field.value)
-        for field in SyncField
-    }
-
-
-class CaptureHandler(logging.Handler):
-    """Capture log records for assertions."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.INFO)
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
-
-
-class _ExplosiveRuleMedia(FakeLibraryMovie):
-    """Media stub whose expensive properties raise if touched."""
-
-    def __init__(self) -> None:
-        super().__init__(key="lib-1", title="Explosive")
-
-    @property
-    def on_watching(self) -> bool:
-        raise AssertionError("on_watching should not be evaluated")
-
-    @property
-    def on_watchlist(self) -> bool:
-        raise AssertionError("on_watchlist should not be evaluated")
-
-    @property
-    def user_rating(self) -> int | None:
-        raise AssertionError("user_rating should not be evaluated")
-
-    @property
-    def view_count(self) -> int:
-        raise AssertionError("view_count should not be evaluated")
-
-
-class _CountedRuleMedia(_ExplosiveRuleMedia):
-    """Media stub that counts expensive property accesses."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.on_watching_reads = 0
-
-    @property
-    def on_watching(self) -> bool:
-        self.on_watching_reads += 1
-        return True
-
-
-class _CountedWatchlistMedia(_ExplosiveRuleMedia):
-    """Media stub that counts watchlist property accesses."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.on_watchlist_reads = 0
-
-    @property
-    def on_watchlist(self) -> bool:
-        self.on_watchlist_reads += 1
-        return True
-
-
-class _IndexedRuleMedia(FakeLibraryMovie):
-    """Media stub exposing grandchild index fields used by ctx rules."""
-
-    def __init__(self, *, key: str, season_index: int, index: int) -> None:
-        super().__init__(key=key, title="Indexed")
-        self.season_index = season_index
-        self.index = index
-
-
-def test_should_update_field_respects_skip_fields(
-    stub_client: StubSyncClient,
-) -> None:
-    """Pinned fields should not be applied even when values differ."""
-    skip_fields = {SyncField.STATUS.value}
-
-    assert not stub_client._should_apply_field(
-        SyncField.STATUS,
-        ListStatus.COMPLETED,
-        ListStatus.CURRENT,
-        skip_fields,
-    )[0]
-
-
-def test_should_update_field_allows_regular_updates(
-    stub_client: StubSyncClient,
-) -> None:
-    """Regular updates should apply when no generic guard blocks them."""
-    assert stub_client._should_apply_field(SyncField.PROGRESS, 5, 4, set())[0]
-
-    stub_client.destructive_sync = True
-    assert stub_client._should_apply_field(SyncField.PROGRESS, 1, None, set())[0]
-
-
-def test_should_update_field_blocks_nulling_when_not_destructive(
-    stub_client: StubSyncClient,
-) -> None:
-    """Nulling an existing field should require destructive_sync."""
-    stub_client.destructive_sync = False
-    assert not stub_client._should_apply_field(
-        SyncField.REVIEW,
-        None,
-        "existing review",
-        set(),
-    )[0]
-
-    stub_client.destructive_sync = True
-    assert stub_client._should_apply_field(
-        SyncField.REVIEW,
-        None,
-        "existing review",
-        set(),
-    )[0]
-
-
-def test_get_pinned_fields_uses_cache(stub_client: StubSyncClient, sync_db) -> None:
-    """Pinned fields should be loaded from the database and cached."""
-    with sync_db as ctx:
-        ctx.session.add(
-            Pin(
-                profile_name=stub_client.profile_name,
-                list_namespace=stub_client.list_provider.NAMESPACE,
-                list_media_key="123",
-                fields=["status"],
-            )
-        )
-        ctx.session.commit()
-
-    fields = stub_client._get_pinned_fields(stub_client.list_provider.NAMESPACE, "123")
-    cached = stub_client._get_pinned_fields(stub_client.list_provider.NAMESPACE, "123")
-
-    assert fields == ["status"]
-    assert cached == ["status"]
-
-
-@pytest.mark.asyncio
-async def test_prefetch_entries_handles_provider_error(
-    stub_client: StubSyncClient,
-) -> None:
-    """Prefetch should swallow provider errors."""
-
-    async def _collect(_item):
-        return ["1"]
-
-    async def _boom(_keys):
-        raise RuntimeError("boom")
-
-    stub_client._collect_prefetch_keys = _collect  # ty:ignore[invalid-assignment]
-    stub_client.list_provider.get_entries_batch = _boom  # ty:ignore[invalid-assignment]
-
-    await stub_client.prefetch_entries([make_movie()])
-
-
-@pytest.mark.asyncio
-async def test_sync_media_deletes_entry_when_destructive(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Destructive sync should delete entries when status becomes None."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    provider.entries["200"] = entry
-    stub_client.destructive_sync = True
-    stub_client._status_override = None
-
-    outcome = await stub_client.sync_media(
-        item=make_movie(),
-        child_item=make_movie(),
-        grandchild_items=(),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="200",
+def _record(
+    key: str,
+    *,
+    values: Mapping[RecordField, Value] | None = None,
+    kind: str = _PROGRESS_KIND,
+) -> Record:
+    return Record(
+        ref=Ref.anchor(key),
+        kind=kind,
+        values=values or {},
     )
 
-    assert outcome is SyncOutcome.DELETED
-    assert provider.deleted_keys == ["200"]
 
-
-@pytest.mark.asyncio
-async def test_sync_media_does_not_hydrate_unused_ctx_media_fields(
-    stub_client: StubSyncClient,
-) -> None:
-    """Context hydration should skip expensive fields when rules don't use them."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-unused-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
+def _planned_write(
+    *,
+    target_ref: Ref | None = None,
+    after: RecordSnapshot | None = None,
+) -> tuple[PlannedWrite, Record]:
+    source_record = _record(
+        "source",
+        values={RecordField.PROGRESS: Progress(current=1, total=12)},
     )
-    provider.entries[entry.media().key] = entry
-
-    set_sync_rules(
-        stub_client,
-        {
-            "status": [
-                {
-                    "name": "status without ctx",
-                    "if": "computed.status == ListStatus.CURRENT",
-                    "set": "computed.status",
-                }
-            ]
-        },
+    write = UpsertRecord(
+        ref=target_ref or Ref.anchor("target"),
+        kind=_PROGRESS_KIND,
+        set={RecordField.PROGRESS: Progress(current=2, total=12)},
     )
-
-    media = _ExplosiveRuleMedia()
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(media,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-
-
-@pytest.mark.asyncio
-async def test_sync_media_hydrates_ctx_media_fields_when_rule_uses_them(
-    stub_client: StubSyncClient,
-) -> None:
-    """Context hydration should evaluate expensive fields when rules reference them."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-used-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    provider.entries[entry.media().key] = entry
-
-    set_sync_rules(
-        stub_client,
-        {
-            "status": [
-                {
-                    "name": "status with ctx",
-                    "if": "ctx.item.on_watching",
-                    "set": "computed.status",
-                }
-            ]
-        },
-    )
-
-    media = _CountedRuleMedia()
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(media,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-    assert media.on_watching_reads > 0
-
-
-@pytest.mark.asyncio
-async def test_sync_media_preserves_cheap_ctx_fields(
-    stub_client: StubSyncClient,
-) -> None:
-    """Rules should still be able to read always-available ctx media fields."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-cheap-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    provider.entries[entry.media().key] = entry
-
-    set_sync_rules(
-        stub_client,
-        {
-            "status": [
-                {
-                    "name": "cheap ctx title check",
-                    "if": (
-                        'ctx.item.title == "Movie" and ctx.child.media_kind == "movie"'
-                    ),
-                    "set": "computed.status",
-                }
-            ]
-        },
-    )
-
-    media = FakeLibraryMovie(key="cheap-ctx", title="Movie")
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(media,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-
-
-@pytest.mark.asyncio
-async def test_sync_media_preserves_grandchild_index_context(
-    stub_client: StubSyncClient,
-) -> None:
-    """Rules should still be able to read indexed grandchild ctx fields."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-grandchild-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    provider.entries[entry.media().key] = entry
-
-    set_sync_rules(
-        stub_client,
-        {
-            "status": [
-                {
-                    "name": "grandchild season index check",
-                    "if": (
-                        "ctx.grandchildren[0].season_index == 2 and "
-                        "ctx.grandchildren[0].index == 7"
-                    ),
-                    "set": "computed.status",
-                }
-            ]
-        },
-    )
-
-    item = make_movie(key="grandchild-parent")
-    child = make_movie(key="grandchild-child")
-    grandchild = _IndexedRuleMedia(key="grandchild-1", season_index=2, index=7)
-    outcome = await stub_client.sync_media(
-        item=item,
-        child_item=child,
-        grandchild_items=(grandchild,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-
-
-@pytest.mark.asyncio
-async def test_sync_media_hydrates_ctx_fields_referenced_through_vars(
-    stub_client: StubSyncClient,
-) -> None:
-    """Vars that reference ctx should still trigger the needed context hydration."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-vars-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    provider.entries[entry.media().key] = entry
-
-    set_sync_rules(
-        stub_client,
-        {
-            "vars": {
-                "watchlisted": "ctx.item.on_watchlist",
-            },
-            "status": [
-                {
-                    "name": "ctx through vars",
-                    "if": "vars.watchlisted",
-                    "set": "computed.status",
-                }
-            ],
-        },
-    )
-
-    media = _CountedWatchlistMedia()
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(media,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-    assert media.on_watchlist_reads > 0
-
-
-@pytest.mark.asyncio
-async def test_sync_media_deletes_entry_evicts_cache(
-    stub_client: StubSyncClient,
-) -> None:
-    """Destructive delete should evict the deleted entry from cache."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-cache",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    stub_client._cache.cache_entry(cast(ListEntryProtocol, entry))
-    stub_client.destructive_sync = True
-    stub_client._status_override = None
-
-    outcome = await stub_client.sync_media(
-        item=make_movie(),
-        child_item=make_movie(),
-        grandchild_items=(),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="200-cache",
-    )
-
-    assert outcome is SyncOutcome.DELETED
-    assert await stub_client._cache.get_entry("200-cache") is None
-
-
-@pytest.mark.asyncio
-async def test_sync_media_empty_sync_wins_over_destructive_delete(
-    stub_client: StubSyncClient,
-) -> None:
-    """empty_sync should retain idle entries as planning instead of deleting them."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="200-empty",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.COMPLETED
-    entry.progress = 1
-    provider.entries["200-empty"] = entry
-
-    stub_client.destructive_sync = True
-    stub_client.empty_sync = True
-    stub_client._status_override = ListStatus.PLANNING
-    stub_client._progress_override = None
-
-    outcome = await stub_client.sync_media(
-        item=make_movie(),
-        child_item=make_movie(),
-        grandchild_items=(),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="200-empty",
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-    assert provider.deleted_keys == []
-    assert provider.updated_entries and provider.updated_entries[0][0] == "200-empty"
-    assert entry.status == ListStatus.PLANNING
-    assert entry.progress is None
-
-
-@pytest.mark.asyncio
-async def test_sync_media_skips_sync_rule_disabled_field_calculator(
-    stub_client: StubSyncClient,
-) -> None:
-    """sync_rules.<field>: false should skip invoking that field calculator."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="205b",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    set_sync_rules(stub_client, {"review": False})
-
-    async def _boom_review(**kwargs):
-        raise AssertionError("review calculator should not be called")
-
-    stub_client._field_calculators[SyncField.REVIEW] = _boom_review
-
-    outcome = await stub_client.sync_media(
-        item=make_movie(),
-        child_item=make_movie(),
-        grandchild_items=(),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="205b",
-    )
-
-    assert outcome in (SyncOutcome.SKIPPED, SyncOutcome.SYNCED)
-
-
-@pytest.mark.asyncio
-async def test_sync_media_skips_when_no_status(
-    stub_client: StubSyncClient,
-) -> None:
-    """Non-destructive sync should skip when no status is computed."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="201",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    stub_client._status_override = None
-
-    outcome = await stub_client.sync_media(
-        item=make_movie(),
-        child_item=make_movie(),
-        grandchild_items=(),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="201",
-    )
-
-    assert outcome is SyncOutcome.SKIPPED
-
-
-@pytest.mark.asyncio
-async def test_apply_update_dry_run_records_ephemeral_history(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Dry-run updates should record ephemeral history without applying changes."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="300",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-    entry.progress = 1
-    after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-
-    plan = BatchUpdate(
-        item=make_movie(),
-        child=make_movie(),
-        grandchildren=(),
-        before=before,
-        after=after,
-        entry=cast(ListEntryProtocol, entry),
-        source_entry=cast(ListEntryProtocol, entry),
-        list_media_key="300",
-    )
-
-    stub_client.dry_run = True
-    outcome = await stub_client._apply_update(
-        plan,
-        diff_str="progress: 0 → 1",
-        debug_title="Movie",
-        debug_ids="id",
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-    assert provider.updated_entries == []
-    with sync_db as ctx:
-        history = ctx.session.query(SyncHistory).all()
-        assert len(history) == 1
-        assert history[0].outcome is SyncOutcome.SYNCED
-        assert history[0].ephemeral is True
-        assert history[0].info is not None
-        assert "operation" not in history[0].info
-        assert "mode" not in history[0].info
-        assert "dry_run" not in history[0].info
-
-
-@pytest.mark.asyncio
-async def test_batch_sync_dry_run_clears_queue_and_records_history(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Batch sync dry-run should clear the pending queue and write history."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="400",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-    entry.progress = 1
-    after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-
-    stub_client._pending_updates = [
-        BatchUpdate(
-            item=make_movie(),
-            child=make_movie(),
-            grandchildren=(),
-            before=before,
-            after=after,
-            entry=cast(ListEntryProtocol, entry),
-            source_entry=cast(ListEntryProtocol, entry),
-            list_media_key="400",
-        )
-    ]
-    stub_client.dry_run = True
-
-    await stub_client.batch_sync()
-
-    assert stub_client._pending_updates == []
-    assert provider.batch_updates == []
-    with sync_db as ctx:
-        history = ctx.session.query(SyncHistory).all()
-        assert len(history) == 1
-        assert history[0].outcome is SyncOutcome.SYNCED
-        assert history[0].ephemeral is True
-        assert history[0].info is not None
-        assert "mode" not in history[0].info
-        assert "dry_run" not in history[0].info
-
-
-@pytest.mark.asyncio
-async def test_batch_sync_failure_raises(stub_client: StubSyncClient, sync_db) -> None:
-    """Batch sync errors should propagate and clear the queue."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="500",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-    entry.progress = 1
-    after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-
-    stub_client._pending_updates = [
-        BatchUpdate(
-            item=make_movie(),
-            child=make_movie(),
-            grandchildren=(),
-            before=before,
-            after=after,
-            entry=cast(ListEntryProtocol, entry),
-            source_entry=cast(ListEntryProtocol, entry),
-            list_media_key="500",
-        )
-    ]
-
-    async def _boom(_entries):
-        raise RuntimeError("boom")
-
-    stub_client.list_provider.update_entries_batch = _boom  # ty:ignore[invalid-assignment]
-
-    with pytest.raises(RuntimeError):
-        await stub_client.batch_sync()
-
-    assert stub_client._pending_updates == []
-
-
-def test_render_diff_includes_changes(stub_client: StubSyncClient) -> None:
-    """Rendered diffs should include updated attributes."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="600",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-    entry.progress = 1
-    after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-
-    plan = BatchUpdate(
-        item=make_movie(),
-        child=make_movie(),
-        grandchildren=(),
-        before=before,
-        after=after,
-        entry=cast(ListEntryProtocol, entry),
-        source_entry=cast(ListEntryProtocol, entry),
-        list_media_key="600",
-    )
-
-    diff = stub_client._render_diff(plan)
-
-    assert "progress" in diff
-
-
-@pytest.mark.asyncio
-async def test_batch_sync_success(stub_client: StubSyncClient, sync_db) -> None:
-    """Batch sync should update entries and clear the queue."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="700",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-    entry.progress = 1
-    after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-
-    stub_client._pending_updates = [
-        BatchUpdate(
-            item=make_movie(),
-            child=make_movie(),
-            grandchildren=(),
-            before=before,
-            after=after,
-            entry=cast(ListEntryProtocol, entry),
-            source_entry=cast(ListEntryProtocol, entry),
-            list_media_key="700",
-        )
-    ]
-
-    await stub_client.batch_sync()
-
-    assert provider.batch_updates
-    assert stub_client._pending_updates == []
-
-
-@pytest.mark.asyncio
-async def test_apply_update_raises_on_provider_error(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Provider update errors should be surfaced to callers."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="800",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-    entry.progress = 1
-    after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
-
-    plan = BatchUpdate(
-        item=make_movie(),
-        child=make_movie(),
-        grandchildren=(),
-        before=before,
-        after=after,
-        entry=cast(ListEntryProtocol, entry),
-        source_entry=cast(ListEntryProtocol, entry),
-        list_media_key="800",
-    )
-
-    async def _boom(_key, _entry):
-        raise RuntimeError("boom")
-
-    stub_client.list_provider.update_entry = _boom  # ty:ignore[invalid-assignment]
-
-    with pytest.raises(RuntimeError):
-        await stub_client._apply_update(
-            plan,
-            diff_str="progress: 0 → 1",
-            debug_title="Movie",
-            debug_ids="id",
-        )
-
-
-def test_format_diff_serializes_status_and_datetimes(
-    stub_client: StubSyncClient,
-) -> None:
-    """Formatted diffs render enums and datetimes consistently."""
-    diff = {
-        "status": (ListStatus.CURRENT, ListStatus.COMPLETED),
-        "finished_at": (
-            datetime(2025, 2, 1),
-            datetime(2025, 2, 1, tzinfo=UTC),
+    return (
+        PlannedWrite(
+            item=_scan_item("source"),
+            source_record=source_record,
+            before=None,
+            after=after
+            or RecordSnapshot(
+                ref=target_ref or Ref.anchor("target"),
+                kind=_PROGRESS_KIND,
+                values={"progress": 2},
+            ),
+            write=write,
+            target_ref=target_ref or Ref.anchor("target"),
+            diagnostics={"reason": "test"},
         ),
+        source_record,
+    )
+
+
+def test_status_field_specs_must_declare_status_values() -> None:
+    """STATUS fields must advertise the native values they can read or write."""
+    with pytest.raises(ValueError, match="STATUS fields must declare"):
+        FieldSpec(RecordField.STATUS, readable=True)
+
+
+def test_status_field_values_are_status_only() -> None:
+    """Non-status fields cannot use status value descriptors."""
+    with pytest.raises(ValueError, match=r"only valid for RecordField\.STATUS"):
+        FieldSpec(
+            RecordField.NOTES,
+            values=(Descriptor("active", Status.ACTIVE),),
+        )
+
+
+def test_writable_status_specs_reject_ambiguous_semantics() -> None:
+    """Writable status mappings must be deterministic."""
+    with pytest.raises(ValueError, match="duplicate writable STATUS semantic"):
+        FieldSpec(
+            RecordField.STATUS,
+            writable=True,
+            values=(
+                Descriptor("watching", Status.ACTIVE),
+                Descriptor("current", Status.ACTIVE),
+            ),
+        )
+
+
+def test_sync_client_requires_target_mapping_support() -> None:
+    """Target providers must explicitly resolve mapping authorities."""
+    with pytest.raises(TypeError, match="mapping resolution"):
+        SyncClient(
+            source_provider=cast(Provider, FakeScanProvider()),
+            target_provider=cast(Provider, FakeWriteOnlyTarget()),
+            animap_client=cast(AnimapClient, object()),
+            full_scan=False,
+            destructive_sync=False,
+            dry_run=False,
+            profile_name="profile",
+            sync_rules=SyncRulesConfig(),
+        )
+
+
+def test_record_snapshot_stores_only_history_display_values() -> None:
+    """Timeline snapshots should not expose provider value-object internals."""
+    snapshot = RecordSnapshot.from_record(
+        Record(
+            ref=Ref.anchor("a"),
+            kind=_PROGRESS_KIND,
+            values={
+                RecordField.STATUS: State(
+                    native="watching",
+                    status=Status.ACTIVE,
+                ),
+                RecordField.PROGRESS: Progress(
+                    current=3,
+                    total=12,
+                    unit="episode",
+                ),
+                RecordField.RATING: Rating(8, (0, 10, 1)),
+                RecordField.NOTES: "solid",
+            },
+        )
+    )
+
+    assert snapshot.values == {
+        "status": "active",
+        "progress": 3,
+        "rating": 8,
+        "notes": "solid",
     }
-    result = stub_client._format_diff(diff)
-    assert f"status: current {ARROW} completed" in result
-    assert (
-        "finished_at: 2025-02-01T00:00:00+00:00 "
-        f"{ARROW} 2025-02-01T00:00:00+00:00" in result
-    )
-
-
-def test_get_pinned_fields_caches_results(stub_client: StubSyncClient, sync_db) -> None:
-    """Pinned field lookups use the database once and then hit the cache."""
-    with sync_db as ctx:
-        ctx.session.add(
-            Pin(
-                profile_name="tester",
-                list_namespace="anilist",
-                list_media_key="100",
-                fields=["status", "progress"],
-            )
-        )
-        ctx.session.commit()
-
-    fields = stub_client._get_pinned_fields("anilist", "100")
-    assert fields == ["status", "progress"]
-    assert stub_client._get_pinned_fields("anilist", "100") == ["status", "progress"]
-
-    # Delete the row to prove cached values are reused.
-    with sync_db as ctx:
-        ctx.session.query(Pin).delete()
-        ctx.session.commit()
-
-    assert stub_client._get_pinned_fields("anilist", "100") == ["status", "progress"]
-    assert stub_client._get_pinned_fields("anilist", None) == []
 
 
 @pytest.mark.asyncio
-async def test_sync_media_updates_entry_and_history(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Syncing a movie writes the diff and records history."""
-    movie = make_movie(view_count=2, user_rating=80)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
+async def test_fetch_target_records_batch_indexes_by_requested_kind() -> None:
+    """Batch reads should find records even when providers echo an empty kind."""
+    reader = FakeRecordReader()
+    sync_client = SyncClient.__new__(SyncClient)
+    sync_client.target_provider = reader
+    sync_client._sync_fields = (RecordField.NOTES,)
+
+    records = await sync_client._fetch_target_records_batch(
+        [
+            (Ref.anchor("a"), "progress"),
+            (Ref.anchor("b"), "progress"),
+        ]
     )
 
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert provider.updated_entries and provider.updated_entries[0][0] == "movie-entry"
-
-    with sync_db as ctx:
-        history = ctx.session.query(SyncHistory).all()
-        assert len(history) == 1
-        assert history[0].outcome == SyncOutcome.SYNCED
-        assert history[0].info is not None
-        assert "operation" not in history[0].info
-        assert "mode" not in history[0].info
+    assert len(reader.queries) == 1
+    assert reader.queries[0].refs == (Ref.anchor("a"), Ref.anchor("b"))
+    assert records[(("a", ()), "progress")].values[RecordField.NOTES] == "existing"
+    assert records[(("b", ()), "progress")].values[RecordField.NOTES] == "existing"
 
 
-@pytest.mark.asyncio
-async def test_sync_media_info_reports_rule_and_status_blocks(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Sync diagnostics should include blocked fields and rule metadata."""
-    movie = make_movie(view_count=2, user_rating=80)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.progress = 0
-    entry.user_rating = 20
-    set_sync_rules(
-        stub_client,
-        {
-            "progress": [
-                {
-                    "name": "Freeze progress if status is planning",
-                    "if": "current.status == ListStatus.PLANNING",
-                    "set": "current.progress",
-                }
-            ],
-            "review": False,
-        },
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert provider.updated_entries[0][1].user_rating == 20
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.info is not None
-        assert "progress(no_match)" not in (record.info.get("field_blocks") or "")
-        assert "review(disabled)" in (record.info.get("field_blocks") or "")
-        assert "user_rating(disabled)" in (record.info.get("field_blocks") or "")
-        assert "user_rating(requires_completed)" not in (
-            record.info.get("field_blocks") or ""
-        )
-
-
-@pytest.mark.asyncio
-async def test_user_rating_rules_can_bypass_completed_status_gate(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Explicit user_rating rules should allow rating sync before completion."""
-    movie = make_movie(view_count=2, user_rating=80)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    entry.user_rating = 20
-    set_sync_rules(
-        stub_client,
-        {
-            "user_rating": [
-                {
-                    "name": "Force rating sync",
-                    "if": "computed.user_rating is not None",
-                    "set": "computed.user_rating",
-                }
-            ],
-        },
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert provider.updated_entries[0][1].user_rating == 50
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.info is not None
-        assert "user_rating(Force rating sync)" in (
-            record.info.get("applied_rules") or ""
-        )
-
-
-@pytest.mark.asyncio
-async def test_status_gate_still_blocks_non_rating_rules(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Rules for other completed-gated fields should not bypass status gates."""
-    movie = make_movie(view_count=2, user_rating=80)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    entry.repeats = 0
-    stub_client._repeats_override = 2
-    set_sync_rules(
-        stub_client,
-        {
-            "repeats": [
-                {
-                    "name": "Force repeats sync",
-                    "if": "computed.repeats is not None",
-                    "set": "computed.repeats",
-                }
-            ],
-        },
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert provider.updated_entries[0][1].repeats == 0
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.info is not None
-        assert "repeats(requires_completed)" in (record.info.get("field_blocks") or "")
-
-
-@pytest.mark.asyncio
-async def test_sync_media_info_reports_applied_sync_rules(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Sync diagnostics should include rules that supplied applied values."""
-    movie = make_movie(view_count=1)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    set_sync_rules(
-        stub_client,
-        {
-            "status": [
-                {
-                    "name": "Promote completed movie",
-                    "if": (
-                        "computed.status == ListStatus.CURRENT "
-                        "and computed.progress == 1"
-                    ),
-                    "set": "ListStatus.COMPLETED",
-                }
-            ]
-        },
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SYNCED
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.info is not None
-        assert record.info.get("applied_rules") == ("status(Promote completed movie)")
-
-
-@pytest.mark.asyncio
-async def test_sync_media_info_includes_mapping_target(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Sync diagnostics should include the resolved mapping target descriptor."""
-    movie = make_movie(view_count=1)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-        mappings=(
-            AnibridgeDescriptorMapping(
-                source=("anilist", "101", None),
-                target=("tmdb", "201", "movie"),
+def test_prepare_upsert_uses_positional_item_and_pinned_fields() -> None:
+    """The base-client call shape should plan updates without touching pinned fields."""
+    sync_client = SyncClient(
+        source_provider=cast(Provider, FakeScanProvider()),
+        target_provider=cast(
+            Provider,
+            FakeTargetProvider(
+                statuses=(Status.PLANNED, Status.ACTIVE, Status.COMPLETED),
             ),
         ),
+        animap_client=cast(AnimapClient, object()),
+        full_scan=False,
+        destructive_sync=False,
+        dry_run=False,
+        profile_name="profile",
+        sync_rules=SyncRulesConfig(templates=[], notes=True),
     )
-
-    assert result is SyncOutcome.SYNCED
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.info is not None
-        assert record.info.get("mapping_targets") == "tmdb:201:movie"
-
-
-@pytest.mark.asyncio
-async def test_sync_media_info_includes_mapping_sources(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Sync diagnostics should include the resolved mapping sources used."""
-    movie = make_movie(view_count=1)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
+    item = ScanItem(node=Node(ref=Ref.anchor("source"), kind="anime"))
+    source_record = Record(
+        ref=Ref.anchor("source"),
+        kind=_PROGRESS_KIND,
+        values={
+            RecordField.STATUS: State(status=Status.ACTIVE),
+            RecordField.PROGRESS: Progress(current=2, total=12),
+            RecordField.NOTES: "new",
+        },
     )
-    mapping = AnibridgeDescriptorMapping(
-        source=("anilist", "101", None),
-        target=("tmdb", "201", "movie"),
-    )
-    mapping.add_mapping("2", "5")
-    mapping.add_mapping("3-4", "7-8")
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-        mappings=(mapping,),
-    )
-
-    assert result is SyncOutcome.SYNCED
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.info is not None
-        assert record.info.get("mapping_sources") == "anilist:101"
-
-
-@pytest.mark.asyncio
-async def test_sync_media_skips_when_entry_up_to_date(
-    stub_client: StubSyncClient,
-) -> None:
-    """Entries that already match the calculators are skipped."""
-    movie = make_movie()
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    entry.status = ListStatus.CURRENT
-    entry.progress = 1
-    entry.repeats = 0
-    entry.user_rating = 50
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SKIPPED
-    assert provider.updated_entries == []
-
-
-@pytest.mark.asyncio
-async def test_sync_media_applies_declarative_rules(
-    stub_client: StubSyncClient,
-) -> None:
-    """Declarative rules should transform status and review values."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    movie = make_movie(review="x" * 240)
-    entry = FakeListEntry(
-        provider=provider,
-        key="rule-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.COMPLETED
-    entry.progress = 1
-    stub_client._status_override = ListStatus.CURRENT
-    stub_client._progress_override = 1
-    stub_client._review_override = "x" * 240
-    stub_client._user_rating_override = None
-    set_sync_rules(
-        stub_client,
-        {
-            "vars": {
-                "is_review_long": (
-                    "computed.review is not None and len(computed.review) > 200"
-                ),
-            },
-            "status": [
-                {
-                    "name": "Promote rewatch to completed",
-                    "if": (
-                        "current.status in (ListStatus.REPEATING, "
-                        "ListStatus.COMPLETED) and "
-                        "computed.status == ListStatus.CURRENT"
-                    ),
-                    "set": "ListStatus.REPEATING",
-                }
-            ],
-            "review": [
-                {
-                    "name": "Truncate long reviews",
-                    "if": "vars.is_review_long",
-                    "set": 'computed.review[:197] + "..."',
-                }
-            ],
+    target_record = Record(
+        ref=Ref.anchor("target"),
+        kind=_PROGRESS_KIND,
+        key="entry-1",
+        revision="rev-1",
+        values={
+            RecordField.STATUS: State(native="planned", status=Status.PLANNED),
+            RecordField.PROGRESS: Progress(current=1, total=12),
+            RecordField.NOTES: "old",
         },
     )
 
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="rule-entry",
+    planned = sync_client._planner.prepare_upsert(
+        item,
+        source_record=source_record,
+        target_record=target_record,
+        target_ref=Ref.anchor("target"),
+        target_kind=_PROGRESS_KIND,
+        pinned_fields=("notes",),
+        log_context=SyncLogContext(node_kind="anime", source="Title", target="{ids}"),
     )
 
-    assert result is SyncOutcome.SYNCED
-    assert entry.status == ListStatus.REPEATING
-    assert entry.review == ("x" * 197) + "..."
-
-
-@pytest.mark.asyncio
-async def test_sync_media_allows_vars_to_reference_missing_computed_fields(
-    stub_client: StubSyncClient,
-) -> None:
-    """Rule vars should treat missing computed fields as `None`."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    movie = make_movie()
-    entry = FakeListEntry(
-        provider=provider,
-        key="rule-missing-computed",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
+    assert isinstance(planned, PreparedRecordUpdate)
+    write = planned.plan.write
+    assert isinstance(write, UpsertRecord)
+    assert write.expected_revision == "rev-1"
+    assert write.set[RecordField.STATUS] == State(
+        native="active",
+        status=Status.ACTIVE,
     )
-    entry.status = ListStatus.COMPLETED
-    entry.progress = 1
-    stub_client._status_override = ListStatus.CURRENT
-    stub_client._progress_override = 1
-    stub_client._review_override = "ignored"
-    set_sync_rules(
-        stub_client,
-        {
-            "vars": {
-                "has_review": (
-                    "computed.review is not None and len(computed.review) > 0"
-                ),
+    assert write.set[RecordField.PROGRESS] == Progress(
+        current=2,
+        total=12,
+    )
+    assert RecordField.NOTES not in write.set
+    assert "notes(pinned)" in planned.plan.diagnostics["field_blocks"]
+
+
+def test_prepare_upsert_blocks_unsupported_status_values() -> None:
+    """Unsupported source statuses should not abort otherwise valid field updates."""
+    planner = RecordPlanner(
+        source_capabilities=FakeScanProvider(
+            statuses=(Status.ACTIVE, Status.COMPLETED),
+        ).capabilities(),
+        target_capabilities=FakeTargetProvider(
+            statuses=(Status.COMPLETED,),
+        ).capabilities(),
+        sync_rule_engine=SyncRuleEngine(),
+        destructive_sync=False,
+    )
+    item = ScanItem(node=Node(ref=Ref.anchor("source"), kind="anime"))
+
+    planned = planner.prepare_upsert(
+        item,
+        source_record=Record(
+            ref=Ref.anchor("source"),
+            kind=_PROGRESS_KIND,
+            values={
+                RecordField.STATUS: State(status=Status.ACTIVE),
+                RecordField.PROGRESS: Progress(current=3, total=12),
             },
-            "status": [
-                {
-                    "name": "Promote rewatch",
-                    "if": (
-                        "not vars.has_review and "
-                        "current.status == ListStatus.COMPLETED and "
-                        "computed.status == ListStatus.CURRENT"
-                    ),
-                    "set": "ListStatus.REPEATING",
-                }
-            ],
-        },
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="rule-missing-computed",
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert entry.status == ListStatus.REPEATING
-    assert provider.updated_entries and provider.updated_entries[0][0] == (
-        "rule-missing-computed"
-    )
-
-
-@pytest.mark.asyncio
-async def test_sync_media_exposes_ctx_item_child_and_grandchildren(
-    stub_client: StubSyncClient,
-) -> None:
-    """Rule expressions should receive stable item context under ctx."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    show = FakeLibraryShow(key="show-ctx", title="Ctx Show")
-    season = FakeLibrarySeason(
-        key="season-ctx",
-        title="Season 1",
-        index=1,
-        show=show,
-    )
-    episodes = [
-        FakeLibraryEpisode(
-            key="episode-1",
-            title="Episode 1",
-            index=1,
-            season_index=1,
-            show=show,
-            season=season,
-            view_count=1,
         ),
-        FakeLibraryEpisode(
-            key="episode-2",
-            title="Episode 2",
-            index=2,
-            season_index=1,
-            show=show,
-            season=season,
-            view_count=1,
-        ),
-    ]
-    show.attach_children(episodes=episodes, seasons=[season])
-
-    entry = FakeListEntry(
-        provider=provider,
-        key="ctx-entry",
-        title="Ctx Show",
-        media_type=ListMediaType.TV,
-        total_units=2,
-    )
-    entry.status = ListStatus.PLANNING
-    entry.progress = 1
-    stub_client._status_override = ListStatus.CURRENT
-    stub_client._progress_override = 1
-
-    set_sync_rules(
-        stub_client,
-        {
-            "status": [
-                {
-                    "name": "Use ctx metadata",
-                    "if": (
-                        'ctx.list_media_key == "ctx-entry" '
-                        'and ctx.item.title == "Ctx Show" '
-                        "and ctx.child.index == 1 "
-                        "and len(ctx.grandchildren) == 2 "
-                        'and ctx.grandchildren[0].title == "Episode 1" '
-                        "and ctx.grandchildren[1].index == 2 "
-                        "and ctx.grandchildren[0].season_index == 1"
-                    ),
-                    "set": "ListStatus.COMPLETED",
-                }
-            ]
-        },
-    )
-
-    result = await stub_client.sync_media(
-        item=show,
-        child_item=season,
-        grandchild_items=tuple(episodes),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="ctx-entry",
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert entry.status == ListStatus.COMPLETED
-    assert provider.updated_entries and provider.updated_entries[0][0] == "ctx-entry"
-
-
-@pytest.mark.asyncio
-async def test_sync_media_uses_default_value_when_no_sync_rule_matches(
-    stub_client: StubSyncClient,
-) -> None:
-    """Configured field rules should fall back to computed values when unmatched."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    movie = make_movie(review="x" * 220)
-    entry = FakeListEntry(
-        provider=provider,
-        key="rule-blocked",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    entry.status = ListStatus.CURRENT
-    entry.progress = 1
-    entry.repeats = 0
-    entry.user_rating = 50
-    entry.review = "existing"
-    stub_client._status_override = ListStatus.CURRENT
-    stub_client._progress_override = 1
-    stub_client._repeats_override = 0
-    stub_client._review_override = "x" * 220
-    stub_client._user_rating_override = 50
-    set_sync_rules(
-        stub_client,
-        {
-            "vars": {
-                "has_short_review": (
-                    "computed.review is not None and len(computed.review) < 200"
-                ),
+        target_record=Record(
+            ref=Ref.anchor("target"),
+            kind=_PROGRESS_KIND,
+            values={
+                RecordField.STATUS: State(native="completed", status=Status.COMPLETED),
+                RecordField.PROGRESS: Progress(current=1, total=12),
             },
-            "review": [
-                {
-                    "name": "Tag short reviews",
-                    "if": "vars.has_short_review",
-                    "set": 'computed.review + " [short]"',
-                }
-            ],
-        },
+        ),
+        target_ref=Ref.anchor("target"),
+        target_kind=_PROGRESS_KIND,
+        pinned_fields=(),
+        log_context=SyncLogContext(node_kind="anime", source="Title", target="{ids}"),
     )
 
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key="rule-blocked",
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert entry.review == "x" * 220
-    assert provider.updated_entries and provider.updated_entries[0][0] == "rule-blocked"
+    assert isinstance(planned, PreparedRecordUpdate)
+    write = planned.plan.write
+    assert isinstance(write, UpsertRecord)
+    assert RecordField.STATUS not in write.set
+    assert write.set[RecordField.PROGRESS] == Progress(current=3, total=12)
+    assert "status(unsupported_status)" in planned.plan.diagnostics["field_blocks"]
 
 
-@pytest.mark.asyncio
-async def test_sync_media_deletes_when_destructive(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Destructive sync removes entries whose status resolves to `None`."""
-    stub_client.destructive_sync = True
-    stub_client._status_override = None
+def test_fetch_pinned_fields_batch_matches_wildcards_and_specificity(sync_db) -> None:
+    """Page-level pin reads should preserve existing broad pin behavior."""
+    sync_client = SyncClient.__new__(SyncClient)
+    sync_client.profile_name = "profile"
+    sync_client.target_provider = FakeTargetProvider()
 
-    movie = make_movie()
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    entry.status = ListStatus.CURRENT
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.DELETED
-    assert "movie-entry" in provider.deleted_keys
-
-    with sync_db as ctx:
-        history = ctx.session.query(SyncHistory).all()
-        assert history[0].outcome == SyncOutcome.DELETED
-
-
-@pytest.mark.asyncio
-async def test_sync_media_dry_run_delete_records_ephemeral_history(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Dry-run destructive deletes should create ephemeral delete history."""
-    stub_client.destructive_sync = True
-    stub_client.dry_run = True
-    stub_client._status_override = None
-
-    movie = make_movie()
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-    entry.status = ListStatus.CURRENT
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.DELETED
-    assert provider.deleted_keys == []
-
-    with sync_db as ctx:
-        history = ctx.session.query(SyncHistory).all()
-        assert len(history) == 1
-        assert history[0].outcome is SyncOutcome.DELETED
-        assert history[0].ephemeral is True
-        assert history[0].info is not None
-        assert "operation" not in history[0].info
-        assert "status_plan" not in history[0].info
-        assert "dry_run" not in history[0].info
-
-
-@pytest.mark.asyncio
-async def test_sync_media_batches_when_enabled(
-    stub_client: StubSyncClient,
-) -> None:
-    """Batch mode queues updates instead of issuing them immediately."""
-    stub_client.batch_requests = True
-    movie = make_movie(view_count=1)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-
-    result = await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    assert result is SyncOutcome.SYNCED
-    assert [update.source_entry for update in stub_client._pending_updates] == [entry]
-    assert stub_client._pending_updates[0].entry is not entry
-    assert entry.progress is None
-    assert stub_client._pending_updates
-    assert provider.updated_entries == []
-
-
-@pytest.mark.asyncio
-async def test_batch_sync_flushes_history(stub_client: StubSyncClient, sync_db) -> None:
-    """Queued entries are persisted and history rows are written."""
-    stub_client.batch_requests = True
-    movie = make_movie(view_count=1)
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="movie-entry",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-    )
-
-    await stub_client.sync_media(
-        item=movie,
-        child_item=movie,
-        grandchild_items=(movie,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-    )
-
-    await stub_client.batch_sync()
-
-    assert provider.batch_updates and provider.batch_updates[0][0] is not entry
-    assert entry.progress == 1
-    assert not [update.entry for update in stub_client._pending_updates]
-    assert not stub_client._pending_updates
-
-    with sync_db as ctx:
-        history = ctx.session.query(SyncHistory).all()
-        assert history and history[0].outcome == SyncOutcome.SYNCED
-
-
-def test_flush_failure_history_cleanup_batched_removal(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Batched cleanup removes queued failure history rows."""
-    movie = make_movie()
-    library_section_key = movie.section().key
-    library_media_key = str(movie.key)
-    library_namespace = stub_client.library_provider.NAMESPACE
-    list_namespace = stub_client.list_provider.NAMESPACE
-
+    target_ref = Ref.anchor("show").child("episode", 1)
     with sync_db as ctx:
         ctx.session.add_all(
             [
+                Pin(
+                    profile_name="profile",
+                    target_namespace="target",
+                    target_ref=ref_to_json(Ref.anchor("show")),
+                    fields=["status"],
+                ),
+                Pin(
+                    profile_name="profile",
+                    target_namespace="target",
+                    target_ref=ref_to_json(target_ref),
+                    fields=["progress"],
+                ),
+                Pin(
+                    profile_name="profile",
+                    target_namespace="other",
+                    target_ref=ref_to_json(target_ref),
+                    fields=["rating"],
+                ),
+            ]
+        )
+        ctx.session.commit()
+
+    fields = sync_client._fetch_pinned_fields_batch(
+        [
+            (target_ref, "progress"),
+            (Ref.anchor("show").child("episode", 2), "progress"),
+        ]
+    )
+
+    assert fields[(("show", (("episode", 1),)), "progress")] == ["progress"]
+    assert fields[(("show", (("episode", 2),)), "progress")] == ["status"]
+
+
+def test_failure_history_cleanup_is_scoped_to_target_namespace(sqlite_db_factory):
+    """Cleanup must not delete same-ref failures for another target provider."""
+    manager = SyncHistoryManager(
+        profile_name="profile",
+        source_namespace="source",
+        target_namespace="target",
+        db_factory=sqlite_db_factory,
+    )
+    source_ref = Ref.anchor("source-1")
+    target_ref = Ref.anchor("target-1")
+
+    with sqlite_db_factory() as ctx:
+        ctx.session.add_all(
+            [
                 SyncHistory(
-                    profile_name=stub_client.profile_name,
-                    library_namespace=library_namespace,
-                    library_section_key=library_section_key,
-                    library_media_key=library_media_key,
-                    list_namespace=list_namespace,
-                    list_media_key="entry",
-                    media_kind=MediaKind.MOVIE,
-                    outcome=SyncOutcome.NOT_FOUND,
+                    profile_name="profile",
+                    source_namespace="source",
+                    source_ref=ref_to_json(source_ref),
+                    target_namespace="target",
+                    target_ref=ref_to_json(target_ref),
+                    outcome=SyncOutcome.FAILED,
                 ),
                 SyncHistory(
-                    profile_name=stub_client.profile_name,
-                    library_namespace=library_namespace,
-                    library_section_key=library_section_key,
-                    library_media_key=library_media_key,
-                    list_namespace=list_namespace,
-                    list_media_key="entry",
-                    media_kind=MediaKind.MOVIE,
+                    profile_name="profile",
+                    source_namespace="source",
+                    source_ref=ref_to_json(source_ref),
+                    target_namespace="other",
+                    target_ref=ref_to_json(target_ref),
                     outcome=SyncOutcome.FAILED,
                 ),
             ]
         )
         ctx.session.commit()
 
-    stub_client._history.queue_failure_history_cleanup(
-        item=movie, list_media_key="entry"
+    manager.queue_failure_history_cleanup(
+        source_ref=source_ref,
+        target_ref=target_ref,
     )
-    stub_client.flush_failure_history_cleanup()
+    manager.flush_failure_history_cleanup()
 
-    with sync_db as ctx:
-        assert ctx.session.query(SyncHistory).count() == 0
+    with sqlite_db_factory() as ctx:
+        rows = ctx.session.query(SyncHistory).all()
+        assert len(rows) == 1
+        assert rows[0].target_namespace == "other"
 
 
 @pytest.mark.asyncio
-async def test_process_media_marks_not_found(
-    stub_client: StubSyncClient, sync_db
-) -> None:
-    """Items without matches create NOT_FOUND history rows."""
-    movie = make_movie()
-    stub_client._trackable_items = [ItemIdentifier.from_item(cast(Any, movie))]
+async def test_apply_updates_batch_applies_writes_independently(monkeypatch) -> None:
+    """Planned updates should not be submitted as one ambiguous provider batch."""
+    sync_client = SyncClient.__new__(SyncClient)
+    sync_client.dry_run = False
+    calls: list[str] = []
 
-    await stub_client.process_media(movie)
+    async def fake_apply_update(plan, **kwargs):
+        calls.append(plan.target_ref.key)
+        if plan.target_ref.key == "b":
+            raise RuntimeError("failed")
+        return SyncOutcome.SYNCED
 
-    assert stub_client.sync_stats.not_found == 1
-    with sync_db as ctx:
-        record = ctx.session.query(SyncHistory).one()
-        assert record.outcome == SyncOutcome.NOT_FOUND
-        assert record.info is not None
-        assert "operation" not in record.info
-        assert "reason" not in record.info
-        assert record.info.get("trackable_count") == "1"
-        assert record.info.get("library_grandchild_items") is None
-        assert "attempted_descriptors" not in record.info
+    monkeypatch.setattr(sync_client, "_apply_update", fake_apply_update)
+    updates = [
+        PreparedRecordUpdate(
+            plan=PlannedWrite(
+                item=ScanItem(node=Node(ref=Ref.anchor(key), kind="anime")),
+                source_record=None,
+                before=None,
+                after=RecordSnapshot(ref=Ref.anchor(key), kind=_PROGRESS_KIND),
+                write=cast(RecordWrite, object()),
+                target_ref=Ref.anchor(key),
+            ),
+            source_record=Record(ref=Ref.anchor(key), kind=_PROGRESS_KIND),
+            diff_str="",
+            log_context=SyncLogContext(node_kind="anime", source=key, target=key),
+        )
+        for key in ("a", "b", "c")
+    ]
+
+    outcomes = await sync_client._apply_updates_batch(updates)
+
+    assert calls == ["a", "b", "c"]
+    assert outcomes == (
+        SyncOutcome.SYNCED,
+        SyncOutcome.FAILED,
+        SyncOutcome.SYNCED,
+    )
+
+
+def _sync_client_with_disabled_expensive_fields() -> SyncClient:
+    return SyncClient(
+        source_provider=cast(Provider, FakeScanProvider()),
+        target_provider=cast(Provider, FakeTargetProvider()),
+        animap_client=cast(AnimapClient, object()),
+        full_scan=False,
+        destructive_sync=False,
+        dry_run=False,
+        profile_name="profile",
+        sync_rules=SyncRulesConfig(rating=False, notes=False),
+    )
+
+
+def test_status_field_is_excluded_when_provider_values_do_not_overlap() -> None:
+    """The planner should not request STATUS when providers cannot translate it."""
+    sync_client = SyncClient(
+        source_provider=cast(Provider, FakeScanProvider(statuses=(Status.ACTIVE,))),
+        target_provider=cast(
+            Provider,
+            FakeTargetProvider(statuses=(Status.COMPLETED,)),
+        ),
+        animap_client=cast(AnimapClient, object()),
+        full_scan=False,
+        destructive_sync=False,
+        dry_run=False,
+        profile_name="profile",
+        sync_rules=SyncRulesConfig(),
+    )
+
+    assert RecordField.STATUS not in sync_client._sync_fields
+    assert RecordField.PROGRESS in sync_client._sync_fields
+
+
+def test_target_state_for_status_rejects_unsupported_status() -> None:
+    """Unsupported normalized statuses should fail before reaching providers."""
+    planner = RecordPlanner(
+        source_capabilities=FakeScanProvider(
+            statuses=(Status.ACTIVE, Status.COMPLETED),
+        ).capabilities(),
+        target_capabilities=FakeTargetProvider(
+            statuses=(Status.COMPLETED,),
+        ).capabilities(),
+        sync_rule_engine=SyncRuleEngine(),
+        destructive_sync=False,
+    )
+
+    with pytest.raises(ValueError, match="cannot represent status"):
+        planner.target_state_for_status(Status.ACTIVE)
+
+    assert planner.target_state_for_status(Status.COMPLETED).native == "completed"
+
+
+def test_project_progress_handles_large_fractional_ranges() -> None:
+    """Progress projection should avoid per-unit loops and keep fractional progress."""
+    planner = RecordPlanner(
+        source_capabilities=FakeScanProvider().capabilities(),
+        target_capabilities=FakeTargetProvider().capabilities(),
+        sync_rule_engine=SyncRuleEngine(),
+        destructive_sync=False,
+    )
+
+    projected = planner._project_progress(
+        Progress(current=1000.5, total=2000, unit="episode"),
+        (AnibridgeMapping.parse("1-2000", "1-1000|2"),),
+    )
+
+    assert projected == Progress(current=500.25, total=1000, unit="episode")
 
 
 @pytest.mark.asyncio
-async def test_process_media_skips_untrackable_items(
-    stub_client: StubSyncClient,
-) -> None:
-    """Items with no eligible children are marked as skipped early."""
-    movie = make_movie()
+async def test_disabled_sync_rule_fields_are_excluded_from_source_scan() -> None:
+    """Disabled fields should never be requested from expensive source providers."""
+    sync_client = _sync_client_with_disabled_expensive_fields()
 
-    await stub_client.process_media(movie)
+    pages = [
+        page
+        async for page in sync_client.scan_source_pages(
+            scan=SourceScan(
+                trigger=SyncTrigger.MANUAL,
+                source_refs=None,
+                require_activity=False,
+            )
+        )
+    ]
 
-    assert stub_client.sync_stats.skipped == 1
+    assert pages == []
+    source = sync_client.source_provider
+    assert isinstance(source, FakeScanProvider)
+    assert source.queries[0].fields == frozenset(
+        {RecordField.STATUS, RecordField.PROGRESS}
+    )
 
 
 @pytest.mark.asyncio
-async def test_sync_media_exposes_mappings_in_ctx(
-    stub_client: StubSyncClient,
-    sync_db,
+async def test_disabled_sync_rule_fields_are_excluded_from_target_reads() -> None:
+    """Disabled fields should not be fetched while planning target updates."""
+    sync_client = _sync_client_with_disabled_expensive_fields()
+    target = sync_client.target_provider
+    assert isinstance(target, FakeTargetProvider)
+
+    await sync_client._fetch_target_records_batch([(Ref.anchor("a"), _PROGRESS_KIND)])
+
+    assert target.queries[0].fields == frozenset(
+        {RecordField.STATUS, RecordField.PROGRESS}
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_source_pages_collects_pages_and_clears_provider_caches() -> None:
+    source = FakeScanProvider()
+    target = FakeTargetProvider()
+    first_item = _scan_item("first")
+    second_item = _scan_item("second")
+    source.pages = [
+        Page(items=(), cursor="c1"),
+        Page(items=(first_item,), cursor="c2", total=2),
+        Page(items=(second_item,), cursor=None, total=2),
+    ]
+    client = _sync_client(source=source, target=target)
+
+    items = await client.scan_source(
+        scan=SourceScan(
+            trigger=SyncTrigger.MANUAL,
+            source_refs=(Ref.anchor("source"),),
+            require_activity=False,
+        )
+    )
+    await client.clear_cache()
+
+    assert items == (first_item, second_item)
+    assert [query.cursor for query in source.queries] == [None, "c1", "c2"]
+    assert source.queries[0].sources == (Ref.anchor("source"),)
+    assert source.queries[0].limit is None
+    assert source.cleared is True
+    assert target.cleared is True
+
+
+@pytest.mark.asyncio
+async def test_process_page_handles_skip_not_found_and_success(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ctx.mappings should be populated from the mappings argument to sync_media."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="300-mappings-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    provider.entries[entry.media().key] = entry
+    target = FakeTargetProvider()
+    client = _sync_client(target=target)
+    history = cast(FakeHistory, client._history)
 
-    mapping = AnibridgeDescriptorMapping(
-        source=("anilist", "101", None), target=("_fake-list", "300-mappings-ctx", None)
-    )
-    mapping.add_mapping("1-12", "1-12")
+    async def resolve_target_refs(**kwargs):
+        record = kwargs["record"]
+        if record.ref.key == "missing":
+            return ()
+        return (
+            ResolvedTarget(
+                Match(
+                    ExternalId("target", record.ref.key),
+                    Ref.anchor(f"target-{record.ref.key}"),
+                    1.0,
+                )
+            ),
+        )
 
-    set_sync_rules(
-        stub_client,
-        {
-            "progress": [
-                {
-                    "name": "mapping-start-check",
-                    "if": (
-                        "ctx.mappings and "
-                        "ctx.mappings[0].mappings[0].source_range.start == 1"
+    monkeypatch.setattr(base_module, "resolve_target_refs", resolve_target_refs)
+    monkeypatch.setattr(client, "_fetch_pinned_fields_batch", lambda _requests: {})
+
+    await client.process_page(())
+    await client.process_item(_scan_item("empty"))
+    await client.process_page(
+        (
+            _scan_item(
+                "missing",
+                records=(
+                    _record(
+                        "missing",
+                        values={RecordField.PROGRESS: Progress(current=1, total=12)},
                     ),
-                    "set": "42",
-                }
-            ]
-        },
+                ),
+            ),
+            _scan_item(
+                "updated",
+                records=(
+                    _record(
+                        "updated",
+                        values={RecordField.PROGRESS: Progress(current=2, total=12)},
+                    ),
+                ),
+            ),
+        )
     )
 
-    media = make_movie(key="300-mappings-ctx")
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(media,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-        mappings=[mapping],
-    )
-
-    assert outcome is SyncOutcome.SYNCED
-    provider_entry = provider.updated_entries[-1][1]
-    assert provider_entry.progress == 42
+    assert len(history.created) == 2
+    assert history.created[0]["outcome"] is SyncOutcome.NOT_FOUND
+    assert history.created[1]["outcome"] is SyncOutcome.SYNCED
+    assert len(target.writes) == 1
+    assert client.sync_stats.not_found == 1
+    assert client.sync_stats.synced == 1
 
 
 @pytest.mark.asyncio
-async def test_sync_media_ctx_mappings_empty_when_none_provided(
-    stub_client: StubSyncClient,
-    sync_db,
+async def test_process_page_duplicate_targets_and_processing_errors(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ctx.mappings should be an empty list when no mappings are passed."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="300-no-mappings-ctx",
-        title="Movie",
-        media_type=ListMediaType.MOVIE,
-        total_units=1,
-    )
-    provider.entries[entry.media().key] = entry
+    client = _sync_client()
+    monkeypatch.setattr(client, "_fetch_pinned_fields_batch", lambda _requests: {})
 
-    set_sync_rules(
-        stub_client,
-        {
-            "progress": [
-                {
-                    "name": "no-mapping-fallback",
-                    "if": "not ctx.mappings",
-                    "set": "99",
-                }
-            ]
-        },
-    )
+    async def resolve_same_target(**_kwargs):
+        return (
+            ResolvedTarget(
+                Match(ExternalId("target", "same"), Ref.anchor("same"), 1.0)
+            ),
+        )
 
-    media = make_movie(key="300-no-mappings-ctx")
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(media,),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-        mappings=None,
-    )
+    sync_calls: list[str] = []
 
-    assert outcome is SyncOutcome.SYNCED
-    provider_entry = provider.updated_entries[-1][1]
-    assert provider_entry.progress == 99
+    async def sync_record(**kwargs):
+        sync_calls.append(kwargs["source_record"].ref.key)
+        return SyncOutcome.SYNCED
+
+    monkeypatch.setattr(base_module, "resolve_target_refs", resolve_same_target)
+    monkeypatch.setattr(client, "sync_record", sync_record)
+
+    await client.process_page(
+        (
+            _scan_item(
+                "first",
+                records=(
+                    _record(
+                        "first",
+                        values={RecordField.PROGRESS: Progress(current=1, total=12)},
+                    ),
+                ),
+            ),
+            _scan_item(
+                "second",
+                records=(
+                    _record(
+                        "second",
+                        values={RecordField.PROGRESS: Progress(current=2, total=12)},
+                    ),
+                ),
+            ),
+        )
+    )
+    assert sync_calls == ["first", "second"]
+
+    client = _sync_client()
+    monkeypatch.setattr(client, "_fetch_pinned_fields_batch", lambda _requests: {})
+    monkeypatch.setattr(base_module, "resolve_target_refs", resolve_same_target)
+
+    async def boom(**_kwargs):
+        raise RuntimeError("planning failed")
+
+    monkeypatch.setattr(client, "_prepare_record_update", boom)
+    await client.process_page(
+        (
+            _scan_item(
+                "bad",
+                records=(
+                    _record(
+                        "bad",
+                        values={RecordField.PROGRESS: Progress(current=1, total=12)},
+                    ),
+                ),
+            ),
+        )
+    )
+    assert client.sync_stats.failed == 1
 
 
 @pytest.mark.asyncio
-async def test_sync_media_index_based_progress_via_list_comp_rule(
-    stub_client: StubSyncClient,
-    sync_db,
+async def test_prepare_update_delete_paths_and_failure_cleanup() -> None:
+    item = _scan_item("source")
+    source_record = _record("source")
+    target_record = _record(
+        "target",
+        values={RecordField.PROGRESS: Progress(current=3, total=12)},
+    )
+
+    client = _sync_client()
+    assert (
+        await client._prepare_record_update(
+            item=item,
+            source_record=source_record,
+            target_record=target_record,
+            target_ref=Ref.anchor("target"),
+            target_kind=_PROGRESS_KIND,
+            log_context=SyncLogContext(
+                node_kind="anime", source="Title", target="{ids}"
+            ),
+        )
+        is SyncOutcome.SKIPPED
+    )
+
+    delete_client = _sync_client(destructive_sync=True, dry_run=True)
+    delete_client._target_capabilities = delete_client._target_capabilities.__replace__(
+        write_ops=frozenset({WriteOp.UPSERT_RECORD, WriteOp.DELETE_RECORD})
+    )
+    assert (
+        await delete_client._prepare_record_update(
+            item=item,
+            source_record=source_record,
+            target_record=target_record,
+            target_ref=Ref.anchor("target"),
+            target_kind=_PROGRESS_KIND,
+            log_context=SyncLogContext(
+                node_kind="anime", source="Title", target="{ids}"
+            ),
+        )
+        is SyncOutcome.DELETED
+    )
+
+    no_delete_client = _sync_client(destructive_sync=True)
+    assert (
+        await no_delete_client._delete_record(
+            item=item,
+            source_record=source_record,
+            target_record=target_record,
+            target_ref=Ref.anchor("target"),
+            target_kind=_PROGRESS_KIND,
+            before_snapshot=RecordSnapshot.from_record(target_record),
+            log_context=SyncLogContext(
+                node_kind="anime", source="Title", target="{ids}"
+            ),
+        )
+        is SyncOutcome.SKIPPED
+    )
+
+    cleanup_client = _sync_client()
+    skipped = await cleanup_client._prepare_record_update(
+        item=item,
+        source_record=target_record,
+        target_record=target_record,
+        target_ref=Ref.anchor("target"),
+        target_kind=_PROGRESS_KIND,
+        log_context=SyncLogContext(node_kind="anime", source="Title", target="{ids}"),
+    )
+    assert skipped is SyncOutcome.SKIPPED
+    assert cast(FakeHistory, cleanup_client._history).cleanup == [
+        (target_record.ref, Ref.anchor("target"))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_update_success_dry_run_failure_and_reconciliation() -> None:
+    plan, source_record = _planned_write()
+
+    dry_run = _sync_client(dry_run=True)
+    assert (
+        await dry_run._apply_update(
+            plan,
+            source_record=source_record,
+            diff_str="diff",
+            log_context=SyncLogContext(
+                node_kind="anime", source="Title", target="{ids}"
+            ),
+        )
+        is SyncOutcome.SYNCED
+    )
+    assert cast(FakeHistory, dry_run._history).created[0]["ephemeral"] is True
+
+    success = _sync_client()
+    assert (
+        await success._apply_update(
+            plan,
+            source_record=source_record,
+            diff_str="diff",
+            log_context=SyncLogContext(
+                node_kind="anime", source="Title", target="{ids}"
+            ),
+        )
+        is SyncOutcome.SYNCED
+    )
+
+    target = FakeTargetProvider()
+    target.write_error = RuntimeError("write failed")
+    target.records[("target", _PROGRESS_KIND)] = Record(
+        ref=Ref.anchor("target"),
+        kind=_PROGRESS_KIND,
+        values={RecordField.PROGRESS: Progress(current=2, total=12)},
+    )
+    reconciled = _sync_client(target=target)
+    assert (
+        await reconciled._apply_update(
+            plan,
+            source_record=source_record,
+            diff_str="diff",
+            log_context=SyncLogContext(
+                node_kind="anime", source="Title", target="{ids}"
+            ),
+        )
+        is SyncOutcome.SYNCED
+    )
+
+    failing = _sync_client()
+    failing_target = cast(FakeTargetProvider, failing.target_provider)
+    failing_target.write_error = RuntimeError("write failed")
+    with pytest.raises(RuntimeError, match="write failed"):
+        await failing._apply_update(
+            plan,
+            source_record=source_record,
+            diff_str="diff",
+            log_context=SyncLogContext(
+                node_kind="anime",
+                source="Title",
+                target="{ids}",
+            ),
+        )
+    assert (
+        cast(FakeHistory, failing._history).created[0]["outcome"] is SyncOutcome.FAILED
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_updates_batch_dry_run_empty_and_unexpected_failure(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An index-based progress rule using list comprehensions over ctx.grandchildren
-    should compute the correct offset relative to the mapping source start."""
-    provider = cast(FakeListProvider, stub_client.list_provider)
-    entry = FakeListEntry(
-        provider=provider,
-        key="300-index-progress",
-        title="Show",
-        media_type=ListMediaType.TV,
-        total_units=12,
+    plan, source_record = _planned_write()
+    update = PreparedRecordUpdate(
+        plan=plan,
+        source_record=source_record,
+        diff_str="diff",
+        log_context=SyncLogContext(node_kind="anime", source="Title", target="{ids}"),
     )
-    provider.entries[entry.media().key] = entry
+    dry_run = _sync_client(dry_run=True)
+    assert await dry_run._apply_updates_batch(()) == ()
+    assert await dry_run._apply_updates_batch((update,)) == (SyncOutcome.SYNCED,)
 
-    mapping = AnibridgeDescriptorMapping(
-        source=("anilist", "202", None),
-        target=("_fake-list", "300-index-progress", None),
+    client = _sync_client()
+
+    async def explode(*_args, **_kwargs):
+        raise ValueError("outer")
+
+    monkeypatch.setattr(client, "_apply_update", explode)
+    assert await client._apply_updates_batch((update,)) == (SyncOutcome.FAILED,)
+
+
+@pytest.mark.asyncio
+async def test_target_matching_and_record_io_error_paths() -> None:
+    plan, _source_record = _planned_write(target_ref=None, after=None)
+    client = _sync_client()
+
+    assert await client._target_matches_after(plan) is False
+    plan, _source_record = _planned_write()
+    client.target_provider = cast(Provider, FakeWriteOnlyTarget())
+    assert await client._target_matches_after(plan) is False
+
+    client = _sync_client()
+    assert await client._target_matches_after(plan) is False
+    target = cast(FakeTargetProvider, client.target_provider)
+    target.records[("target", _PROGRESS_KIND)] = Record(
+        ref=Ref.anchor("target"),
+        kind=_PROGRESS_KIND,
+        values={RecordField.PROGRESS: Progress(current=2, total=12)},
     )
-    mapping.add_mapping("13-24", "1-12")
+    assert await client._target_matches_after(plan) is True
+    target.records[("target", _PROGRESS_KIND)] = Record(
+        ref=Ref.anchor("target"),
+        kind=_PROGRESS_KIND,
+        values={RecordField.PROGRESS: Progress(current=1, total=12)},
+    )
+    assert await client._target_matches_after(plan) is False
 
-    set_sync_rules(
-        stub_client,
-        {
-            "vars": {
-                "watched_indices": (
-                    "[g.index for g in ctx.grandchildren "
-                    "if g.view_count and g.index is not None]"
-                ),
-                "mapping_start": (
-                    "ctx.mappings[0].mappings[0].source_range.start "
-                    "if ctx.mappings and ctx.mappings[0].mappings else 1"
-                ),
-            },
-            "progress": [
-                {
-                    "name": "index-based-progress",
-                    "if": "bool(vars.watched_indices)",
-                    "set": "max(vars.watched_indices) - vars.mapping_start + 1",
-                }
-            ],
-        },
+    target.write_results = (WriteResult(ok=True, op=WriteOp.UPSERT_RECORD),) * 2
+    with pytest.raises(ValueError, match="2 write results for 1 writes"):
+        await client._submit_record_writes([plan.write])
+    target.write_results = (
+        WriteResult(ok=False, op=WriteOp.UPSERT_RECORD, error="bad write"),
+    )
+    with pytest.raises(RuntimeError, match="bad write"):
+        await client._write_records([plan.write])
+
+    client.target_provider = cast(Provider, FakeRecordReader())
+    with pytest.raises(TypeError, match="record writes"):
+        await client._submit_record_writes([plan.write])
+    client.target_provider = cast(Provider, FakeWriteOnlyTarget())
+    fetched = await client._fetch_target_record(Ref.anchor("target"), _PROGRESS_KIND)
+    assert fetched is None
+    assert (
+        await client._fetch_target_records_batch(
+            [(Ref.anchor("target"), _PROGRESS_KIND)]
+        )
+        == {}
     )
 
-    watched_ep = _IndexedRuleMedia(key="ep-15", season_index=1, index=15)
-    watched_ep._view_count = 1
-    unwatched_ep = _IndexedRuleMedia(key="ep-16", season_index=1, index=16)
-    unwatched_ep._view_count = 0
 
-    media = make_movie(key="show-parent")
-    outcome = await stub_client.sync_media(
-        item=media,
-        child_item=media,
-        grandchild_items=(watched_ep, unwatched_ep),
-        entry=cast(ListEntryProtocol, entry),
-        list_media_key=entry.media().key,
-        mappings=[mapping],
+def test_flush_cleanup_pins_empty_and_debug_helpers() -> None:
+    client = _sync_client()
+    history = cast(FakeHistory, client._history)
+    client.flush_failure_history_cleanup()
+    assert history.flushed is True
+    assert client._fetch_pinned_fields_batch(()) == {}
+
+    item = _scan_item("source")
+    assert (
+        client._node_log_label(
+            namespace="source",
+            ref=item.node.ref,
+            title=item.node.title,
+            descriptor=None,
+            mappings=(),
+            side="source",
+        )
+        == "$$'Source (source)'$$"
+    )
+    assert (
+        client._node_log_label(
+            namespace="target",
+            ref=Ref.anchor("target"),
+            title=None,
+            descriptor=None,
+            mappings=(),
+            side="target",
+        )
+        == "$$'(target)'$$"
+    )
+    assert (
+        client._node_log_label(
+            namespace="target",
+            ref=Ref.at("target", ("episode", 3)),
+            title=None,
+            descriptor=None,
+            mappings=(),
+            side="target",
+        )
+        == "$$'(target/episode=3)'$$"
+    )
+    assert (
+        client._node_log_label(
+            namespace="source",
+            ref=item.node.ref,
+            title=item.node.title,
+            descriptor=ExternalId("tmdb_show", "10", "s1"),
+            mappings=(AnibridgeMapping.parse("1-12", "1-12"),),
+            side="source",
+        )
+        == "$$'Source (source)'$$ $${tmdb_show:10:s1/1-12}$$"
+    )
+    assert (
+        client._node_log_label(
+            namespace="target",
+            ref=Ref.anchor("target"),
+            title=None,
+            descriptor=ExternalId("anilist", "456"),
+            mappings=(AnibridgeMapping.parse("1-12", "1-12"),),
+            side="target",
+        )
+        == "$$'(target)'$$ $${anilist:456/1-12}$$"
     )
 
-    assert outcome is SyncOutcome.SYNCED
-    provider_entry = provider.updated_entries[-1][1]
-    # max watched index = 15, mapping_start = 13, so progress = 15 - 13 + 1 = 3
-    assert provider_entry.progress == 3
+
+def test_sync_client_rejects_no_shared_writable_fields() -> None:
+    class SourceWithoutReadableFields(FakeScanProvider):
+        def capabilities(self) -> Capabilities:
+            return _capabilities(role=Role.SOURCE, readable=False, writable=False)
+
+    with pytest.raises(TypeError, match="no common readable/writable"):
+        SyncClient(
+            source_provider=cast(Provider, SourceWithoutReadableFields()),
+            target_provider=cast(Provider, FakeTargetProvider()),
+            animap_client=cast(AnimapClient, object()),
+            full_scan=False,
+            destructive_sync=False,
+            dry_run=False,
+            profile_name="profile",
+            sync_rules=SyncRulesConfig(),
+        )

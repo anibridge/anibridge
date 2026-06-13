@@ -18,8 +18,8 @@ def _config_text(
     profiles: str = (
         "profiles:\n"
         "  default:\n"
-        "    library_provider: mocklib\n"
-        "    list_provider: mocklist\n"
+        "    source_provider: mocklib\n"
+        "    target_provider: mocklist\n"
     ),
 ) -> str:
     lines: list[str] = []
@@ -107,7 +107,7 @@ async def test_save_document_text_validates_and_persists(
     )
 
     config, requires_restart, mtime = await service.save_document_text(text)
-    assert config.profiles["default"].library_provider == "mocklib"
+    assert config.profiles["default"].source_provider == "mocklib"
     assert requires_restart is False
     assert mtime is not None
 
@@ -159,8 +159,8 @@ async def test_save_document_text_applies_live_profile_and_mapping_updates(
         profiles=(
             "profiles:\n"
             "  default:\n"
-            "    library_provider: mocklib\n"
-            "    list_provider: mocklist\n"
+            "    source_provider: mocklib\n"
+            "    target_provider: mocklist\n"
             "    scan_interval: 120\n"
         ),
     )
@@ -200,8 +200,8 @@ async def test_save_settings_payload_rewrites_yaml_and_discards_comments(
         "mappings_url: https://example.com/mappings-a.json # keep me\n"
         "profiles:\n"
         "    default: # profile comment\n"
-        "        library_provider: mocklib # lib comment\n"
-        "        list_provider: mocklist\n",
+        "        source_provider: mocklib # source comment\n"
+        "        target_provider: mocklist\n",
         encoding="utf-8",
     )
     service = ConfigurationService(config_path=config_path)
@@ -221,8 +221,8 @@ async def test_save_settings_payload_rewrites_yaml_and_discards_comments(
             "mappings_url": "https://example.com/mappings-b.json",
             "profiles": {
                 "default": {
-                    "library_provider": "mocklib",
-                    "list_provider": "mocklist",
+                    "source_provider": "mocklib",
+                    "target_provider": "mocklist",
                     "scan_interval": 120,
                 }
             },
@@ -234,7 +234,7 @@ async def test_save_settings_payload_rewrites_yaml_and_discards_comments(
     assert "# top comment" not in saved
     assert "# keep me" not in saved
     assert "# profile comment" not in saved
-    assert "# lib comment" not in saved
+    assert "# source comment" not in saved
     assert "scan_interval: 120" in saved
 
 
@@ -283,8 +283,8 @@ async def test_save_document_text_marks_nested_restart_only_fields_pending(
         "  host: 0.0.0.0\n"
         "profiles:\n"
         "  default:\n"
-        "    library_provider: mocklib\n"
-        "    list_provider: mocklist\n"
+        "    source_provider: mocklib\n"
+        "    target_provider: mocklist\n"
     )
     runtime_config = _runtime_config(initial_text)
     scheduler = _SchedulerStub()
@@ -320,8 +320,8 @@ async def test_save_document_text_marks_path_prefix_restart_pending(
         "  path_prefix: /anibridge\n"
         "profiles:\n"
         "  default:\n"
-        "    library_provider: mocklib\n"
-        "    list_provider: mocklist\n"
+        "    source_provider: mocklib\n"
+        "    target_provider: mocklist\n"
     )
     runtime_config = _runtime_config(initial_text)
     scheduler = _SchedulerStub()
@@ -354,22 +354,22 @@ async def test_save_document_text_adds_and_removes_profiles_live(
         profiles=(
             "profiles:\n"
             "  alpha:\n"
-            "    library_provider: mocklib\n"
-            "    list_provider: mocklist\n"
+            "    source_provider: mocklib\n"
+            "    target_provider: mocklist\n"
             "  beta:\n"
-            "    library_provider: mocklib\n"
-            "    list_provider: mocklist\n"
+            "    source_provider: mocklib\n"
+            "    target_provider: mocklist\n"
         ),
     )
     updated_text = _config_text(
         profiles=(
             "profiles:\n"
             "  alpha:\n"
-            "    library_provider: mocklib\n"
-            "    list_provider: mocklist\n"
+            "    source_provider: mocklib\n"
+            "    target_provider: mocklist\n"
             "  gamma:\n"
-            "    library_provider: mocklib\n"
-            "    list_provider: mocklist\n"
+            "    source_provider: mocklib\n"
+            "    target_provider: mocklist\n"
         ),
     )
     runtime_config = _runtime_config(initial_text)

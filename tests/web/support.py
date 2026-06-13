@@ -4,6 +4,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
+from anibridge.app.core.sync.request import SyncRequest
+
 
 class SchedulerStub:
     """Flexible scheduler double shared across web tests."""
@@ -26,8 +28,8 @@ class SchedulerStub:
         self.stopped = False
         self.shutdown_requested = False
         self.reinitialized_profiles: list[str] = []
-        self.profile_sync_calls: list[tuple[str, bool, list[str] | None, str]] = []
-        self.all_sync_calls: list[tuple[bool, str]] = []
+        self.profile_sync_calls: list[tuple[str, SyncRequest, str]] = []
+        self.all_sync_calls: list[tuple[SyncRequest, str]] = []
         self.database_sync_calls: list[str] = []
         self._status_payload = status_payload or {}
         self._runtime_metrics = runtime_metrics or {}
@@ -68,8 +70,10 @@ class SchedulerStub:
     async def reinitialize_profile(self, profile: str) -> None:
         self.reinitialized_profiles.append(profile)
 
-    async def trigger_all_profiles_sync(self, *, poll: bool, source: str) -> None:
-        self.all_sync_calls.append((poll, source))
+    async def trigger_all_profiles_sync(
+        self, *, request: SyncRequest, source: str
+    ) -> None:
+        self.all_sync_calls.append((request, source))
 
     async def trigger_database_sync(self, *, source: str) -> None:
         self.database_sync_calls.append(source)
@@ -78,8 +82,7 @@ class SchedulerStub:
         self,
         profile: str,
         *,
-        poll: bool,
-        library_keys: list[str] | None,
+        request: SyncRequest,
         source: str,
     ) -> None:
-        self.profile_sync_calls.append((profile, poll, library_keys, source))
+        self.profile_sync_calls.append((profile, request, source))

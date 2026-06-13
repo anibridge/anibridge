@@ -18,8 +18,8 @@ class _DummyGlobalConfig:
         self.profiles = {
             "primary": SimpleNamespace(
                 model_dump=lambda mode="json": {
-                    "library_namespace": "plex",
-                    "list_namespace": "anilist",
+                    "source_namespace": "plex",
+                    "target_namespace": "anilist",
                     "scan_modes": ["poll", "periodic"],
                 }
             )
@@ -122,7 +122,7 @@ def test_api_settings_serializes_scheduler_state(
     assert len(response.profiles) == expected_profile_count
     if expected_profile_count:
         assert response.profiles[0].name == "primary"
-        assert response.profiles[0].settings["library_namespace"] == "plex"
+        assert response.profiles[0].settings["source_namespace"] == "plex"
 
 
 @pytest.mark.asyncio
@@ -133,8 +133,8 @@ async def test_api_about_returns_runtime_summary(monkeypatch, patch_app_state) -
         status_payload={
             "primary": {
                 "config": {
-                    "library_namespace": "plex",
-                    "list_namespace": "anilist",
+                    "source_namespace": "plex",
+                    "target_namespace": "anilist",
                     "scan_modes": ["poll", "periodic"],
                 },
                 "status": {
@@ -192,8 +192,8 @@ async def test_api_about_ignores_non_running_sync_payloads(
         status_payload={
             "primary": {
                 "config": {
-                    "library_namespace": "plex",
-                    "list_namespace": "anilist",
+                    "source_namespace": "plex",
+                    "target_namespace": "anilist",
                     "scan_modes": ["poll", "periodic"],
                 },
                 "status": {

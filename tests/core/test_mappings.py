@@ -265,6 +265,51 @@ def test_decode_mappings_zstd_payload(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mappings_client_session_lifecycle_and_context_manager(
+    tmp_path: Path,
+) -> None:
+    """Session creation, close, cache clearing, and context exit should be covered."""
+    client = _make_client(tmp_path)
+
+    async with client as entered:
+        assert entered is client
+        session = await client._get_session()
+        assert session.closed is False
+
+    assert session.closed is True
+    client._loaded_sources.add("source")
+    client._provenance["anilist:1"] = ["source"]
+    client.clear_cache()
+    assert client._loaded_sources == set()
+    assert client._provenance == {}
+
+
+def test_decode_mappings_handles_unexpected_zstd_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected decompression failures should return an empty mapping."""
+    client = _make_client(tmp_path)
+
+    def _boom(_payload: bytes) -> bytes:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mappings_module.zstd, "decompress", _boom)
+
+    assert client._decode_mappings(b"payload", "mappings.json.zst") == {}
+
+
+@pytest.mark.asyncio
+async def test_finalize_mappings_empty_payload_returns_empty(tmp_path: Path) -> None:
+    """Empty mapping payloads should finalize to an empty mapping."""
+    client = _make_client(tmp_path)
+
+    result = await client._finalize_mappings("empty.json", {}, set())
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
 async def test_load_includes_handles_exceptions(tmp_path: Path) -> None:
     """Include load failures should be logged and ignored."""
     client = _make_client(tmp_path)

@@ -4,6 +4,7 @@ from collections.abc import Coroutine
 
 import pytest
 
+from anibridge.app.core.sync.request import SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.web.routes.api import sync as sync_api_module
 from tests.web.support import SchedulerStub
@@ -47,11 +48,13 @@ async def test_sync_routes_schedule_background_tasks(
     patch_app_state(sync_api_module, scheduler=scheduler)
 
     if operation == "all":
-        response = await sync_api_module.sync_all.fn(poll=True)
+        response = await sync_api_module.sync_all.fn(trigger=SyncTrigger.POLL)
     elif operation == "database":
         response = await sync_api_module.sync_database.fn()
     else:
-        response = await sync_api_module.sync_profile.fn("broken", poll=True)
+        response = await sync_api_module.sync_profile.fn(
+            "broken", trigger=SyncTrigger.POLL
+        )
 
     assert response.ok is True
     assert [name for name, _ in scheduled_tasks] == [expected_task_name]

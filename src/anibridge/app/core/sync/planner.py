@@ -577,11 +577,12 @@ class RecordPlanner:
         return None
 
     def _values_equal(self, field: RecordField, current: Any, new: Any) -> bool:
-        if (
-            field == RecordField.PROGRESS
-            and isinstance(current, Progress)
-            and isinstance(new, Progress)
-        ):
+        if field == RecordField.PROGRESS:
+            if self._empty_progress(current) and self._empty_progress(new):
+                return True
+            if not isinstance(current, Progress) or not isinstance(new, Progress):
+                return current == new
+
             constraint = self._constraint(field, ProgressConstraint)
             current_tuple = [current.current]
             new_tuple = [new.current]
@@ -593,6 +594,15 @@ class RecordPlanner:
                 new_tuple.append(new.unit)
             return current_tuple == new_tuple
         return current == new
+
+    @staticmethod
+    def _empty_progress(value: Any) -> bool:
+        """Return whether a value represents no consumed progress."""
+        if value is None:
+            return True
+        return isinstance(value, Progress) and (
+            value.current is None or value.current == 0
+        )
 
     def _status_gate(self, field: RecordField, status: Status | None) -> str | None:
         if (

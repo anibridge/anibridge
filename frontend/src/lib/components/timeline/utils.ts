@@ -4,8 +4,8 @@ import type { DiffEntry } from "$lib/components/timeline/types";
 import type { HistoryItem } from "$lib/types/api";
 
 export function buildDiff(item: HistoryItem): DiffEntry[] {
-    const before = item.before_state || {};
-    const after = item.after_state || {};
+    const before = item.before_state?.values || {};
+    const after = item.after_state?.values || {};
     const paths = new SvelteSet<string>();
     const visit = (obj: unknown, base = "") => {
         if (!obj || typeof obj !== "object") return;

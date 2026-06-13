@@ -6,8 +6,6 @@
         Hash,
         Info,
         LoaderCircle,
-        RefreshCcw,
-        RotateCw,
         SquareMinus,
         SquarePlus,
         Trash2,
@@ -38,13 +36,6 @@
         meta: OutcomeMeta;
         displayTitle: (item: HistoryItem) => string | null;
         coverImage: (item: HistoryItem) => string | null;
-        canRetry?: (item: HistoryItem) => boolean;
-        retryHistory?: (item: HistoryItem) => void;
-        retryLoading?: boolean;
-        isProfileRunning?: boolean;
-        canUndo?: (item: HistoryItem) => boolean;
-        undoHistory?: (item: HistoryItem) => void;
-        undoLoading?: boolean;
         deleteHistory?: (item: HistoryItem) => void;
         canShowDiff?: (item: HistoryItem) => boolean;
         toggleDiff?: (id: number) => void;
@@ -70,13 +61,6 @@
         meta,
         displayTitle,
         coverImage,
-        canRetry = () => false,
-        retryHistory = () => undefined,
-        retryLoading = false,
-        isProfileRunning = false,
-        canUndo = () => false,
-        undoHistory = () => undefined,
-        undoLoading = false,
         deleteHistory,
         canShowDiff = () => false,
         toggleDiff = () => undefined,
@@ -206,32 +190,32 @@
                     <div
                         class="chip-scroll space-y-1 overflow-x-auto mask-[linear-gradient(to_right,black,black_calc(100%-10px),transparent)] whitespace-nowrap">
                         <div class="flex items-center gap-1 text-[10px] text-slate-300">
-                            {#if item.list_media?.external_url}
+                            {#if item.target_media?.external_url}
                                 <!-- eslint-disable svelte/no-navigation-without-resolve -->
                                 <a
-                                    href={item.list_media.external_url}
+                                    href={item.target_media.external_url}
                                     target="_blank"
                                     rel="noopener"
                                     class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-700/50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-100 hover:bg-sky-600/60"
-                                    title="Open in List">
+                                    title="Open in target provider">
                                     <ExternalLink
                                         class="inline h-3.5 w-3.5 text-[11px]" />
-                                    {titleCase(item.list_namespace || "list")}
+                                    {titleCase(item.target_namespace || "target")}
                                 </a>
                                 <!-- eslint-enable svelte/no-navigation-without-resolve -->
                             {/if}
 
-                            {#if item.library_media?.external_url}
+                            {#if item.source_media?.external_url}
                                 <!-- eslint-disable svelte/no-navigation-without-resolve -->
                                 <a
-                                    href={item.library_media.external_url}
+                                    href={item.source_media.external_url}
                                     target="_blank"
                                     rel="noopener"
                                     class="inline-flex items-center gap-1 rounded-md border border-amber-600 bg-amber-700/60 px-1.5 py-0.5 text-[10px] text-amber-100 transition-colors hover:bg-amber-600/60"
-                                    title="Open in Library">
+                                    title="Open in source provider">
                                     <ExternalLink
                                         class="inline h-3.5 w-3.5 text-[11px]" />
-                                    {titleCase(item.library_namespace || "library")}
+                                    {titleCase(item.source_namespace || "source")}
                                 </a>
                                 <!-- eslint-enable svelte/no-navigation-without-resolve -->
                             {/if}
@@ -256,8 +240,8 @@
                                 </span>
                             {/if}
 
-                            {#if item.list_media?.labels}
-                                {#each item.list_media?.labels as label (label)}
+                            {#if item.target_media?.labels}
+                                {#each item.target_media?.labels as label (label)}
                                     <span
                                         class="inline-flex items-center rounded bg-slate-800/70 px-1.5 py-0.5 tracking-wide text-slate-200 uppercase">
                                         {label}
@@ -381,34 +365,6 @@
                 </div>
                 <div
                     class="flex shrink-0 flex-col items-stretch gap-1 self-start sm:gap-2">
-                    {#if canRetry(item)}
-                        <button
-                            type="button"
-                            disabled={retryLoading || isProfileRunning}
-                            onclick={() => retryHistory(item)}
-                            class="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-emerald-600/80 bg-emerald-700/70 px-2 text-[10px] font-medium text-emerald-100 hover:bg-emerald-600/70 disabled:opacity-50"
-                            title="Retry sync for this item">
-                            {#if retryLoading}
-                                <LoaderCircle class="inline h-4 w-4 animate-spin" />
-                            {:else}
-                                <RefreshCcw class="inline h-4 w-4" />
-                            {/if}
-                        </button>
-                    {/if}
-                    {#if canUndo(item)}
-                        <button
-                            type="button"
-                            disabled={undoLoading}
-                            onclick={() => undoHistory(item)}
-                            class="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-violet-600/80 bg-violet-700/70 px-2 text-[10px] font-medium text-violet-100 hover:bg-violet-600/70 disabled:opacity-50"
-                            title="Undo this change">
-                            {#if undoLoading}
-                                <LoaderCircle class="inline h-4 w-4 animate-spin" />
-                            {:else}
-                                <RotateCw class="inline h-4 w-4" />
-                            {/if}
-                        </button>
-                    {/if}
                     {#if deleteHistory}
                         <button
                             type="button"

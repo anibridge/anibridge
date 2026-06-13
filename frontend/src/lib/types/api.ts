@@ -16,6 +16,24 @@ export interface ProviderMediaMetadata {
     labels?: string[] | null;
 }
 
+export interface RefStepPayload {
+    axis: string;
+    value: string | number;
+}
+
+export interface RefPayload {
+    key: string;
+    path?: RefStepPayload[];
+}
+
+export interface RecordSnapshot {
+    ref: RefPayload;
+    kind?: string;
+    key?: string | null;
+    ids?: string[];
+    values?: Record<string, unknown>;
+}
+
 // --- Mappings API ---
 export interface MappingEdge {
     target_provider: string;
@@ -146,27 +164,27 @@ export interface LogEntry {
 
 // --- Status / System API ---
 export interface ProfileConfig {
-    library_namespace?: string;
-    list_namespace?: string;
-    library_user?: string | null;
-    list_user?: string | null;
+    source_namespace: string;
+    target_namespace: string;
+    source_account?: string | null;
+    target_account?: string | null;
     scan_interval?: number | string | null;
     poll_interval?: number | string | null;
     scan_modes?: string[];
     full_scan?: boolean | null;
     destructive_sync?: boolean | null;
-    batch_requests?: boolean | null;
 }
 
 export interface CurrentSync {
-    state?: string;
-    started_at?: string;
-    section_index?: number;
-    section_count?: number;
-    section_title?: string | null;
-    stage?: string;
-    section_items_total?: number;
-    section_items_processed?: number;
+    state: "running" | "idle" | string;
+    started_at: string;
+    stage: string;
+    source_namespace: string;
+    target_namespace: string;
+    trigger: string;
+    scanned_items: number;
+    processed_items: number;
+    total_items?: number | null;
 }
 
 export interface ProfileRuntimeStatus {
@@ -274,24 +292,22 @@ export interface RestartResponse {
 export interface HistoryItem {
     id: number;
     profile_name: string;
-    library_namespace?: string | null;
-    library_section_key?: string | null;
-    library_media_key?: string | null;
-    list_namespace?: string | null;
-    list_media_key?: string | null;
+    source_namespace?: string | null;
+    source_ref?: RefPayload | null;
+    target_namespace?: string | null;
+    target_ref?: RefPayload | null;
     animap_provider?: string | null;
     animap_id?: string | null;
     animap_scope?: string | null;
-    media_kind?: string | null;
     outcome: string;
-    before_state?: Record<string, unknown> | null;
-    after_state?: Record<string, unknown> | null;
+    before_state?: RecordSnapshot | null;
+    after_state?: RecordSnapshot | null;
     info?: Record<string, string> | null;
     error_message?: string | null;
     ephemeral?: boolean;
     timestamp: string;
-    library_media?: ProviderMediaMetadata | null;
-    list_media?: ProviderMediaMetadata | null;
+    source_media?: ProviderMediaMetadata | null;
+    target_media?: ProviderMediaMetadata | null;
     pinned_fields?: string[] | null;
 }
 
@@ -304,14 +320,6 @@ export interface GetHistoryResponse {
     stats?: Record<string, number> | null;
 }
 
-export interface UndoResponse {
-    item: HistoryItem;
-}
-
-export interface RetryResponse {
-    ok: boolean;
-}
-
 export interface PinFieldOption {
     value: string;
     label: string;
@@ -319,8 +327,8 @@ export interface PinFieldOption {
 
 export interface PinResponse {
     profile_name: string;
-    list_namespace: string;
-    list_media_key: string;
+    target_namespace: string;
+    target_ref: RefPayload;
     fields: string[];
     created_at: string;
     updated_at: string;

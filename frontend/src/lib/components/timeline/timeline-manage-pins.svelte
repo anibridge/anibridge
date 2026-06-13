@@ -6,6 +6,7 @@
     import { apiFetch } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
     import { loadPinOptions } from "$lib/utils/pin-options";
+    import { targetIdentifier } from "$lib/utils/provider-ref";
 
     interface Props {
         profile: string;
@@ -25,20 +26,6 @@
     let error: string | null = $state(null);
     let selected: string[] = $state([]);
     let baseline: string[] = $state([]);
-
-    interface ListIdentifier {
-        namespace: string;
-        mediaKey: string;
-    }
-
-    function getListIdentifier(): ListIdentifier | null {
-        const namespace = item.list_namespace ?? item.list_media?.namespace ?? null;
-        const mediaKey = item.list_media_key ?? item.list_media?.key ?? null;
-        if (!namespace || !mediaKey) return null;
-        return { namespace, mediaKey };
-    }
-
-    const hasListIdentifier = () => Boolean(getListIdentifier());
 
     function arraysEqual(a: string[], b: string[]): boolean {
         if (a.length !== b.length) return false;
@@ -87,19 +74,20 @@
 
     async function saveSelection(fields: string[] = selected) {
         if (saving) return;
-        const identifier = getListIdentifier();
+        const identifier = targetIdentifier(item);
         if (!identifier) {
-            toast("Pins require a linked list entry.", "error");
+            toast("Pins require a target record.", "error");
             return;
         }
         if (arraysEqual(fields, baseline)) return;
         saving = true;
         error = null;
         emitBusy(true);
+        const key = encodeURIComponent(identifier.key);
         try {
             if (!fields.length) {
                 const res = await apiFetch(
-                    `/api/pins/${profile}/${identifier.mediaKey}`,
+                    `/api/pins/${profile}/${key}`,
                     { method: "DELETE" },
                     { successMessage: "Pins cleared" },
                 );
@@ -109,7 +97,7 @@
                 return;
             }
             const res = await apiFetch(
-                `/api/pins/${profile}/${identifier.mediaKey}?with_media=true`,
+                `/api/pins/${profile}/${key}?with_media=true`,
                 {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
@@ -170,10 +158,10 @@
     {saving}
     {error}
     {optionsError}
-    missingMessage={hasListIdentifier() ? null : "Pins require a linked list entry."}
+    missingMessage={targetIdentifier(item) ? null : "Pins require a target record."}
     title="Pin fields"
     subtitle="Choose the fields to keep unchanged for this entry when syncing."
-    disabled={!hasListIdentifier()}
+    disabled={!targetIdentifier(item)}
     onSave={(value) => void saveSelection(value)}
     onRefresh={(force) => void refreshAll(force)}
     onChange={(value) => setSelection(value)} />

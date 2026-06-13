@@ -17,6 +17,13 @@
     import type { ProfileStatus, StatusResponse } from "$lib/types/api";
     import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import {
+        progressCount,
+        progressPercent,
+        progressStage,
+        progressSubject,
+    } from "$lib/utils/sync-progress";
+    import { titleCase } from "$lib/utils/text";
 
     let profiles: StatusResponse["profiles"] = $state({});
     let isLoading = $state(true);
@@ -107,14 +114,15 @@
         };
     }
 
-    async function syncAll(poll: boolean) {
+    async function syncAll(trigger: "manual" | "poll") {
         await apiFetch(
-            `/api/sync?poll=${poll}`,
+            `/api/sync?trigger=${trigger}`,
             { method: "POST" },
             {
-                successMessage: poll
-                    ? "Triggered poll sync for all profiles"
-                    : "Triggered full sync for all profiles",
+                successMessage:
+                    trigger === "poll"
+                        ? "Triggered poll sync for all profiles"
+                        : "Triggered full sync for all profiles",
             },
         );
         refresh();
@@ -129,14 +137,15 @@
         refresh();
     }
 
-    async function syncProfile(name: string, poll: boolean) {
+    async function syncProfile(name: string, trigger: "manual" | "poll") {
         await apiFetch(
-            `/api/sync/profile/${name}?poll=${poll}`,
+            `/api/sync/profile/${name}?trigger=${trigger}`,
             { method: "POST" },
             {
-                successMessage: poll
-                    ? `Triggered poll sync for profile ${name}`
-                    : `Triggered full sync for profile ${name}`,
+                successMessage:
+                    trigger === "poll"
+                        ? `Triggered poll sync for profile ${name}`
+                        : `Triggered full sync for profile ${name}`,
             },
         );
         refresh();
@@ -172,16 +181,10 @@
         goto(resolve(`/timeline/${name}`));
     }
 
-    function progressPercent(p: ProfileStatus): number | null {
-        const c = p.status?.current_sync;
-        if (!c || c.state !== "running") return null;
-        const secIdx = Math.max(0, (c.section_index || 1) - 1);
-        const secCount = Math.max(1, c.section_count || 1);
-        const total = Math.max(1, c.section_items_total || 1);
-        const done = Math.min(total, c.section_items_processed || 0);
-        const sectionFrac = total > 0 ? done / total : 0;
-        const overall = (secIdx + sectionFrac) / secCount;
-        return Math.max(0, Math.min(1, overall));
+    function accountPair(p: ProfileStatus): string {
+        const source = p.config.source_account || p.config.source_namespace || "source";
+        const target = p.config.target_account || p.config.target_namespace || "target";
+        return `${source} -> ${target}`;
     }
 
     onMount(() => {
@@ -214,7 +217,7 @@
                 </button>
                 <button
                     class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-xs font-medium text-emerald-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={() => syncAll(false)}
+                    onclick={() => syncAll("manual")}
                     disabled={anyRunning()}
                     title={anyRunning()
                         ? "A sync is currently running. Please wait."
@@ -224,7 +227,7 @@
                 </button>
                 <button
                     class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-xs font-medium text-sky-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={() => syncAll(true)}
+                    onclick={() => syncAll("poll")}
                     disabled={anyRunning()}
                     title={anyRunning()
                         ? "A sync is currently running. Please wait."
@@ -283,8 +286,7 @@
                             <div class="font-medium text-slate-100">{name}</div>
                             <span
                                 class="rounded-md bg-blue-900/50 px-2 py-1 text-xs text-slate-200"
-                                >{p.config.library_user} &rarr; {p.config
-                                    .list_user}</span>
+                                >{accountPair(p)}</span>
                         </div>
                         <div class="mt-1 text-xs text-slate-400">
                             {#if p.status?.last_synced}
@@ -343,7 +345,7 @@
                                 onclick={(e) => {
                                     e.stopPropagation();
                                     if (!isProfileRunning(p) && !profileDisabled)
-                                        syncProfile(name, false);
+                                        syncProfile(name, "manual");
                                 }}
                                 onkeydown={(e) =>
                                     (e.key === "Enter" || e.key === " ") &&
@@ -351,7 +353,7 @@
                                     e.stopPropagation(),
                                     !isProfileRunning(p) &&
                                         !profileDisabled &&
-                                        syncProfile(name, false))}
+                                        syncProfile(name, "manual"))}
                                 class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-[11px] font-medium text-emerald-200 hover:bg-emerald-600/40"
                                 class:opacity-50={isProfileRunning(p) ||
                                     profileDisabled}
@@ -372,7 +374,7 @@
                                 onclick={(e) => {
                                     e.stopPropagation();
                                     if (!isProfileRunning(p) && !profileDisabled)
-                                        syncProfile(name, true);
+                                        syncProfile(name, "poll");
                                 }}
                                 onkeydown={(e) =>
                                     (e.key === "Enter" || e.key === " ") &&
@@ -380,7 +382,7 @@
                                     e.stopPropagation(),
                                     !isProfileRunning(p) &&
                                         !profileDisabled &&
-                                        syncProfile(name, true))}
+                                        syncProfile(name, "poll"))}
                                 class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-[11px] font-medium text-sky-200 hover:bg-sky-600/40"
                                 class:opacity-50={isProfileRunning(p) ||
                                     profileDisabled}
@@ -410,32 +412,40 @@
                         <div
                             class="flex items-center justify-between text-[11px] text-slate-400">
                             <div class="truncate">
-                                {#if p.status.current_sync.section_title}
+                                {#if progressSubject(p.status.current_sync)}
                                     <span class="text-slate-300"
-                                        >{p.status.current_sync.section_title}</span>
+                                        >{progressSubject(p.status.current_sync)}</span>
                                     <span class="mx-1">•</span>
                                 {/if}
                                 <span class="tracking-wide uppercase"
-                                    >{p.status.current_sync.stage ||
-                                        "processing"}</span>
+                                    >{progressStage(p.status.current_sync)}</span>
                             </div>
                             <div>
-                                {p.status.current_sync.section_items_processed || 0}/{p
-                                    .status.current_sync.section_items_total || 0}
+                                {progressCount(p.status.current_sync)}
                             </div>
                         </div>
-                        {#key p.status.current_sync.section_index}
-                            <Meter.Root
-                                value={progressPercent(p) ?? 0}
-                                min={0}
-                                max={1}
-                                class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                        {#key p.status.current_sync.started_at}
+                            {@const percent = progressPercent(p.status.current_sync)}
+                            {#if percent !== null}
+                                <Meter.Root
+                                    value={percent}
+                                    min={0}
+                                    max={1}
+                                    class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                                    <div
+                                        class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
+                                        style="transform: translateX(-{100 -
+                                            100 * percent}%)">
+                                    </div>
+                                </Meter.Root>
+                            {:else}
                                 <div
-                                    class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
-                                    style="transform: translateX(-{100 -
-                                        (100 * (progressPercent(p) ?? 0)) / 1}%)">
+                                    class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                                    <div
+                                        class="sync-progress-indeterminate h-full w-1/3 bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400">
+                                    </div>
                                 </div>
-                            </Meter.Root>
+                            {/if}
                         {/key}
                     </div>
                 {/if}
@@ -462,12 +472,27 @@
                             class="rounded-md bg-slate-800/80 px-2 py-1 text-blue-200"
                             >Destructive Sync</span
                         >{/if}
-                    {#if p.config.batch_requests}<span
-                            class="rounded-md bg-slate-800/80 px-2 py-1 text-blue-200"
-                            >Batch Requests</span
-                        >{/if}
+                    <span class="rounded-md bg-slate-800/80 px-2 py-1 text-blue-200"
+                        >{titleCase(p.config.source_namespace)} -> {titleCase(
+                            p.config.target_namespace,
+                        )}</span>
                 </div>
             </button>
         {/each}
     </div>
 </div>
+
+<style>
+    .sync-progress-indeterminate {
+        animation: sync-progress-indeterminate 1.2s ease-in-out infinite;
+    }
+
+    @keyframes sync-progress-indeterminate {
+        0% {
+            transform: translateX(-120%);
+        }
+        100% {
+            transform: translateX(320%);
+        }
+    }
+</style>

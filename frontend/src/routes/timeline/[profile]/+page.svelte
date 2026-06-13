@@ -9,7 +9,6 @@
         CircleX,
         Infinity as InfinityIcon,
         LoaderCircle,
-        RotateCw,
         SearchX,
         Trash2,
     } from "@lucide/svelte";
@@ -28,6 +27,7 @@
     } from "$lib/types/api";
     import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import { refLabel, targetIdentifier } from "$lib/utils/provider-ref";
 
     const { params } = $props<{ params: { profile: string } }>();
 
@@ -53,8 +53,6 @@
     let currentSync: CurrentSync | null = $state(null);
     let isProfileRunning = $state(false);
     let isReinitializing = $state(false);
-    let undoLoading: Record<number, boolean> = $state({});
-    let retryLoading: Record<number, boolean> = $state({});
 
     let openPins: Record<number, boolean> = $state({});
     let pinDraftCounts: Record<number, number> = $state({});
@@ -92,12 +90,6 @@
             order: 2,
         },
         deleted: { label: "Deleted", color: "bg-rose-600/80", icon: Trash2, order: 3 },
-        undone: {
-            label: "Undone",
-            color: "bg-violet-600/80",
-            icon: RotateCw,
-            order: 6,
-        },
     };
 
     function metaFor(o: string) {
@@ -152,20 +144,20 @@
 
     function displayTitle(item: HistoryItem) {
         return (
-            item.list_media?.title ??
-            item.library_media?.title ??
-            (item.list_namespace && item.list_media_key
-                ? `${item.list_namespace}:${item.list_media_key}`
+            item.target_media?.title ??
+            item.source_media?.title ??
+            (item.target_namespace && item.target_ref
+                ? `${item.target_namespace}:${refLabel(item.target_ref)}`
                 : null) ??
-            (item.library_namespace && item.library_media_key
-                ? `${item.library_namespace}:${item.library_media_key}`
+            (item.source_namespace && item.source_ref
+                ? `${item.source_namespace}:${refLabel(item.source_ref)}`
                 : null) ??
             "Unknown title"
         );
     }
 
     function coverImage(item: HistoryItem) {
-        return item.list_media?.poster_url ?? item.library_media?.poster_url ?? null;
+        return item.target_media?.poster_url ?? item.source_media?.poster_url ?? null;
     }
 
     async function deleteHistory(item: HistoryItem) {
@@ -189,75 +181,18 @@
         }
     }
 
-    function canUndo(item: HistoryItem): boolean {
-        return !!(
-            item &&
-            !item.ephemeral &&
-            item.list_media_key &&
-            item.list_namespace &&
-            (item.outcome === "synced" || item.outcome === "deleted")
-        );
-    }
-
-    async function undoHistory(item: HistoryItem) {
-        if (!canUndo(item) || undoLoading[item.id]) return;
-        undoLoading[item.id] = true;
-        try {
-            const res = await apiFetch(
-                `/api/history/${params.profile}/${item.id}/undo`,
-                { method: "POST" },
-            );
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            const data = (await res.json()) as { item?: HistoryItem };
-            if (data?.item) {
-                items = [data.item, ...items];
-                knownIds.add(data.item.id);
-                stats[data.item.outcome] = (stats[data.item.outcome] || 0) + 1;
-            }
-            toast("Undo applied", "success");
-        } catch (e) {
-            toast("Undo failed", "error");
-            console.error(e);
-        } finally {
-            undoLoading[item.id] = false;
-        }
-    }
-
-    function canRetry(item: HistoryItem): boolean {
-        return !!(item && (item.outcome === "failed" || item.outcome === "not_found"));
-    }
-
-    async function retryHistory(item: HistoryItem) {
-        if (!canRetry(item) || retryLoading[item.id]) return;
-        retryLoading[item.id] = true;
-        try {
-            const res = await apiFetch(
-                `/api/history/${params.profile}/${item.id}/retry`,
-                { method: "POST" },
-            );
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            toast("Retry queued", "success");
-        } catch (e) {
-            toast("Retry failed", "error");
-            console.error(e);
-        } finally {
-            retryLoading[item.id] = false;
-        }
-    }
-
     function canShowDiff(item: HistoryItem): boolean {
-        // Diff panel should be available for original sync changes and subsequent undo entries
         return !!(
             item &&
             (item.before_state || item.after_state) &&
-            (item.outcome === "synced" || item.outcome === "undone")
+            item.outcome === "synced"
         );
     }
 
     function diffCountFor(item: HistoryItem): number {
         let count = 0;
-        const before = item.before_state || {};
-        const after = item.after_state || {};
+        const before = item.before_state?.values || {};
+        const after = item.after_state?.values || {};
         const keys = new Set<string>([...Object.keys(before), ...Object.keys(after)]);
         for (const k of keys) {
             if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) {
@@ -267,21 +202,13 @@
         return count;
     }
 
-    function getListIdentifier(
-        item: HistoryItem,
-    ): { namespace: string; mediaKey: string } | null {
-        const namespace = item.list_namespace ?? item.list_media?.namespace ?? null;
-        const mediaKey = item.list_media_key ?? item.list_media?.key ?? null;
-        if (!namespace || !mediaKey) return null;
-        return { namespace, mediaKey };
-    }
-
-    function applyPins(namespace: string, mediaKey: string, fields: string[]) {
-        items = items.map((entry) =>
-            entry.list_namespace === namespace && entry.list_media_key === mediaKey
+    function applyPins(namespace: string, key: string, fields: string[]) {
+        items = items.map((entry) => {
+            const identifier = targetIdentifier(entry);
+            return identifier?.namespace === namespace && identifier?.key === key
                 ? { ...entry, pinned_fields: fields.length ? [...fields] : null }
-                : entry,
-        );
+                : entry;
+        });
     }
 
     function pinCountFor(item: HistoryItem): number {
@@ -295,8 +222,8 @@
     }
 
     function handlePinsSaved(item: HistoryItem, fields: string[]) {
-        const identifier = getListIdentifier(item);
-        if (identifier) applyPins(identifier.namespace, identifier.mediaKey, fields);
+        const identifier = targetIdentifier(item);
+        if (identifier) applyPins(identifier.namespace, identifier.key, fields);
         pinDraftCounts[item.id] = fields.length;
     }
 
@@ -305,9 +232,9 @@
     }
 
     function togglePinsPanel(item: HistoryItem) {
-        const identifier = getListIdentifier(item);
+        const identifier = targetIdentifier(item);
         if (!identifier) {
-            toast("Pins require a linked list entry", "warn");
+            toast("Pins require a target record", "warn");
             return;
         }
         const next = !openPins[item.id];
@@ -484,15 +411,16 @@
         }, 400);
     }
 
-    async function triggerSync(poll: boolean) {
+    async function triggerSync(trigger: "manual" | "poll") {
         try {
             await apiFetch(
-                `/api/sync/profile/${params.profile}?poll=${poll}`,
+                `/api/sync/profile/${params.profile}?trigger=${trigger}`,
                 { method: "POST" },
                 {
-                    successMessage: poll
-                        ? `Triggered poll sync for profile ${params.profile}`
-                        : `Triggered full sync for profile ${params.profile}`,
+                    successMessage:
+                        trigger === "poll"
+                            ? `Triggered poll sync for profile ${params.profile}`
+                            : `Triggered full sync for profile ${params.profile}`,
                 },
             );
         } catch {
@@ -556,8 +484,8 @@
         {currentSync}
         {isProfileRunning}
         {isReinitializing}
-        onFullSync={() => triggerSync(false)}
-        onPollSync={() => triggerSync(true)}
+        onFullSync={() => triggerSync("manual")}
+        onPollSync={() => triggerSync("poll")}
         onReinitialize={reinitializeProfile}
         onRefresh={loadFirst} />
     <div class="-mt-1">
@@ -593,22 +521,15 @@
                 profile={params.profile}
                 {item}
                 {meta}
-                {isProfileRunning}
                 {displayTitle}
                 {coverImage}
-                {canRetry}
-                {retryHistory}
-                retryLoading={retryLoading[item.id] || false}
-                {canUndo}
-                {undoHistory}
-                undoLoading={undoLoading[item.id] || false}
                 {deleteHistory}
                 {canShowDiff}
                 {toggleDiff}
                 openDiff={openDiff[item.id] || false}
                 {ensureDiffUi}
                 diffCount={diffCountFor(item)}
-                hasPins={Boolean(getListIdentifier(item))}
+                hasPins={Boolean(targetIdentifier(item))}
                 togglePins={togglePinsPanel}
                 openPins={openPins[item.id] || false}
                 pinButtonLoading={pinBusy[item.id] || false}

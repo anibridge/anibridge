@@ -19,6 +19,11 @@
     import type { AboutResponse, ProfileStatus } from "$lib/types/api";
     import { apiJson } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import {
+        progressCount,
+        progressStage,
+        progressSubject,
+    } from "$lib/utils/sync-progress";
 
     let info: AboutResponse["info"] | null = $state(null);
     let processInfo: AboutResponse["process"] | null = $state(null);
@@ -81,18 +86,13 @@
     function currentSyncLabel(profile: ProfileStatus): string | null {
         const current = profile.status?.current_sync;
         if (!current) return null;
-        if (current.stage) return current.stage;
-        if (current.state) return current.state;
-        return "Running";
+        return progressStage(current);
     }
 
     function currentSyncProgress(profile: ProfileStatus): string | null {
         const current = profile.status?.current_sync;
         if (!current) return null;
-        const processed = current.section_items_processed ?? 0;
-        const total = current.section_items_total ?? 0;
-        if (!total) return null;
-        return `${processed}/${total} items`;
+        return progressCount(current);
     }
 
     onMount(load);
@@ -337,16 +337,20 @@
                             <tr class="hover:bg-slate-900/40">
                                 <td class="px-4 py-3">
                                     <div class="font-medium text-slate-100">{name}</div>
-                                    {#if profile.config?.library_user}
+                                    {#if profile.config?.source_namespace}
                                         <div class="text-[11px] text-slate-400">
-                                            {profile.config.library_namespace} · {profile
-                                                .config.library_user}
+                                            {profile.config.source_namespace}
+                                            {#if profile.config.source_account}
+                                                · {profile.config.source_account}
+                                            {/if}
                                         </div>
                                     {/if}
-                                    {#if profile.config?.list_user}
+                                    {#if profile.config?.target_namespace}
                                         <div class="text-[11px] text-slate-500">
-                                            {profile.config.list_namespace} · {profile
-                                                .config.list_user}
+                                            {profile.config.target_namespace}
+                                            {#if profile.config.target_account}
+                                                · {profile.config.target_account}
+                                            {/if}
                                         </div>
                                     {/if}
                                 </td>
@@ -382,10 +386,11 @@
                                         <div
                                             class="rounded-md bg-amber-500/15 px-2 py-1 text-[11px] font-medium text-amber-200">
                                             {currentSyncLabel(profile)}
-                                            {#if profile.status.current_sync.section_title}
+                                            {#if progressSubject(profile.status.current_sync)}
                                                 <span class="text-amber-300">
-                                                    · {profile.status.current_sync
-                                                        .section_title}
+                                                    · {progressSubject(
+                                                        profile.status.current_sync,
+                                                    )}
                                                 </span>
                                             {/if}
                                         </div>

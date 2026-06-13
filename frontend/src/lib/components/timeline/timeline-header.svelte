@@ -9,6 +9,12 @@
     import { Meter } from "bits-ui";
 
     import type { CurrentSync } from "$lib/types/api";
+    import {
+        progressCount,
+        progressPercent,
+        progressStage,
+        progressSubject,
+    } from "$lib/utils/sync-progress";
 
     interface Props {
         profile: string;
@@ -32,19 +38,9 @@
         onRefresh,
     }: Props = $props();
 
-    function progressPercent(sync: CurrentSync | null): number | null {
-        if (!sync || sync.state !== "running") return null;
-        const secIdx = Math.max(0, (sync.section_index || 1) - 1);
-        const secCount = Math.max(1, sync.section_count || 1);
-        const total = Math.max(1, sync.section_items_total || 1);
-        const done = Math.min(total, sync.section_items_processed || 0);
-        const sectionFrac = total > 0 ? done / total : 0;
-        const overall = (secIdx + sectionFrac) / secCount;
-        return Math.max(0, Math.min(1, overall));
-    }
-
     const hasRunningSync = () => currentSync?.state === "running";
     const percent = () => progressPercent(currentSync) ?? 0;
+    const isDeterminate = () => progressPercent(currentSync) !== null;
 </script>
 
 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -85,29 +81,51 @@
     <div class="mt-2 space-y-2">
         <div class="flex items-center justify-between text-[11px] text-slate-400">
             <div class="truncate">
-                {#if currentSync?.section_title}
-                    <span class="text-slate-300">{currentSync.section_title}</span>
+                {#if progressSubject(currentSync)}
+                    <span class="text-slate-300">{progressSubject(currentSync)}</span>
                     <span class="mx-1">•</span>
                 {/if}
                 <span class="tracking-wide uppercase"
-                    >{currentSync?.stage || "processing"}</span>
+                    >{progressStage(currentSync)}</span>
             </div>
             <div>
-                {currentSync?.section_items_processed || 0}/
-                {currentSync?.section_items_total || 0}
+                {progressCount(currentSync)}
             </div>
         </div>
-        {#key currentSync?.section_index}
-            <Meter.Root
-                value={percent()}
-                min={0}
-                max={1}
-                class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
-                <div
-                    class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
-                    style="transform: translateX(-{100 - 100 * percent()}%)">
+        {#key currentSync?.started_at}
+            {#if isDeterminate()}
+                <Meter.Root
+                    value={percent()}
+                    min={0}
+                    max={1}
+                    class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                    <div
+                        class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
+                        style="transform: translateX(-{100 - 100 * percent()}%)">
+                    </div>
+                </Meter.Root>
+            {:else}
+                <div class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                    <div
+                        class="sync-progress-indeterminate h-full w-1/3 bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400">
+                    </div>
                 </div>
-            </Meter.Root>
+            {/if}
         {/key}
     </div>
 {/if}
+
+<style>
+    .sync-progress-indeterminate {
+        animation: sync-progress-indeterminate 1.2s ease-in-out infinite;
+    }
+
+    @keyframes sync-progress-indeterminate {
+        0% {
+            transform: translateX(-120%);
+        }
+        100% {
+            transform: translateX(320%);
+        }
+    }
+</style>

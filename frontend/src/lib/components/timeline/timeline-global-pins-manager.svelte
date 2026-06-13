@@ -1,71 +1,65 @@
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onMount, type Component } from "svelte";
 
-    import { LoaderCircle, Pin, RefreshCcw, X } from "@lucide/svelte";
+    import {
+        ExternalLink,
+        LoaderCircle,
+        Pin,
+        PinOff,
+        Plus,
+        RefreshCcw,
+        Search,
+        SlidersHorizontal,
+        Trash2,
+        X,
+    } from "@lucide/svelte";
 
     import PinFieldsEditor from "$lib/components/timeline/pin-fields-editor.svelte";
-    import TimelineItem, {
-        type PinsPanelContext,
-    } from "$lib/components/timeline/timeline-item.svelte";
-    import type { OutcomeMeta } from "$lib/components/timeline/types";
     import type {
-        HistoryItem,
         PinFieldOption,
         PinListResponse,
         PinResponse,
+        PinSearchResponse,
+        PinSearchResult,
         ProviderMediaMetadata,
     } from "$lib/types/api";
     import { apiFetch } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
     import { clearPinOptionsCache, loadPinOptions } from "$lib/utils/pin-options";
+    import { pinIdentifier } from "$lib/utils/provider-ref";
 
     interface Props {
         profile: string;
     }
+
+    type RowKey = string;
+    type RowSource = "pinned" | "search";
+
+    interface PinRow {
+        rowKey: RowKey;
+        namespace: string;
+        key: string;
+        media: ProviderMediaMetadata | null;
+        pin: PinResponse | null;
+        source: RowSource;
+    }
+
     let { profile }: Props = $props();
 
-    // Panel open state
     let open = $state(false);
+    let searchQuery = $state("");
+    let searchResults: PinSearchResult[] = $state([]);
+    let searchLoading = $state(false);
+    let searchSubmitted = $state(false);
+    let searchError: string | null = $state(null);
 
-    // Shared pin options
-    let options: PinFieldOption[] = $state([]);
-    let optionsLoading = $state(false);
-    let optionsError: string | null = $state(null);
-
-    // Pinned list
     let pinned: PinResponse[] = $state([]);
     let pinnedLoading = $state(false);
     let pinnedError: string | null = $state(null);
 
-    // Per-row editor state
-    type RowKey = string;
-    const ROW_KEY_SEPARATOR = "::";
-
-    const makeRowKey = (namespace?: string | null, mediaKey?: string | null) => {
-        if (!namespace || !mediaKey) return null;
-        return `${namespace}${ROW_KEY_SEPARATOR}${mediaKey}`;
-    };
-
-    const parseRowKey = (key: RowKey) => {
-        const idx = key.indexOf(ROW_KEY_SEPARATOR);
-        if (idx === -1) return { namespace: "", mediaKey: key };
-        return {
-            namespace: key.slice(0, idx),
-            mediaKey: key.slice(idx + ROW_KEY_SEPARATOR.length),
-        };
-    };
-
-    let rowIds: Record<RowKey, number> = $state({});
-    let nextRowId = $state(1);
-
-    function ensureRowId(key: RowKey): number {
-        const existing = rowIds[key];
-        if (existing) return existing;
-        const assigned = nextRowId;
-        nextRowId = assigned + 1;
-        rowIds[key] = assigned;
-        return assigned;
-    }
+    let options: PinFieldOption[] = $state([]);
+    let optionsLoading = $state(false);
+    let optionsError: string | null = $state(null);
 
     let expanded: Record<RowKey, boolean> = $state({});
     let saving: Record<RowKey, boolean> = $state({});
@@ -73,78 +67,72 @@
     let selections: Record<RowKey, string[]> = $state({});
     let baselines: Record<RowKey, string[]> = $state({});
 
-    const PINNED_META: OutcomeMeta = {
-        label: "Pinned",
-        color: "bg-fuchsia-700/60",
-        icon: Pin,
-        order: 0,
-    };
+    const ROW_KEY_SEPARATOR = "::";
 
-    interface PinsPanelData {
-        value: string[];
-        baseline: string[];
-        options: PinFieldOption[];
-        optionsLoading: boolean;
-        saving: boolean;
-        error: string | null;
-        optionsError: string | null;
-        disabled: boolean;
-        onSave: (value: string[]) => void;
-        onChange: (value: string[]) => void;
-        onRefresh: (force: boolean) => void;
+    const pinnedCount = $derived(pinned.length);
+    const searchResultCount = $derived(searchResults.length);
+    const activeSearchPins = $derived(
+        searchResults.filter((result) => result.pin?.fields?.length).length,
+    );
+
+    const pinnedRows = $derived.by(() => {
+        const rows: PinRow[] = [];
+        for (const pin of pinned) {
+            const id = pinIdentifier(pin);
+            if (!id) continue;
+            rows.push({
+                rowKey: makeRowKey(id.namespace, id.key),
+                namespace: id.namespace,
+                key: id.key,
+                media: pin.media ?? null,
+                pin,
+                source: "pinned" as const,
+            });
+        }
+        return rows;
+    });
+
+    const searchRows = $derived.by((): PinRow[] =>
+        searchResults.map((result) => ({
+            rowKey: makeRowKey(result.media.namespace, result.media.key),
+            namespace: result.media.namespace,
+            key: result.media.key,
+            media: result.media,
+            pin: result.pin ?? null,
+            source: "search" as const,
+        })),
+    );
+
+    function makeRowKey(namespace: string, key: string): RowKey {
+        return `${namespace}${ROW_KEY_SEPARATOR}${key}`;
     }
 
-    const timelineDisplayTitle = (item: HistoryItem): string | null =>
-        item.list_media?.title ??
-        item.library_media?.title ??
-        (item.list_namespace && item.list_media_key
-            ? `${item.list_namespace}:${item.list_media_key}`
-            : null) ??
-        (item.library_namespace && item.library_media_key
-            ? `${item.library_namespace}:${item.library_media_key}`
-            : null) ??
-        "Unknown";
-
-    const timelineCoverImage = (item: HistoryItem): string | null =>
-        item.list_media?.poster_url ?? item.library_media?.poster_url ?? null;
-
-    function toHistoryItem(
-        key: RowKey,
-        pin: PinResponse | null | undefined,
-        media: ProviderMediaMetadata | null,
-        outcome: string,
-    ): HistoryItem {
-        const { namespace, mediaKey } = parseRowKey(key);
-        const rowId = ensureRowId(key);
-        const timestamp =
-            pin?.updated_at || pin?.created_at || new Date().toISOString();
-        const resolvedMedia = media ?? pin?.media ?? null;
-        return {
-            id: rowId,
-            profile_name: profile,
-            library_namespace: null,
-            library_section_key: null,
-            library_media_key: null,
-            list_namespace: namespace || null,
-            list_media_key: mediaKey || null,
-            media_kind: null,
-            outcome,
-            before_state: null,
-            after_state: null,
-            info: null,
-            error_message: null,
-            ephemeral: false,
-            timestamp,
-            library_media: null,
-            list_media: resolvedMedia,
-            pinned_fields: pin?.fields ?? [],
-        } satisfies HistoryItem;
+    function rowTitle(row: PinRow): string {
+        return row.media?.title || `${row.namespace}:${row.key}`;
     }
 
-    function setRow(key: RowKey | null, fields: string[], updateBaseline = false) {
-        if (!key) return;
+    function fieldLabel(value: string): string {
+        return options.find((option) => option.value === value)?.label ?? value;
+    }
+
+    function fieldSummary(fields: string[]): string {
+        if (!fields.length) return "No fields pinned";
+        return fields.map(fieldLabel).join(", ");
+    }
+
+    function rowFields(row: PinRow): string[] {
+        return selections[row.rowKey] ?? row.pin?.fields ?? [];
+    }
+
+    function setRow(key: RowKey, fields: string[], updateBaseline = false) {
         selections[key] = [...fields];
         if (updateBaseline) baselines[key] = [...fields];
+    }
+
+    function openEditor(row: PinRow) {
+        const fields = rowFields(row);
+        setRow(row.rowKey, fields, false);
+        expanded[row.rowKey] = true;
     }
 
     async function ensureOptions(force = false) {
@@ -152,8 +140,7 @@
         optionsLoading = true;
         optionsError = null;
         try {
-            const loaded = await loadPinOptions(force);
-            options = [...loaded];
+            options = [...(await loadPinOptions(force))];
         } catch (e) {
             console.error(e);
             optionsError = (e as Error)?.message || "Failed to load pin options";
@@ -166,14 +153,14 @@
         pinnedLoading = true;
         pinnedError = null;
         try {
-            const r = await apiFetch(`/api/pins/${profile}?with_media=true`);
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const d = (await r.json()) as PinListResponse;
-            pinned = d.pins || [];
-            for (const entry of pinned) {
-                const key = makeRowKey(entry.list_namespace, entry.list_media_key);
-                if (key) ensureRowId(key);
-                setRow(key, entry.fields || [], true);
+            const response = await apiFetch(`/api/pins/${profile}?with_media=true`);
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const data = (await response.json()) as PinListResponse;
+            pinned = data.pins || [];
+            for (const pin of pinned) {
+                const id = pinIdentifier(pin);
+                if (!id) continue;
+                setRow(makeRowKey(id.namespace, id.key), pin.fields || [], true);
             }
         } catch (e) {
             console.error(e);
@@ -184,35 +171,54 @@
         }
     }
 
-    async function save(
-        rowKey: RowKey,
-        namespace: string,
-        mediaKey: string,
-        fields: string[],
-        metadata: ProviderMediaMetadata | null,
-    ) {
-        if (saving[rowKey]) return;
-        saving[rowKey] = true;
-        rowError[rowKey] = null;
+    async function searchTarget() {
+        const query = searchQuery.trim();
+        if (!query || searchLoading) return;
+        searchLoading = true;
+        searchSubmitted = true;
+        searchError = null;
+        try {
+            await ensureOptions(false);
+            const response = await apiFetch(
+                `/api/pins/${profile}/search?q=${encodeURIComponent(query)}&limit=12`,
+            );
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const data = (await response.json()) as PinSearchResponse;
+            searchResults = data.results || [];
+            for (const result of searchResults) {
+                const key = makeRowKey(result.media.namespace, result.media.key);
+                const current = selections[key];
+                setRow(key, result.pin?.fields || current || [], true);
+            }
+        } catch (e) {
+            console.error(e);
+            searchError = (e as Error)?.message || "Failed to search target";
+            toast("Failed to search target", "error");
+        } finally {
+            searchLoading = false;
+        }
+    }
+
+    async function saveRow(row: PinRow, fields: string[]) {
+        if (saving[row.rowKey]) return;
+        saving[row.rowKey] = true;
+        rowError[row.rowKey] = null;
         try {
             if (!fields.length) {
-                const r = await apiFetch(`/api/pins/${profile}/${mediaKey}`, {
-                    method: "DELETE",
-                });
-                if (!r.ok) throw new Error("HTTP " + r.status);
-                setRow(rowKey, [], true);
-                pinned = pinned.filter(
-                    (p) =>
-                        !(
-                            p.list_namespace === namespace &&
-                            p.list_media_key === mediaKey
-                        ),
+                const response = await apiFetch(
+                    `/api/pins/${profile}/${encodeURIComponent(row.key)}`,
+                    { method: "DELETE" },
                 );
+                if (!response.ok) throw new Error("HTTP " + response.status);
+                setRow(row.rowKey, [], true);
+                removePinned(row);
+                patchSearchPin(row, null);
                 toast("Pins cleared", "success");
                 return;
             }
-            const r = await apiFetch(
-                `/api/pins/${profile}/${mediaKey}?with_media=true`,
+
+            const response = await apiFetch(
+                `/api/pins/${profile}/${encodeURIComponent(row.key)}?with_media=true`,
                 {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
@@ -220,37 +226,57 @@
                 },
                 { successMessage: "Pins updated" },
             );
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const d = (await r.json()) as PinResponse;
-            const next = d.fields || [];
-            setRow(rowKey, next, true);
-
-            const idx = pinned.findIndex(
-                (p) => p.list_namespace === namespace && p.list_media_key === mediaKey,
-            );
-            const existing = idx >= 0 ? pinned[idx] : null;
-            const resolvedMedia = d.media ?? metadata ?? existing?.media ?? null;
-            const merged: PinResponse = {
-                ...(existing ?? {}),
-                ...d,
-                media: resolvedMedia,
-            };
-
-            if (idx >= 0) pinned[idx] = merged;
-            else pinned = [merged, ...pinned];
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const saved = (await response.json()) as PinResponse;
+            const next = saved.fields || [];
+            const merged = mergePin(row, saved);
+            setRow(row.rowKey, next, true);
+            upsertPinned(row, merged);
+            patchSearchPin(row, merged);
         } catch (e) {
             console.error(e);
-            rowError[rowKey] = (e as Error)?.message || "Failed to save";
+            rowError[row.rowKey] = (e as Error)?.message || "Failed to save";
             toast("Failed to save pins", "error");
         } finally {
-            saving[rowKey] = false;
+            saving[row.rowKey] = false;
         }
     }
 
+    function mergePin(row: PinRow, saved: PinResponse): PinResponse {
+        return {
+            ...(row.pin ?? {}),
+            ...saved,
+            media: saved.media ?? row.media ?? row.pin?.media ?? null,
+        };
+    }
+
+    function upsertPinned(row: PinRow, pin: PinResponse) {
+        const idx = pinned.findIndex((item) => {
+            const id = pinIdentifier(item);
+            return id?.namespace === row.namespace && id.key === row.key;
+        });
+        if (idx >= 0) pinned[idx] = pin;
+        else pinned = [pin, ...pinned];
+    }
+
+    function removePinned(row: PinRow) {
+        pinned = pinned.filter((item) => {
+            const id = pinIdentifier(item);
+            return !(id?.namespace === row.namespace && id.key === row.key);
+        });
+    }
+
+    function patchSearchPin(row: PinRow, pin: PinResponse | null) {
+        searchResults = searchResults.map((result) =>
+            result.media.namespace === row.namespace && result.media.key === row.key
+                ? { ...result, pin }
+                : result,
+        );
+    }
+
     function togglePanel() {
-        const next = !open;
-        open = next;
-        if (next) {
+        open = !open;
+        if (open) {
             void ensureOptions(false);
             void loadPinned();
         }
@@ -260,10 +286,7 @@
         clearPinOptionsCache();
         void ensureOptions(true);
         void loadPinned();
-    }
-
-    function toggleRow(key: RowKey) {
-        expanded[key] = !expanded[key];
+        if (searchSubmitted && searchQuery.trim()) void searchTarget();
     }
 
     $effect(() => {
@@ -277,56 +300,138 @@
     onMount(() => {
         void ensureOptions(false);
     });
-
-    function panelDataFor(
-        key: RowKey,
-        base: string[],
-        sel: string[],
-        namespace: string,
-        mediaKey: string,
-        metadata: ProviderMediaMetadata | null,
-    ): PinsPanelData {
-        return {
-            value: sel,
-            baseline: baselines[key] ?? base,
-            options,
-            optionsLoading,
-            saving: saving[key] || false,
-            error: rowError[key] || null,
-            optionsError,
-            disabled: !!optionsError,
-            onSave: (value: string[]) =>
-                save(key, namespace, mediaKey, value, metadata),
-            onChange: (value: string[]) => (selections[key] = [...value]),
-            onRefresh: (force: boolean) => ensureOptions(force),
-        };
-    }
 </script>
 
-{#snippet PinEditorPanel(props: PinsPanelContext)}
-    {@const data = props.data as PinsPanelData | undefined}
-    {#if props.openPins && data}
-        <PinFieldsEditor
-            value={data.value}
-            baseline={data.baseline}
-            options={data.options}
-            loading={data.optionsLoading}
-            saving={data.saving}
-            error={data.error}
-            optionsError={data.optionsError}
-            disabled={data.disabled}
-            title="Pin fields"
-            subtitle="Keep these fields unchanged for this entry when syncing."
-            onSave={data.onSave}
-            onChange={data.onChange}
-            onRefresh={data.onRefresh} />
-    {/if}
+{#snippet EmptyState(icon: Component, title: string, detail: string)}
+    {@const Icon = icon}
+    <div class="flex items-center gap-3 px-3 py-4 text-slate-400">
+        <Icon class="h-4 w-4 text-slate-500" />
+        <div>
+            <div class="text-[11px] font-semibold text-slate-300">{title}</div>
+            <div class="text-[11px]">{detail}</div>
+        </div>
+    </div>
+{/snippet}
+
+{#snippet PinRowView(row: PinRow)}
+    {@const fields = rowFields(row)}
+    <div class="border-b border-slate-800/60 last:border-b-0">
+        <div
+            class="grid gap-3 px-3 py-2.5 transition-colors hover:bg-slate-800/30 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+            <div class="flex min-w-0 items-center gap-3">
+                <div
+                    class="grid h-14 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-slate-800 bg-slate-800/40 text-[9px] text-slate-500 select-none">
+                    {#if row.media?.poster_url}
+                        <img
+                            src={row.media.poster_url}
+                            alt=""
+                            class="h-full w-full object-cover" />
+                    {:else}
+                        No Art
+                    {/if}
+                </div>
+                <div class="min-w-0 flex-1">
+                    <div class="flex min-w-0 items-center gap-2">
+                        <div class="truncate text-[13px] font-semibold text-slate-100">
+                            {rowTitle(row)}
+                        </div>
+                        {#if row.pin?.fields?.length}
+                            <span
+                                class="inline-flex shrink-0 rounded bg-slate-800/70 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-fuchsia-100 uppercase">
+                                pinned
+                            </span>
+                        {/if}
+                    </div>
+                    <div
+                        class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                        <span class="truncate font-mono text-slate-500">
+                            {row.namespace}:{row.key}
+                        </span>
+                        {#if row.media?.external_url}
+                            <!-- eslint-disable svelte/no-navigation-without-resolve -->
+                            <a
+                                href={row.media.external_url}
+                                target="_blank"
+                                rel="noopener"
+                                class="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300"
+                                aria-label={`Open external ${row.key}`}
+                                title={`Open external ${row.key}`}>
+                                <ExternalLink class="h-3 w-3" />
+                            </a>
+                            <!-- eslint-enable svelte/no-navigation-without-resolve -->
+                        {/if}
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 md:justify-end">
+                <button
+                    type="button"
+                    class="inline-flex h-7 items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 text-[11px] font-medium text-slate-100 hover:border-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={fields.length ? "Edit pinned fields" : "Add pinned fields"}
+                    disabled={!!optionsError || saving[row.rowKey]}
+                    onclick={() => openEditor(row)}>
+                    {#if fields.length}
+                        <SlidersHorizontal class="h-3.5 w-3.5" />
+                        Edit
+                    {:else}
+                        <Plus class="h-3.5 w-3.5" />
+                        Add
+                    {/if}
+                </button>
+                {#if fields.length}
+                    <button
+                        type="button"
+                        class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/40 text-slate-300 hover:border-red-500/60 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Clear pins"
+                        disabled={saving[row.rowKey]}
+                        onclick={() => void saveRow(row, [])}>
+                        {#if saving[row.rowKey]}
+                            <LoaderCircle class="h-3.5 w-3.5 animate-spin" />
+                        {:else}
+                            <Trash2 class="h-3.5 w-3.5" />
+                        {/if}
+                    </button>
+                {/if}
+            </div>
+        </div>
+
+        {#if expanded[row.rowKey]}
+            <div class="border-t border-slate-800 bg-slate-950/60 px-3 pb-3">
+                <div class="flex justify-end pt-2">
+                    <button
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 hover:bg-slate-700"
+                        onclick={() => (expanded[row.rowKey] = false)}
+                        title="Close pinned fields editor">
+                        <X class="h-3.5 w-3.5" />
+                        Close
+                    </button>
+                </div>
+                <PinFieldsEditor
+                    value={fields}
+                    baseline={baselines[row.rowKey] ?? row.pin?.fields ?? []}
+                    {options}
+                    loading={optionsLoading}
+                    saving={saving[row.rowKey] || false}
+                    error={rowError[row.rowKey] || null}
+                    {optionsError}
+                    disabled={!!optionsError}
+                    title="Pinned fields"
+                    subtitle={fieldSummary(fields)}
+                    showRefresh={false}
+                    onSave={(value) => saveRow(row, value)}
+                    onChange={(value) => (selections[row.rowKey] = [...value])}
+                    onRefresh={(force) => ensureOptions(force)} />
+            </div>
+        {/if}
+    </div>
 {/snippet}
 
 <div class="relative inline-flex items-center gap-2">
     <button
         type="button"
-        class="inline-flex items-center gap-2 rounded-md border border-fuchsia-600/50 bg-fuchsia-600/20 py-1 pr-2 pl-2 text-[12px] font-medium text-fuchsia-100 hover:bg-fuchsia-600/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60"
+        class="inline-flex items-center gap-1 rounded-md border border-fuchsia-600/50 bg-fuchsia-600/20 py-1 pr-2 pl-2 text-[12px] font-medium text-fuchsia-100 hover:bg-fuchsia-600/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60"
         aria-expanded={open}
         aria-controls="global-pins-panel"
         title={open ? "Hide pins manager" : "Show pins manager"}
@@ -335,16 +440,17 @@
         <span class="hidden sm:inline">Pins</span>
         <span
             class="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-white/10 bg-fuchsia-700/30 px-1 text-[10px] font-semibold text-white/90">
-            {pinned.length}
+            {pinnedCount}
         </span>
     </button>
     <button
         type="button"
-        class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-100 hover:border-slate-600 disabled:opacity-60"
+        class="inline-flex items-center gap-1 rounded-md border border-slate-600/60 bg-slate-700/40 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600/50 disabled:cursor-not-allowed disabled:opacity-50"
         title="Refresh pins and options"
-        disabled={!open}
+        disabled={!open || pinnedLoading || optionsLoading}
         onclick={refreshAll}>
-        <RefreshCcw class="inline h-3.5 w-3.5" />
+        <RefreshCcw
+            class={`h-3.5 w-3.5 ${pinnedLoading || optionsLoading ? "animate-spin" : ""}`} />
         <span class="hidden md:inline">Refresh</span>
     </button>
 </div>
@@ -353,111 +459,170 @@
     <section
         id="global-pins-panel"
         aria-label="Global pins manager"
-        class="mt-2 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/70 shadow-md shadow-black/30">
-        <div class="px-3 pt-2 pb-3 text-[11px]">
-            {#if optionsError}
-                <div
-                    class="mb-3 rounded-md border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-amber-100">
-                    <div class="mb-1 font-semibold">{optionsError}</div>
-                    <button
-                        class="inline-flex items-center gap-1 rounded-md border border-amber-500/70 px-2.5 py-1 hover:border-amber-400"
-                        onclick={() => ensureOptions(true)}>
-                        <RefreshCcw class="h-3.5 w-3.5" /> Retry loading options
-                    </button>
-                </div>
-            {/if}
-
-            <!-- Pinned list -->
-            <div
-                class="mb-4 overflow-hidden rounded-md border border-slate-800 bg-slate-950/70">
-                <div
-                    class="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-                    <div class="flex items-center gap-2 text-[10px]">
-                        <Pin class="h-3.5 w-3.5" />
-                        <span
-                            class="font-semibold tracking-wide text-slate-100 uppercase"
-                            >Pinned entries</span>
-                        <span class="text-[11px] font-normal text-slate-400 normal-case"
-                            >{pinned.length}</span>
+        class="mt-2 overflow-hidden rounded-md border border-slate-800 bg-slate-900/60 p-3 shadow-sm backdrop-blur-sm">
+        <div>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <div
+                        class="flex items-center gap-2 text-[10px] font-semibold tracking-wide text-slate-100 uppercase">
+                        <Pin class="h-3.5 w-3.5 text-slate-300" />
+                        Pins Manager
                     </div>
-                    <div class="text-[11px] text-slate-400">
-                        {#if pinnedLoading}
-                            <span class="inline-flex items-center gap-1 text-sky-300"
-                                ><LoaderCircle
-                                    class="inline h-3.5 w-3.5 animate-spin" /> Loading…</span>
-                        {/if}
+                    <div class="mt-1 text-[11px] text-slate-400">
+                        {pinnedCount} pinned · {activeSearchPins} pinned in search results
                     </div>
                 </div>
-                <div class="divide-y divide-slate-800">
-                    {#if pinnedError}
-                        <div class="px-3 py-2 text-red-200">{pinnedError}</div>
-                    {:else if !pinnedLoading && !pinned.length}
-                        <div class="px-3 py-2 text-slate-400">No pinned entries.</div>
-                    {/if}
-                    {#each pinned as p (p.profile_name + ":" + (p.list_namespace ?? "") + ":" + (p.list_media_key ?? ""))}
-                        {@const rowKey = makeRowKey(p.list_namespace, p.list_media_key)}
-                        {@const base = p.fields || []}
-                        {@const sel = rowKey ? (selections[rowKey] ?? base) : base}
-                        {#if rowKey}
-                            {@const identifiers = parseRowKey(rowKey)}
-                            {@const historyItem = toHistoryItem(
-                                rowKey,
-                                p,
-                                p.media ?? null,
-                                "pinned",
-                            )}
-                            {@const panelData = panelDataFor(
-                                rowKey,
-                                base,
-                                sel,
-                                identifiers.namespace,
-                                identifiers.mediaKey,
-                                p.media ?? null,
-                            )}
-                            <div class="px-3 py-2">
-                                <TimelineItem
-                                    {profile}
-                                    item={historyItem}
-                                    meta={PINNED_META}
-                                    displayTitle={timelineDisplayTitle}
-                                    coverImage={timelineCoverImage}
-                                    hasPins={true}
-                                    togglePins={() => toggleRow(rowKey)}
-                                    openPins={expanded[rowKey] || false}
-                                    pinButtonLoading={saving[rowKey] || false}
-                                    pinButtonDisabled={!!optionsError}
-                                    pinCount={sel.length}
-                                    pinsPanel={PinEditorPanel}
-                                    pinsPanelData={panelData} />
-                            </div>
-                        {:else}
-                            <div class="px-3 py-2 text-[11px] text-amber-200">
-                                Missing provider identifiers for pinned entry.
-                            </div>
-                        {/if}
-                    {/each}
-                </div>
+                <button
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 hover:bg-slate-700"
+                    onclick={togglePanel}>
+                    <X class="h-3.5 w-3.5" />
+                    Close
+                </button>
             </div>
 
-            <div
-                class="mt-2 flex items-center justify-between gap-2 border-t border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-400">
-                <div class="flex items-center gap-3">
-                    <span class="mr-2">{pinned.length} pinned</span>
-                    {#if optionsLoading}
-                        <span class="inline-flex items-center gap-1 text-sky-300"
-                            ><LoaderCircle class="inline h-3.5 w-3.5 animate-spin" /> options…</span>
+            <form
+                class="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]"
+                onsubmit={(event) => {
+                    event.preventDefault();
+                    void searchTarget();
+                }}>
+                <label class="relative min-w-0">
+                    <Search
+                        class="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                    <input
+                        class="h-8 w-full rounded-md border border-slate-700 bg-slate-950/80 py-1 pr-3 pl-7 text-[12px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-500"
+                        placeholder="Search the target provider"
+                        value={searchQuery}
+                        oninput={(event) =>
+                            (searchQuery = (event.currentTarget as HTMLInputElement)
+                                .value)}
+                        disabled={searchLoading} />
+                </label>
+                <button
+                    type="submit"
+                    class="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-sky-600/60 bg-sky-700/50 px-3 text-[11px] font-semibold text-sky-100 hover:bg-sky-600/60 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!searchQuery.trim() || searchLoading}>
+                    {#if searchLoading}
+                        <LoaderCircle class="h-3.5 w-3.5 animate-spin" />
+                    {:else}
+                        <Search class="h-3.5 w-3.5" />
                     {/if}
-                </div>
-                <div class="ml-auto">
+                    Search
+                </button>
+            </form>
+        </div>
+
+        {#if optionsError}
+            <div
+                class="mt-3 rounded-md border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-100">
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-semibold">{optionsError}</span>
                     <button
                         type="button"
-                        class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 hover:border-slate-600"
-                        onclick={togglePanel}>
-                        <X class="inline h-3.5 w-3.5" />
-                        Close
+                        class="inline-flex h-7 items-center gap-1 rounded-md border border-amber-500/70 px-2 text-[11px] hover:border-amber-400"
+                        onclick={() => ensureOptions(true)}>
+                        <RefreshCcw class="h-3.5 w-3.5" />
+                        Retry
                     </button>
                 </div>
             </div>
+        {/if}
+
+        <div
+            class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+            <section
+                class="overflow-hidden rounded-md border border-slate-800 bg-slate-950/80 will-change-transform">
+                <div
+                    class="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+                    <div class="flex items-center gap-2">
+                        <Search class="h-3.5 w-3.5 text-slate-300" />
+                        <span
+                            class="text-[10px] font-semibold tracking-wide text-slate-100 uppercase">
+                            Search results
+                        </span>
+                        {#if searchSubmitted}
+                            <span class="text-[11px] text-slate-500"
+                                >{searchResultCount}</span>
+                        {/if}
+                    </div>
+                    {#if searchLoading}
+                        <span
+                            class="inline-flex items-center gap-1 text-[11px] text-sky-300">
+                            <LoaderCircle class="h-3.5 w-3.5 animate-spin" />
+                            Searching
+                        </span>
+                    {/if}
+                </div>
+
+                <div class="max-h-[calc(100vh-18rem)] min-h-0 overflow-y-auto">
+                    {#if searchError}
+                        <div class="px-4 py-3 text-[12px] text-red-200">
+                            {searchError}
+                        </div>
+                    {:else if searchRows.length}
+                        <div>
+                            {#each searchRows as row (row.rowKey)}
+                                {@render PinRowView(row)}
+                            {/each}
+                        </div>
+                    {:else if searchSubmitted && !searchLoading}
+                        {@render EmptyState(
+                            PinOff,
+                            "No matches",
+                            "Try a different target-provider title search.",
+                        )}
+                    {:else}
+                        {@render EmptyState(
+                            Search,
+                            "Search target entries",
+                            "Find entries that are not in your current pins yet.",
+                        )}
+                    {/if}
+                </div>
+            </section>
+
+            <section
+                class="overflow-hidden rounded-md border border-slate-800 bg-slate-950/80 will-change-transform">
+                <div
+                    class="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+                    <div class="flex items-center gap-2">
+                        <Pin class="h-3.5 w-3.5 text-slate-300" />
+                        <span
+                            class="text-[10px] font-semibold tracking-wide text-slate-100 uppercase">
+                            Pinned entries
+                        </span>
+                        <span class="text-[11px] text-slate-500">{pinnedCount}</span>
+                    </div>
+                    {#if pinnedLoading}
+                        <span
+                            class="inline-flex items-center gap-1 text-[11px] text-sky-300">
+                            <LoaderCircle class="h-3.5 w-3.5 animate-spin" />
+                            Loading
+                        </span>
+                    {/if}
+                </div>
+
+                <div class="max-h-[calc(100vh-18rem)] min-h-0 overflow-y-auto">
+                    {#if pinnedError}
+                        <div class="px-4 py-3 text-[12px] text-red-200">
+                            {pinnedError}
+                        </div>
+                    {:else if pinnedRows.length}
+                        <div>
+                            {#each pinnedRows as row (row.rowKey)}
+                                {@render PinRowView(row)}
+                            {/each}
+                        </div>
+                    {:else if !pinnedLoading}
+                        {@render EmptyState(
+                            PinOff,
+                            "No pinned entries",
+                            "Search for target entries and pin fields from the results.",
+                        )}
+                    {/if}
+                </div>
+            </section>
         </div>
     </section>
 {/if}

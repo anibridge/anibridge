@@ -16,6 +16,7 @@
         missingMessage?: string | null;
         title?: string;
         subtitle?: string;
+        showRefresh?: boolean;
         onChange?: (value: string[]) => void;
         onSave?: (value: string[]) => void;
         onRefresh?: (force: boolean) => void;
@@ -33,6 +34,7 @@
         missingMessage = null,
         title = "Pin fields",
         subtitle = "Choose the fields to keep unchanged when syncing.",
+        showRefresh = true,
         onChange,
         onSave,
         onRefresh,
@@ -138,15 +140,17 @@
                     <span class="font-semibold text-slate-100">{selectedCount}</span>
                     selected
                 </span>
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-slate-200 hover:border-slate-600 disabled:opacity-60"
-                    onclick={() => refreshOptions(true)}
-                    disabled={loading}>
-                    <RefreshCcw
-                        class={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
-                </button>
+                {#if showRefresh}
+                    <button
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-slate-200 hover:border-slate-600 disabled:opacity-60"
+                        onclick={() => refreshOptions(true)}
+                        disabled={loading}>
+                        <RefreshCcw
+                            class={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </button>
+                {/if}
             </div>
         </div>
         <div class="space-y-3 p-3">
@@ -205,13 +209,15 @@
                 <div
                     class="flex flex-wrap items-center gap-2 rounded-md border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-amber-100">
                     <span>{optionsError}</span>
-                    <button
-                        type="button"
-                        class="ml-auto inline-flex items-center gap-1 rounded-md border border-amber-500/70 px-2.5 py-1 hover:border-amber-400"
-                        onclick={() => refreshOptions(true)}>
-                        <RefreshCcw class="h-3.5 w-3.5" />
-                        Retry
-                    </button>
+                    {#if showRefresh}
+                        <button
+                            type="button"
+                            class="ml-auto inline-flex items-center gap-1 rounded-md border border-amber-500/70 px-2.5 py-1 hover:border-amber-400"
+                            onclick={() => refreshOptions(true)}>
+                            <RefreshCcw class="h-3.5 w-3.5" />
+                            Retry
+                        </button>
+                    {/if}
                 </div>
             {/if}
             {#if loading && !options.length}

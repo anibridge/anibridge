@@ -20,7 +20,7 @@ __all__ = ["AppState", "get_app_state", "get_bridge"]
 
 if TYPE_CHECKING:
     from anibridge.app.core.bridge import BridgeClient
-    from anibridge.app.core.sched import SchedulerClient
+    from anibridge.app.core.sched.client import SchedulerClient
 
 
 class AppState:

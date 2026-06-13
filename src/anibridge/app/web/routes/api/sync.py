@@ -7,7 +7,7 @@ from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
-from anibridge.app.core.sync.request import SyncRequest, SyncTrigger
+from anibridge.app.core.sync import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.utils.async_tasks import schedule_task
 from anibridge.app.web.state import get_app_state

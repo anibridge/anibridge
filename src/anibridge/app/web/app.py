@@ -27,7 +27,7 @@ from litestar.types.internal_types import ControllerRouterHandler
 
 from anibridge.app import __version__
 from anibridge.app.config.settings import get_config
-from anibridge.app.core.sched import SchedulerClient
+from anibridge.app.core.sched.client import SchedulerClient
 from anibridge.app.exceptions import AnibridgeError
 from anibridge.app.logging import APP_LOGGER_NAME, attach_handler, get_logger
 from anibridge.app.utils.paths import PROJECT_ROOT

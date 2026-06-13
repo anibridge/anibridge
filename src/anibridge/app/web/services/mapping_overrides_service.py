@@ -25,7 +25,7 @@ from anibridge.app.exceptions import (
 from anibridge.app.web.state import get_app_state
 
 if TYPE_CHECKING:
-    from anibridge.app.core.sched import SchedulerClient
+    from anibridge.app.core.sched.client import SchedulerClient
 
 __all__ = ["MappingOverridesService", "get_mapping_overrides_service"]
 

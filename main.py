@@ -11,7 +11,7 @@ import uvicorn
 from pydantic import ValidationError
 
 from anibridge.app import ANIBDRIGE_HEADER, initialize_runtime
-from anibridge.app.core.sched import SchedulerClient
+from anibridge.app.core.sched.client import SchedulerClient
 from anibridge.app.logging import APP_LOGGER_NAME, configure_logging, get_logger
 from anibridge.app.utils.terminal import supports_color
 from anibridge.app.web.app import create_app

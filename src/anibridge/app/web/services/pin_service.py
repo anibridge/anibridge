@@ -18,7 +18,8 @@ from anibridge.provider.base import (
 from anibridge.utils.cache import cache
 
 from anibridge.app.config.database import db
-from anibridge.app.core.sync.refs import (
+from anibridge.app.core.sync import (
+    RefKey,
     RefPayload,
     ref_from_payload,
     ref_payload_from_json,
@@ -249,7 +250,7 @@ class PinService:
         self,
         profile: str,
         refs: Sequence[RefPayload],
-    ) -> dict[tuple[str, tuple[tuple[str, int | str], ...]], ProviderMediaMetadata]:
+    ) -> dict[RefKey, ProviderMediaMetadata]:
         """Fetch target node metadata for pinned refs when supported."""
         if not refs:
             return {}
@@ -268,10 +269,7 @@ class PinService:
                 facets=frozenset({FacetName.ARTWORK}),
             )
         )
-        metadata: dict[
-            tuple[str, tuple[tuple[str, int | str], ...]],
-            ProviderMediaMetadata,
-        ] = {}
+        metadata: dict[RefKey, ProviderMediaMetadata] = {}
         for node in page.items:
             metadata[ref_to_key(node.ref)] = self._metadata_from_node(
                 bridge.target_provider.NAMESPACE,
@@ -321,7 +319,7 @@ class PinService:
         profile: str,
         target_namespace: str,
         refs: Sequence[Ref],
-    ) -> dict[tuple[str, tuple[tuple[str, int | str], ...]], PinEntry]:
+    ) -> dict[RefKey, PinEntry]:
         """Return existing pins keyed by provider ref."""
         if not refs:
             return {}
@@ -336,10 +334,10 @@ class PinService:
                 )
                 .all()
             )
-        pins: dict[tuple[str, tuple[tuple[str, int | str], ...]], PinEntry] = {}
+        pins: dict[RefKey, PinEntry] = {}
         for row in rows:
             entry = self._serialize(row)
-            pins[(entry.target_ref.key, tuple())] = entry
+            pins[RefKey.from_payload(entry.target_ref)] = entry
         return pins
 
     async def list_pins(self, profile: str, with_media: bool = False) -> list[PinEntry]:
@@ -358,14 +356,7 @@ class PinService:
                     fields=list(pin.fields),
                     created_at=pin.created_at,
                     updated_at=pin.updated_at,
-                    media=metadata.get(
-                        (
-                            pin.target_ref.key,
-                            tuple(
-                                (step.axis, step.value) for step in pin.target_ref.path
-                            ),
-                        )
-                    ),
+                    media=metadata.get(RefKey.from_payload(pin.target_ref)),
                 )
                 for pin in pins
             ]
@@ -390,7 +381,7 @@ class PinService:
                 fields=list(entry.fields),
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
-                media=metadata.get((media_key, tuple())),
+                media=metadata.get(RefKey(key=media_key)),
             )
         return entry
 
@@ -412,7 +403,7 @@ class PinService:
                 fields=list(entry.fields),
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
-                media=metadata.get((media_key, tuple())),
+                media=metadata.get(RefKey(key=media_key)),
             )
         return entry
 

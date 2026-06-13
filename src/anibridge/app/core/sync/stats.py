@@ -1,344 +1,405 @@
-"""Synchronization statistics and tracking module."""
+"""Synchronization statistics and planning value objects."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Literal
 
 import msgspec
-from anibridge.library import LibraryEntry, MediaKind
-from anibridge.list import ListEntry, ListStatus
-from anibridge.utils.mappings import AnibridgeDescriptorMapping
+from anibridge.provider.base import (
+    FacetName,
+    Node,
+    Part,
+    Progress,
+    Rating,
+    Record,
+    RecordField,
+    RecordWrite,
+    Ref,
+    ScanItem,
+    State,
+    Structure,
+    Value,
+)
 
 from anibridge.app.models.db.sync_history import SyncOutcome
 
 __all__ = [
-    "BatchUpdate",
-    "EntrySnapshot",
-    "ItemIdentifier",
+    "AppliedRule",
+    "FieldBlock",
+    "FieldChange",
+    "MappingRange",
+    "PlanDiagnostics",
+    "RecordDiff",
+    "RecordPlan",
+    "RecordSnapshot",
+    "SyncItem",
     "SyncProgress",
     "SyncStats",
 ]
 
 
-class ItemIdentifier(msgspec.Struct, frozen=True):
-    """Immutable identifier for media items in sync operations.
+class SyncItem(msgspec.Struct, frozen=True):
+    """Stable identifier for a provider ref participating in sync."""
 
-    Provides a stable, hashable way to identify media items across
-    the sync process without relying on fragile string representations.
-    """
-
-    key: str
-    media_kind: MediaKind
+    namespace: str
+    ref: Ref
     repr: str
+    trackable: bool = True
 
     @classmethod
-    def from_item(cls, item: LibraryEntry) -> ItemIdentifier:
-        """Create an identifier from a library media entity."""
-        return cls(key=item.key, media_kind=item.media_kind, repr=f"{item!r}")
+    def from_record_parts(
+        cls,
+        *,
+        namespace: str,
+        node: Node,
+        record: Record,
+    ) -> tuple[SyncItem, ...]:
+        """Create coverage identifiers for a scanned record."""
+        parts = cls.coverage_parts(node, record)
+        if not parts:
+            return (cls.from_record(namespace=namespace, node=node, record=record),)
+        return tuple(
+            cls.from_ref(
+                namespace=namespace,
+                node=node,
+                record=record,
+                ref=Ref(record.ref.key, part.position),
+                part=part,
+            )
+            for part in parts
+        )
 
     @classmethod
-    def from_items(cls, items: Sequence[LibraryEntry]) -> Sequence[ItemIdentifier]:
-        """Create ItemIdentifiers from a sequence of library media objects.
+    def from_record(
+        cls,
+        *,
+        namespace: str,
+        node: Node,
+        record: Record,
+    ) -> SyncItem:
+        """Create a coverage identifier for the record's own ref."""
+        return cls.from_ref(
+            namespace=namespace,
+            node=node,
+            record=record,
+            ref=record.ref,
+        )
 
-        Args:
-            items (Sequence[LibraryEntry]): List of library media objects
+    @classmethod
+    def from_ref(
+        cls,
+        *,
+        namespace: str,
+        node: Node,
+        record: Record,
+        ref: Ref,
+        part: Part | None = None,
+    ) -> SyncItem:
+        """Create an identifier from a concrete coverage ref."""
+        label = cls.label(namespace, node, record, ref, part)
+        return cls(
+            namespace=namespace,
+            ref=ref,
+            repr=label,
+        )
 
-        Returns:
-            Sequence[ItemIdentifier]: List of identifiers for the media items
+    @staticmethod
+    def label(
+        namespace: str,
+        node: Node,
+        record: Record,
+        ref: Ref,
+        part: Part | None,
+    ) -> str:
+        """Generate a label for a record.
+
+        Uses the format <namespace:key/path "title">, with optional part title.
         """
-        return [cls.from_item(item) for item in items]
+        label = node.title or record.ref.key
+        if part and part.title:
+            label = f"{label} - {part.title}"
+        # Quote and truncate label
+        label = label.replace("\\", "\\\\").replace('"', '\\"')
+        label = label[:50] + "…" if len(label) > 50 else label
+
+        path = "".join(f"/{step.axis}={step.value}" for step in ref.path)
+        return f'<{namespace}:{ref.key}{path} "{label}">'
+
+    @staticmethod
+    def coverage_parts(node: Node, record: Record) -> tuple[Part, ...]:
+        """Return concrete parts represented by an aggregate source record."""
+        progress = record.values.get(RecordField.PROGRESS)
+        if not isinstance(progress, Progress):
+            return ()
+        structure = node.facets.get(FacetName.STRUCTURE)
+        if not isinstance(structure, Structure) or not structure.parts:
+            return ()
+        if not record.ref.path:
+            return structure.parts
+
+        parent = record.ref.path
+        return tuple(
+            part
+            for part in structure.parts
+            # Keep parts whose position is a descendant of the record path.
+            if len(parent) < len(child := part.position)
+            and child[: len(parent)] == parent
+        )
 
     def __hash__(self) -> int:
-        """Generate a hash for the ItemIdentifier instance.
-
-        Returns:
-            int: Hash value of the instance
-        """
-        return hash(self.key)
+        """Hash by provider namespace and normalized ref."""
+        return hash((self.namespace, self.ref))
 
     def __repr__(self) -> str:
-        """Generate a string representation of the ItemIdentifier instance.
-
-        Returns:
-            str: String representation of the instance
-        """
-        if self.repr:
-            return self.repr
-        return super().__repr__()
+        """Return a readable item label for logs."""
+        return self.repr or super().__repr__()
 
 
 class SyncStats(msgspec.Struct):
-    """Statistics tracker for synchronization operations.
+    """Outcome tracker for a sync cycle."""
 
-    Uses an outcome-based approach where each item is tracked with its specific
-    result, allowing for accurate reporting and easier debugging.
-    """
+    _item_outcomes: dict[SyncItem, SyncOutcome] = msgspec.field(default_factory=dict)
 
-    _item_outcomes: dict[ItemIdentifier, SyncOutcome] = msgspec.field(
-        default_factory=dict
-    )
-
-    def track_item(self, item_id: ItemIdentifier, outcome: SyncOutcome) -> None:
-        """Track the outcome for a specific item.
-
-        Args:
-            item_id (ItemIdentifier): Identifier for the media item
-            outcome (SyncOutcome): The synchronization outcome for this item
-        """
+    def track_item(self, item_id: SyncItem, outcome: SyncOutcome) -> None:
+        """Track the outcome for one item."""
         self._item_outcomes[item_id] = outcome
 
-    def track_items(
-        self, item_ids: Sequence[ItemIdentifier], outcome: SyncOutcome
-    ) -> None:
-        """Track the same outcome for multiple items.
-
-        Args:
-            item_ids (list[ItemIdentifier]): List of item identifiers
-            outcome (SyncOutcome): The synchronization outcome for these items
-        """
+    def register_pending_items(self, item_ids: Iterable[SyncItem]) -> None:
+        """Mark unprocessed items as pending."""
         for item_id in item_ids:
-            self.track_item(item_id, outcome)
-
-    def untrack_item(self, item_id: ItemIdentifier) -> None:
-        """Remove an item from tracking.
-
-        This is useful if an item was registered but later determined to be
-        irrelevant or not part of the sync process.
-
-        Args:
-            item_id (ItemIdentifier): Identifier for the media item to untrack
-        """
-        if item_id in self._item_outcomes:
-            del self._item_outcomes[item_id]
-
-    def untrack_items(self, item_ids: Sequence[ItemIdentifier]) -> None:
-        """Remove multiple items from tracking.
-
-        Args:
-            item_ids (Sequence[ItemIdentifier]): List of item identifiers to untrack
-        """
-        for item_id in item_ids:
-            self.untrack_item(item_id)
-
-    def filter_tracked_items(
-        self, item_ids: Sequence[ItemIdentifier]
-    ) -> list[ItemIdentifier]:
-        """Return the subset of items that are still tracked."""
-        return [item_id for item_id in item_ids if item_id in self._item_outcomes]
-
-    def register_pending_items(self, item_ids: Sequence[ItemIdentifier]) -> None:
-        """Register items as pending processing.
-
-        This should be called at the start of processing to ensure all items
-        that should be processed are tracked.
-
-        Args:
-            item_ids (Sequence[ItemIdentifier]): List of item identifiers to register
-        """
-        for item_id in item_ids:
-            if item_id not in self._item_outcomes:
-                self._item_outcomes[item_id] = SyncOutcome.PENDING
+            self._item_outcomes.setdefault(item_id, SyncOutcome.PENDING)
 
     def count_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
-        """Count top-level items matching the requested outcome filter."""
+        """Count tracked items matching optional outcomes."""
         allowed_outcomes = set(outcomes)
         return sum(
             1
-            for item_id, item_outcome in self._item_outcomes.items()
-            if item_id.media_kind in (MediaKind.SHOW, MediaKind.MOVIE)
-            and (not allowed_outcomes or item_outcome in allowed_outcomes)
+            for item_outcome in self._item_outcomes.values()
+            if not allowed_outcomes or item_outcome in allowed_outcomes
         )
 
-    def get_items_by_outcome(self, *outcomes: SyncOutcome) -> list[ItemIdentifier]:
-        """Get all items that had a specific outcome.
-
-        Args:
-            outcomes (SyncOutcome): One or more outcomes to filter by
-
-        Returns:
-            list[ItemIdentifier]: Items with the specified outcome(s)
-        """
+    def get_items_by_outcome(self, *outcomes: SyncOutcome) -> list[SyncItem]:
+        """Return tracked items matching optional outcomes."""
         if not outcomes:
-            return [
-                item_id
-                for item_id in self._item_outcomes
-                if item_id.media_kind in (MediaKind.SHOW, MediaKind.MOVIE)
-            ]
+            return list(self._item_outcomes)
         return [
             item_id
             for item_id, item_outcome in self._item_outcomes.items()
             if item_outcome in outcomes
-            and item_id.media_kind in (MediaKind.SHOW, MediaKind.MOVIE)
         ]
 
-    def count_grandchild_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
-        """Count grandchild items matching the requested outcome filter."""
+    def count_trackable_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
+        """Count tracked refs that represent user-state records."""
         allowed_outcomes = set(outcomes)
         return sum(
             1
             for item_id, item_outcome in self._item_outcomes.items()
-            if item_id.media_kind in (MediaKind.EPISODE, MediaKind.MOVIE)
+            if item_id.trackable
             and (not allowed_outcomes or item_outcome in allowed_outcomes)
         )
 
-    def get_grandchild_items_by_outcome(
-        self, *outcome: SyncOutcome
-    ) -> list[ItemIdentifier]:
-        """Get all grandchild items (episodes/movies) that had a specific outcome.
-
-        Args:
-            outcome (SyncOutcome): One or more outcomes to filter by
-
-        Returns:
-            list[ItemIdentifier]: Grandchild items with the specified outcome(s)
-        """
-        if not outcome:
-            return [
-                item_id
-                for item_id in self._item_outcomes
-                if item_id.media_kind in (MediaKind.EPISODE, MediaKind.MOVIE)
-            ]
+    def get_trackable_items_by_outcome(self, *outcomes: SyncOutcome) -> list[SyncItem]:
+        """Return trackable refs matching optional outcomes."""
+        if not outcomes:
+            return [item_id for item_id in self._item_outcomes if item_id.trackable]
         return [
             item_id
             for item_id, item_outcome in self._item_outcomes.items()
-            if item_outcome in outcome
-            and item_id.media_kind in (MediaKind.EPISODE, MediaKind.MOVIE)
+            if item_id.trackable and item_outcome in outcomes
         ]
 
     @property
     def synced(self) -> int:
-        """Number of successfully synced items (including deleted)."""
+        """Number of refs successfully synced."""
         return self.count_items_by_outcome(SyncOutcome.SYNCED)
 
     @property
     def deleted(self) -> int:
-        """Number of items deleted from AniList."""
+        """Number of target records deleted."""
         return self.count_items_by_outcome(SyncOutcome.DELETED)
 
     @property
     def skipped(self) -> int:
-        """Number of items skipped (no changes needed)."""
+        """Number of refs skipped."""
         return self.count_items_by_outcome(SyncOutcome.SKIPPED)
 
     @property
     def not_found(self) -> int:
-        """Number of items where no matching AniList entry was found."""
+        """Number of refs without target matches."""
         return self.count_items_by_outcome(SyncOutcome.NOT_FOUND)
 
     @property
     def failed(self) -> int:
-        """Number of items that failed to process."""
+        """Number of refs that failed."""
         return self.count_items_by_outcome(SyncOutcome.FAILED)
 
     @property
-    def pending(self) -> int:
-        """Number of items that are still pending processing."""
-        return self.count_items_by_outcome(SyncOutcome.PENDING)
-
-    @property
-    def total_processed(self) -> int:
-        """Total number of items processed (excluding pending)."""
-        return self.count_items_by_outcome(
-            SyncOutcome.SYNCED,
-            SyncOutcome.SKIPPED,
-            SyncOutcome.FAILED,
-            SyncOutcome.NOT_FOUND,
-            SyncOutcome.DELETED,
-        )
-
-    @property
-    def total_items(self) -> int:
-        """Total number of items tracked (including unprocessed)."""
-        return self.count_items_by_outcome()
-
-    @property
     def coverage(self) -> float:
-        """Percentage of grandchild items that were successfully processed."""
-        total = self.count_grandchild_items_by_outcome()
+        """Percentage of trackable refs with a covered outcome."""
+        total = self.count_trackable_items_by_outcome()
         if not total:
             return 1.0
-
-        processed = self.count_grandchild_items_by_outcome(
+        processed = self.count_trackable_items_by_outcome(
             SyncOutcome.SYNCED,
             SyncOutcome.SKIPPED,
             SyncOutcome.DELETED,
         )
-
         return processed / total
-
-    def combine(self, other: SyncStats) -> SyncStats:
-        """Combine this stats instance with another.
-
-        Args:
-            other (SyncStats): Another SyncStats instance to combine with
-
-        Returns:
-            SyncStats: New instance with combined statistics
-        """
-        combined = SyncStats()
-        combined._item_outcomes = {**self._item_outcomes, **other._item_outcomes}
-        return combined
-
-    def __add__(self, other: SyncStats) -> SyncStats:
-        """Combine statistics using the + operator."""
-        return self.combine(other)
 
 
 class SyncProgress(msgspec.Struct):
-    """Live sync progress snapshot exposed to the web UI.
-
-    Fields are serialized to JSON in scheduler status responses.
-    """
+    """Live sync progress snapshot exposed to the web UI."""
 
     state: Literal["running", "idle"]
     started_at: datetime
-    section_index: int
-    section_count: int
-    section_title: str | None
     stage: str
-    section_items_total: int
-    section_items_processed: int
+    source_namespace: str
+    target_namespace: str
+    trigger: str
+    scanned_items: int
+    processed_items: int
+    total_items: int | None = None
 
 
-class EntrySnapshot(msgspec.Struct):
-    """Snapshot of list entry fields used for comparison and history."""
+class FieldChange(msgspec.Struct, frozen=True):
+    """One changed record field."""
 
-    media_key: str = ""
-    status: ListStatus | None = None
-    progress: int | None = None
-    repeats: int | None = None
-    review: str | None = None
-    user_rating: int | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    field: RecordField
+    before: object | None
+    after: object | None
+
+
+class FieldBlock(msgspec.Struct, frozen=True):
+    """Reason a field was not updated."""
+
+    field: RecordField
+    reason: str
+
+
+class AppliedRule(msgspec.Struct, frozen=True):
+    """Rule that changed a planned field value."""
+
+    field: RecordField
+    name: str
+
+
+class MappingRange(msgspec.Struct, frozen=True):
+    """Mapped source and target progress range."""
+
+    source: str
+    target: str
+
+
+class PlanDiagnostics(msgspec.Struct, frozen=True):
+    """Typed planning diagnostics for history metadata."""
+
+    blocked_fields: tuple[FieldBlock, ...] = ()
+    applied_rules: tuple[AppliedRule, ...] = ()
+    mapping_ranges: tuple[MappingRange, ...] = ()
+
+    def as_info(self) -> dict[str, str]:
+        """Return the JSON-friendly history metadata shape."""
+        return {
+            "field_blocks": ", ".join(
+                f"{item.field.value}({item.reason})"
+                for item in sorted(
+                    self.blocked_fields,
+                    key=lambda item: item.field.value,
+                )
+            ),
+            "applied_rules": ", ".join(
+                f"{item.field.value}({item.name})"
+                for item in sorted(
+                    self.applied_rules,
+                    key=lambda item: item.field.value,
+                )
+            ),
+            "mapping_ranges": ", ".join(
+                f"{item.source}->{item.target}" for item in self.mapping_ranges
+            ),
+        }
+
+
+class RecordDiff(msgspec.Struct, frozen=True):
+    """Typed diff between two record snapshots."""
+
+    changes: tuple[FieldChange, ...] = ()
+
+    def __bool__(self) -> bool:
+        """Return whether the diff contains at least one field change."""
+        return bool(self.changes)
+
+
+class RecordSnapshot(msgspec.Struct, frozen=True):
+    """Planner/history snapshot of one normalized record."""
+
+    ref: Ref
+    kind: str = ""
+    key: str | None = None
+    ids: tuple[str, ...] = ()
+    values: Mapping[str, object] = msgspec.field(default_factory=dict)
 
     @classmethod
-    def from_entry(cls, entry: ListEntry) -> EntrySnapshot:
-        """Create a snapshot from a list entry."""
+    def from_record(cls, record: Record) -> RecordSnapshot:
+        """Create a snapshot from a provider record."""
+        values: dict[str, object] = {}
+        for field, value in record.values.items():
+            snapshot_value = cls.snapshot_value(value)
+            if snapshot_value is not None:
+                values[field.value] = snapshot_value
         return cls(
-            media_key=entry.media().key,
-            status=entry.status,
-            progress=entry.progress,
-            repeats=entry.repeats,
-            review=entry.review,
-            user_rating=entry.user_rating,
-            started_at=entry.started_at,
-            finished_at=entry.finished_at,
+            ref=record.ref,
+            kind=record.kind,
+            key=record.key,
+            ids=tuple(item.descriptor for item in record.ids),
+            values=values,
         )
 
+    def diff(
+        self,
+        after: RecordSnapshot,
+        fields: Iterable[RecordField],
+    ) -> RecordDiff:
+        """Compare this snapshot to another snapshot."""
+        changes: list[FieldChange] = []
+        for field in fields:
+            before_value = self.values.get(field.value)
+            after_value = after.values.get(field.value)
+            if before_value != after_value:
+                changes.append(FieldChange(field, before_value, after_value))
+        return RecordDiff(tuple(changes))
 
-class BatchUpdate[ParentMediaT: LibraryEntry, ChildMediaT: LibraryEntry](
-    msgspec.Struct
-):
-    """Container for deferred sync updates and associated metadata."""
+    @classmethod
+    def diff_optional(
+        cls,
+        before: RecordSnapshot | None,
+        after: RecordSnapshot,
+        fields: Iterable[RecordField],
+    ) -> RecordDiff:
+        """Compare optional before state to a required after state."""
+        if before is None:
+            before = cls(ref=after.ref, kind=after.kind, key=after.key)
+        return before.diff(after, fields)
 
-    item: ParentMediaT
-    child: ChildMediaT
-    grandchildren: Sequence[LibraryEntry]
-    before: EntrySnapshot | None
-    after: EntrySnapshot
-    entry: ListEntry
-    source_entry: ListEntry | None
-    list_media_key: str | None
-    mappings: tuple[AnibridgeDescriptorMapping, ...] = ()
-    diagnostics: Mapping[str, str] = msgspec.field(default_factory=dict)
+    @staticmethod
+    def snapshot_value(value: Value) -> object | None:
+        """Reduce provider value objects to the history field value AniBridge owns."""
+        if isinstance(value, State):
+            return value.status.value if value.status is not None else None
+        if isinstance(value, Progress):
+            return value.current
+        if isinstance(value, Rating):
+            return value.value
+        return value
+
+
+class RecordPlan(msgspec.Struct):
+    """Normalized record write with history metadata."""
+
+    item: ScanItem
+    source_record: Record | None
+    before: RecordSnapshot | None
+    after: RecordSnapshot | None
+    write: RecordWrite
+    target_ref: Ref | None
+    diagnostics: PlanDiagnostics = msgspec.field(default_factory=PlanDiagnostics)

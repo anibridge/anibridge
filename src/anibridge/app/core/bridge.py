@@ -1,33 +1,42 @@
-"""Bridge Client Module."""
+"""Bridge client orchestration providers."""
 
 import asyncio
+import contextlib
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
 
-from anibridge.library import (
-    LibraryMovie,
-    LibraryProvider,
-    LibrarySection,
-    LibraryShow,
-    MediaKind,
+from anibridge.provider.base import (
+    Change,
+    ChangeQuery,
+    InboundRequest,
+    Page,
+    Provider,
+    Ref,
+    Role,
+    ScanItem,
+    SupportsBackupExports,
+    SupportsChangeFeed,
+    SupportsInboundChanges,
 )
-from anibridge.list import ListProvider
 from litestar.connection.request import Request
 
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import AnibridgeConfig, AnibridgeProfileConfig
 from anibridge.app.core.animap import AnimapClient
-from anibridge.app.core.providers import build_library_provider, build_list_provider
-from anibridge.app.core.sync.movie import MovieSyncClient
-from anibridge.app.core.sync.show import ShowSyncClient
-from anibridge.app.core.sync.stats import SyncProgress, SyncStats
-from anibridge.app.exceptions import MediaTypeError
+from anibridge.app.core.providers import build_profile_providers
+from anibridge.app.core.sync import (
+    ScanPlan,
+    SyncRequest,
+    SyncTrigger,
+    dedupe_refs,
+    ref_to_key,
+)
+from anibridge.app.core.sync.base import SyncClient
+from anibridge.app.core.sync.stats import SyncProgress
 from anibridge.app.logging import get_logger
 from anibridge.app.models.db.housekeeping import Housekeeping
 from anibridge.app.models.db.sync_history import SyncOutcome
-from anibridge.app.utils.cron import get_next_interval_seconds
 from anibridge.app.utils.memory import release_memory
 from anibridge.app.utils.terminal import ARROW
 from anibridge.app.web.state import get_app_state
@@ -35,6 +44,8 @@ from anibridge.app.web.state import get_app_state
 __all__ = ["BridgeClient"]
 
 log = get_logger(__name__)
+SYNC_SCAN_PAGE_SIZE = 10
+SYNC_SCAN_QUEUE_SIZE = 100
 
 
 class BridgeClient:
@@ -53,8 +64,9 @@ class BridgeClient:
         self.global_config = global_config
         self.animap_client = shared_animap_client
 
-        self.library_provider: LibraryProvider = build_library_provider(profile_config)
-        self.list_provider: ListProvider = build_list_provider(profile_config)
+        providers = build_profile_providers(profile_config)
+        self.source_provider: Provider = providers[Role.SOURCE]
+        self.target_provider: Provider = providers[Role.TARGET]
 
         self.last_synced = self._get_last_synced()
         self.current_sync: SyncProgress | None = None
@@ -64,79 +76,60 @@ class BridgeClient:
         log.debug("[%s] Initializing bridge client", self.profile_name)
 
         try:
-            await self.library_provider.initialize()
+            await self.source_provider.initialize()
         except Exception:
-            log.error(
-                "[%s] Library provider '%s' initialization failed",
-                self.profile_name,
-                self.library_provider.NAMESPACE,
-            )
             log.exception(
-                "[%s] Library provider initialization error details",
+                "[%s] Source provider '%s' initialization failed",
                 self.profile_name,
+                self.source_provider.NAMESPACE,
             )
             raise
 
         try:
-            await self.list_provider.initialize()
+            await self.target_provider.initialize()
         except Exception:
-            log.error(
-                "[%s] List provider '%s' initialization failed",
-                self.profile_name,
-                self.list_provider.NAMESPACE,
-            )
             log.exception(
-                "[%s] List provider initialization error details",
+                "[%s] Target provider '%s' initialization failed",
                 self.profile_name,
+                self.target_provider.NAMESPACE,
             )
             raise
 
-        await self._backup_list()
+        await self._backup_target()
 
-        library_user = self.library_provider.user()
-        list_user = self.list_provider.user()
-        library_label = library_user.title if library_user else "unknown"
-        list_label = list_user.title if list_user else "unknown"
+        source_account = self.source_provider.account()
+        target_account = self.target_provider.account()
+        source_label = source_account.title if source_account else "unknown"
+        target_label = target_account.title if target_account else "unknown"
 
         log.info(
-            "[%s] Bridge client initialized for %s library user $$'%s'$$ %s %s list "
-            "user $$'%s'$$",
+            "[%s] Bridge client initialized for %s source account $$'%s'$$ %s "
+            "%s target account $$'%s'$$",
             self.profile_name,
-            self.library_provider.NAMESPACE,
-            library_label,
+            self.source_provider.NAMESPACE,
+            source_label,
             ARROW,
-            self.list_provider.NAMESPACE,
-            list_label,
+            self.target_provider.NAMESPACE,
+            target_label,
         )
 
     async def close(self) -> None:
         """Close all provider connections."""
         log.debug("[%s] Closing bridge client", self.profile_name)
-        try:
-            await self.list_provider.close()
-        except Exception:
-            log.error(
-                "[%s] List provider '%s' close failed",
-                self.profile_name,
-                self.list_provider.NAMESPACE,
-            )
-            log.exception(
-                "[%s] List provider close error details",
-                self.profile_name,
-            )
-
-        try:
-            await self.library_provider.close()
-        except Exception:
-            log.error(
-                "[%s] Library provider '%s' close failed",
-                self.profile_name,
-                self.library_provider.NAMESPACE,
-            )
-            log.exception(
-                "[%s] Library provider close error details",
-                self.profile_name,
-            )
+        providers = (
+            (Role.TARGET, self.target_provider),
+            (Role.SOURCE, self.source_provider),
+        )
+        for role, provider in providers:
+            try:
+                await provider.close()
+            except Exception:
+                log.exception(
+                    "[%s] %s provider '%s' close failed",
+                    self.profile_name,
+                    role.value,
+                    provider.NAMESPACE,
+                )
 
     async def __aenter__(self) -> BridgeClient:
         """Enter async context manager."""
@@ -146,14 +139,13 @@ class BridgeClient:
         """Exit async context manager."""
         await self.close()
 
-    def _get_last_synced_key(self) -> str:
-        """Return the database key storing the last sync timestamp."""
-        return f"last_synced_{self.profile_name}"
-
     def _get_last_synced(self) -> datetime | None:
         """Fetch the last successful sync timestamp from the database."""
         with db() as ctx:
-            last_synced = ctx.session.get(Housekeeping, self._get_last_synced_key())
+            last_synced = ctx.session.get(
+                Housekeeping,
+                f"last_synced_{self.profile_name}",
+            )
             if last_synced is None or last_synced.value is None:
                 return None
             return datetime.fromisoformat(last_synced.value)
@@ -164,84 +156,81 @@ class BridgeClient:
         with db() as ctx:
             ctx.session.merge(
                 Housekeeping(
-                    key=self._get_last_synced_key(), value=last_synced.isoformat()
+                    key=f"last_synced_{self.profile_name}",
+                    value=last_synced.isoformat(),
                 )
             )
             ctx.session.commit()
 
-    async def _backup_list(self) -> None:
-        """Persist a list backup snapshot when supported by the provider."""
+    def _get_change_cursor(self) -> str | None:
+        """Fetch the last source change-feed cursor from the database."""
+        with db() as ctx:
+            key = f"change_cursor_{self.profile_name}_{self.source_provider.NAMESPACE}"
+            cursor = ctx.session.get(Housekeeping, key)
+            return cursor.value if cursor is not None else None
+
+    def _set_change_cursor(self, cursor: str) -> None:
+        """Persist the latest source change-feed cursor."""
+        with db() as ctx:
+            ctx.session.merge(
+                Housekeeping(
+                    key=f"change_cursor_{self.profile_name}_{self.source_provider.NAMESPACE}",
+                    value=cursor,
+                )
+            )
+            ctx.session.commit()
+
+    async def _backup_target(self) -> None:
+        """Persist a target-provider backup snapshot when supported."""
         if self.profile_config.backup_retention_days == -1:
             log.debug(
-                "[%s] List backup creation is disabled by configuration; skipping",
+                "[%s] Target backup creation is disabled by configuration; skipping",
                 self.profile_name,
             )
             return
 
         backup_root = self.global_config.data_path / "backups" / self.profile_name
         try:
-            payload = await self.list_provider.backup_list()
-        except NotImplementedError:
-            self._cleanup_old_backups(backup_root)
-            return
-        except Exception:
-            log.error("[%s] Failed to export list backup", self.profile_name)
-            log.exception(
-                "[%s] List backup export error details",
-                self.profile_name,
+            if not isinstance(self.target_provider, SupportsBackupExports):
+                return
+
+            artifact = await self.target_provider.export_backup()
+            if artifact is None or not artifact.content:
+                log.debug(
+                    "[%s] Target provider produced an empty backup; skipping write",
+                    self.profile_name,
+                )
+                return
+
+            target_fname = (
+                f"anibridge_{self.profile_name}_{self.target_provider.NAMESPACE}_"
+                f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+                f"{artifact.file_extension}"
             )
-            self._cleanup_old_backups(backup_root)
-            return
-
-        if not payload:
-            log.debug(
-                "[%s] List provider produced an empty backup; skipping write",
-                self.profile_name,
-            )
-            self._cleanup_old_backups(backup_root)
-            return
-
-        target_fname = (
-            f"anibridge_{self.profile_name}_{self.list_provider.NAMESPACE}_"
-            f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.json"
-        )
-        target_path = backup_root / target_fname
-
-        try:
+            target_path = backup_root / target_fname
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(payload, encoding="utf-8")
-        except Exception:
-            log.error(
-                "[%s] Failed to write backup file to $$'%s'$$",
+            target_path.write_bytes(artifact.content)
+            log.info(
+                "[%s] Target provider backup written to $$'%s'$$",
                 self.profile_name,
                 target_path,
             )
+        except Exception:
             log.exception(
-                "[%s] Backup write error details",
+                "[%s] Failed to export or write target backup",
                 self.profile_name,
             )
+        finally:
             self._cleanup_old_backups(backup_root)
-            return
-
-        log.info(
-            "[%s] List provider backup written to $$'%s'$$",
-            self.profile_name,
-            target_path,
-        )
-
-        self._cleanup_old_backups(backup_root)
 
     def _cleanup_old_backups(self, backup_root: Path) -> None:
-        """Delete stale list backup files based on retention policy."""
+        """Delete stale backup files based on retention policy."""
         retention_days = self.profile_config.backup_retention_days
-        if retention_days <= 0:
-            return
-
-        if not backup_root.exists():
+        if retention_days <= 0 or not backup_root.exists():
             return
 
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
-        pattern = f"anibridge_{self.profile_name}_{self.list_provider.NAMESPACE}_*.json"
+        pattern = f"anibridge_{self.profile_name}_{self.target_provider.NAMESPACE}_*"
         deleted_count = 0
 
         for path in backup_root.glob(pattern):
@@ -249,10 +238,8 @@ class BridgeClient:
                 modified_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
             except OSError:
                 continue
-
             if modified_at >= cutoff:
                 continue
-
             try:
                 path.unlink()
                 deleted_count += 1
@@ -272,98 +259,87 @@ class BridgeClient:
             )
 
     async def sync(
-        self, poll: bool = False, library_keys: Sequence[str] | None = None
+        self,
+        request: SyncRequest | None = None,
     ) -> None:
         """Run a synchronization cycle for the configured profile."""
         request = request or SyncRequest()
+        source_account = self.source_provider.account()
+        target_account = self.target_provider.account()
+        source_label = source_account.title if source_account else "unknown"
+        target_label = target_account.title if target_account else "unknown"
 
         log.info(
-            "[%s] Starting %s%ssync for library user $$'%s'$$ %s list user $$'%s'$$",
+            "[%s] Starting %s%ssync (%s) for source account $$'%s'$$ %s "
+            "target account $$'%s'$$",
             self.profile_name,
             "full " if self.profile_config.full_scan else "partial ",
             "and destructive " if self.profile_config.destructive_sync else "",
-            library_label,
+            request.trigger.value,
+            source_label,
             ARROW,
-            list_label,
+            target_label,
         )
 
         sync_start_time = datetime.now(UTC)
-
-        movie_sync = MovieSyncClient(
-            library_provider=self.library_provider,
-            list_provider=self.list_provider,
+        sync_client = SyncClient(
+            source_provider=self.source_provider,
+            target_provider=self.target_provider,
             animap_client=self.animap_client,
             sync_rules=self.profile_config.sync_rules,
-            full_scan=self.profile_config.full_scan,
             destructive_sync=self.profile_config.destructive_sync,
-            empty_sync=self.profile_config.empty_sync,
-            search_fallback_threshold=self.profile_config.search_fallback_threshold,
-            batch_requests=self.profile_config.batch_requests,
             dry_run=self.profile_config.dry_run,
             profile_name=self.profile_name,
-        )
-        show_sync = ShowSyncClient(
-            library_provider=self.library_provider,
-            list_provider=self.list_provider,
-            animap_client=self.animap_client,
-            sync_rules=self.profile_config.sync_rules,
-            full_scan=self.profile_config.full_scan,
-            destructive_sync=self.profile_config.destructive_sync,
-            empty_sync=self.profile_config.empty_sync,
-            search_fallback_threshold=self.profile_config.search_fallback_threshold,
-            batch_requests=self.profile_config.batch_requests,
-            dry_run=self.profile_config.dry_run,
-            profile_name=self.profile_name,
-        )
-
-        sections = await self.library_provider.get_sections()
-        log.debug(
-            "[%s] Retrieved %s library sections",
-            self.profile_name,
-            len(sections),
         )
 
         self.current_sync = SyncProgress(
             state="running",
             started_at=sync_start_time,
-            section_index=0,
-            section_count=len(sections),
-            section_title=None,
-            stage="initializing",
-            section_items_total=0,
-            section_items_processed=0,
+            stage="enumerating",
+            source_namespace=self.source_provider.NAMESPACE,
+            target_namespace=self.target_provider.NAMESPACE,
+            trigger=request.trigger.value,
+            scanned_items=0,
+            processed_items=0,
+            total_items=None,
         )
         get_app_state().notify_status_change()
-        sync_stats = SyncStats()
 
         try:
-            for idx, section in enumerate(sections, start=1):
-                if self.current_sync is not None:
-                    self.current_sync.section_index = idx
-                    self.current_sync.section_title = section.title
-                    self.current_sync.stage = "enumerating"
-                    self.current_sync.section_items_total = 0
-                    self.current_sync.section_items_processed = 0
-
-                section_stats = await self._sync_section(
-                    section,
-                    poll,
-                    movie_sync,
-                    show_sync,
-                    keys=library_keys,
-                    section_index=idx,
-                    section_count=len(sections),
+            scan = await self._scan_plan_for(request)
+            if scan is None:
+                log.info(
+                    "[%s] No source changes found for %s sync; skipping",
+                    self.profile_name,
+                    request.trigger.value,
                 )
-                sync_stats = sync_stats.combine(section_stats)
+                return
+
+            log.debug(
+                "[%s] Source scan prepared: trigger=%s refs=%s "
+                "require_activity=%s change_feed=%s",
+                self.profile_name,
+                scan.trigger.value,
+                len(scan.source_refs) if scan.source_refs else "all",
+                scan.require_activity,
+                scan.from_change_feed,
+            )
+            if self.profile_config.batch_requests:
+                items = await sync_client.scan_source(scan=scan)
+                await self._process_scan_items(sync_client, items, total=len(items))
+            else:
+                await self._process_scan_stream(sync_client, scan)
+
+            sync_client.flush_failure_history_cleanup()
 
             sync_completion_time = datetime.now(UTC)
             duration = sync_completion_time - sync_start_time
-
             self._set_last_synced(sync_start_time)
 
+            sync_stats = sync_client.sync_stats
             log.info(
-                "[%s] Sync completed: %s synced, %s deleted, %s skipped, %s not found, "
-                "%s failed. Coverage: %.2f%% (%s total) in %.2f seconds",
+                "[%s] Sync completed: %s synced, %s deleted, %s skipped, %s not "
+                "found, %s failed. Coverage: %.2f%% (%s total) in %.2f seconds",
                 self.profile_name,
                 sync_stats.synced,
                 sync_stats.deleted,
@@ -371,11 +347,11 @@ class BridgeClient:
                 sync_stats.not_found,
                 sync_stats.failed,
                 sync_stats.coverage * 100,
-                sync_stats.count_grandchild_items_by_outcome(),
+                sync_stats.count_trackable_items_by_outcome(),
                 duration.total_seconds(),
             )
 
-            uncovered_items = sync_stats.get_grandchild_items_by_outcome(
+            uncovered_items = sync_stats.get_trackable_items_by_outcome(
                 SyncOutcome.NOT_FOUND,
                 SyncOutcome.FAILED,
                 SyncOutcome.PENDING,
@@ -390,7 +366,6 @@ class BridgeClient:
         except Exception as exc:
             end_time = datetime.now(UTC)
             duration = end_time - sync_start_time
-
             log.exception(
                 "[%s] Sync failed after %.2f seconds: %s",
                 self.profile_name,
@@ -401,184 +376,253 @@ class BridgeClient:
         finally:
             self.current_sync = None
             get_app_state().notify_status_change()
-
-            await movie_sync.clear_cache()
-            await show_sync.clear_cache()
+            await sync_client.clear_cache()
             release_memory()
 
-    async def parse_webhook(
-        self, request: Request
-    ) -> tuple[bool, Sequence[str] | None]:
-        """Parse a webhook request and extract relevant library keys.
+    async def _process_scan_items(
+        self,
+        sync_client: SyncClient,
+        items: Sequence[ScanItem],
+        *,
+        total: int,
+    ) -> None:
+        """Process scan items and update live sync progress."""
+        if self.current_sync is not None:
+            self.current_sync.stage = "processing"
+            self.current_sync.scanned_items = total
+            self.current_sync.total_items = total
+            await asyncio.sleep(0)
 
-        Args:
-            request (Request): The incoming webhook request.
-
-        Returns:
-            tuple[bool, Sequence[str] | None]: A tuple containing a boolean
-                indicating whether the webhook is valid and targetting the profile,
-                and a sequence of library media keys to sync, or None if not
-                applicable.
-        """
         try:
-            return await self.library_provider.parse_webhook(request)
+            await sync_client.process_page(items)
         except Exception:
-            log.error(
-                "[%s] Library provider '%s' webhook parsing failed",
-                self.profile_name,
-                self.library_provider.NAMESPACE,
+            log.exception("[%s] Failed to sync source item batch", self.profile_name)
+        finally:
+            if self.current_sync is not None:
+                self.current_sync.stage = "processing"
+                self.current_sync.processed_items += len(items)
+                await asyncio.sleep(0)
+
+    async def _process_scan_stream(
+        self,
+        sync_client: SyncClient,
+        scan: ScanPlan,
+    ) -> None:
+        """Process source items while scan pages are being produced."""
+        queue: asyncio.Queue[Page[ScanItem] | None] = asyncio.Queue(
+            maxsize=SYNC_SCAN_QUEUE_SIZE
+        )
+        scanned_total = 0
+        declared_total: int | None = None
+
+        async def produce() -> None:
+            nonlocal scanned_total, declared_total
+            try:
+                async for page in sync_client.scan_source_pages(
+                    scan=scan,
+                    page_size=SYNC_SCAN_PAGE_SIZE,
+                ):
+                    scanned_total += len(page.items)
+                    if page.total is not None:
+                        declared_total = max(0, page.total)
+                    if self.current_sync is not None:
+                        self.current_sync.stage = "enumerating"
+                        self.current_sync.scanned_items = scanned_total
+                        self.current_sync.total_items = declared_total
+                        await asyncio.sleep(0)
+                    await queue.put(page)
+            except asyncio.CancelledError:
+                with contextlib.suppress(asyncio.QueueFull):
+                    queue.put_nowait(None)
+                raise
+            except Exception:
+                await queue.put(None)
+                raise
+            else:
+                if self.current_sync is not None and declared_total is None:
+                    self.current_sync.total_items = scanned_total
+                    await asyncio.sleep(0)
+                await queue.put(None)
+
+        producer = asyncio.create_task(produce())
+        try:
+            while True:
+                page = await queue.get()
+                if page is None:
+                    break
+                try:
+                    await sync_client.process_page(page.items)
+                except Exception:
+                    log.exception(
+                        "[%s] Failed to sync source item batch", self.profile_name
+                    )
+                finally:
+                    if self.current_sync is not None:
+                        self.current_sync.stage = "processing"
+                        self.current_sync.processed_items += len(page.items)
+                        await asyncio.sleep(0)
+            await producer
+        finally:
+            if not producer.done():
+                producer.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await producer
+
+    async def _scan_plan_for(
+        self,
+        request: SyncRequest,
+    ) -> ScanPlan | None:
+        """Translate a sync request into an explicit provider scan projection."""
+        if request.trigger == SyncTrigger.POLL:
+            changed_refs = await self._poll_source_refs()
+            if changed_refs is None:
+                source_refs = (
+                    dedupe_refs(request.source_refs)
+                    if request.source_refs is not None
+                    else None
+                )
+                return ScanPlan(
+                    trigger=request.trigger,
+                    source_refs=source_refs,
+                    require_activity=(
+                        False
+                        if request.source_refs is not None
+                        else not self.profile_config.full_scan
+                    ),
+                    from_change_feed=False,
+                )
+
+            source_refs = dedupe_refs(
+                (
+                    *changed_refs,
+                    *(request.source_refs or ()),
+                )
             )
-            log.exception(
-                "[%s] Webhook parsing error details",
+            if not source_refs:
+                return None
+            return ScanPlan(
+                trigger=request.trigger,
+                source_refs=source_refs,
+                require_activity=False,
+                from_change_feed=changed_refs is not None,
+            )
+
+        if request.trigger == SyncTrigger.WEBHOOK:
+            source_refs = dedupe_refs(request.source_refs)
+            if not source_refs:
+                return None
+            return ScanPlan(
+                trigger=request.trigger,
+                source_refs=source_refs,
+                require_activity=False,
+            )
+
+        if request.source_refs is not None:
+            return ScanPlan(
+                trigger=request.trigger,
+                source_refs=dedupe_refs(request.source_refs),
+                require_activity=False,
+            )
+
+        return ScanPlan(
+            trigger=request.trigger,
+            source_refs=None,
+            require_activity=not self.profile_config.full_scan,
+        )
+
+    async def _poll_source_refs(self) -> tuple[Ref, ...] | None:
+        """Poll the source change feed and return changed refs when possible."""
+        if not isinstance(self.source_provider, SupportsChangeFeed):
+            log.warning(
+                "[%s] Poll sync requested, but source provider '%s' does not "
+                "support change feeds; falling back to an activity scan",
                 self.profile_name,
+                self.source_provider.NAMESPACE,
+            )
+            return None
+
+        changes: list[Change] = []
+        cursor = self._get_change_cursor()
+        latest_cursor: str | None = cursor
+        while True:
+            page = await self.source_provider.poll_changes(ChangeQuery(cursor=cursor))
+            changes.extend(page.items)
+            if page.cursor is None:
+                break
+            if page.cursor == cursor:
+                log.warning(
+                    "[%s] Source provider '%s' returned an unchanged change-feed "
+                    "cursor; stopping poll pagination",
+                    self.profile_name,
+                    self.source_provider.NAMESPACE,
+                )
+                latest_cursor = page.cursor
+                break
+            latest_cursor = page.cursor
+            cursor = page.cursor
+
+        if latest_cursor:
+            self._set_change_cursor(latest_cursor)
+
+        return self._change_refs(changes)
+
+    async def parse_webhook(
+        self,
+        request: Request,
+    ) -> tuple[bool, Sequence[Ref] | None]:
+        """Parse a provider webhook request into source refs."""
+        if not isinstance(self.source_provider, SupportsInboundChanges):
+            return False, None
+
+        try:
+            inbound = await self._to_inbound_request(request)
+            result = await self.source_provider.parse_inbound(inbound)
+        except Exception:
+            log.exception(
+                "[%s] Source provider '%s' webhook parsing failed",
+                self.profile_name,
+                self.source_provider.NAMESPACE,
             )
             return False, None
 
-    async def _sync_section(
-        self,
-        section: LibrarySection,
-        poll: bool,
-        movie_sync: MovieSyncClient,
-        show_sync: ShowSyncClient,
-        keys: Sequence[str] | None = None,
-        *,
-        section_index: int,
-        section_count: int,
-    ) -> SyncStats:
-        """Synchronize a single library section."""
-        log.info(
-            "[%s] Syncing section $$'%s'$$",
-            self.profile_name,
-            section.title,
-        )
+        if not result.matched:
+            return False, None
+        refs = self._change_refs(result.changes)
+        return True, refs or None
 
-        min_last_modified = (
-            (
-                self.last_synced
-                or datetime.now(UTC)
-                - timedelta(
-                    seconds=get_next_interval_seconds(self.profile_config.poll_interval)
-                )
+    @staticmethod
+    async def _to_inbound_request(request: Request) -> InboundRequest:
+        """Convert a Litestar request into the provider-base inbound shape."""
+        body = await request.body()
+        query = {
+            str(key): (
+                tuple(value) if isinstance(value, list | tuple) else (str(value),)
             )
-            - timedelta(seconds=15)  # small buffer
-            if poll
-            else None
+            for key, value in dict(request.query_params).items()
+        }
+        return InboundRequest(
+            method=request.method,
+            path=request.url.path,
+            headers={str(key): str(value) for key, value in request.headers.items()},
+            query=query,
+            body=body,
         )
 
-        parts = []
-        if min_last_modified:
-            parts.append(f"min_last_modified={min_last_modified.isoformat()}")
-        if self.profile_config.full_scan:
-            parts.append("require_watched=False")
-        if keys is not None:
-            parts.append(f"keys={list(keys)}")
-        debug_log_args = f" ({', '.join(parts)})" if parts else ""
-
-        log.debug(
-            "[%s] Fetching items in section $$'%s'$$%s",
-            self.profile_name,
-            section.title,
-            debug_log_args,
-        )
-        items = await self.library_provider.list_items(
-            section,
-            min_last_modified=min_last_modified,
-            require_watched=not self.profile_config.full_scan,
-            keys=keys,
-        )
-        log.debug(
-            "[%s] Found %s items in section $$'%s'$$",
-            self.profile_name,
-            len(items),
-            section.title,
-        )
-
-        if self.current_sync is not None:
-            self.current_sync.section_index = section_index
-            self.current_sync.section_count = section_count
-            self.current_sync.section_title = section.title
-            self.current_sync.section_items_total = len(items)
-            self.current_sync.section_items_processed = 0
-            self.current_sync.stage = (
-                "prefetching" if self.profile_config.batch_requests else "processing"
-            )
-            await asyncio.sleep(0)
-
-        sync_client: MovieSyncClient | ShowSyncClient
-        if section.media_kind == MediaKind.MOVIE:
-            sync_client = movie_sync
-        elif section.media_kind == MediaKind.SHOW:
-            sync_client = show_sync
-        else:
-            log.warning(
-                "[%s] Unsupported section kind '%s', skipping",
-                self.profile_name,
-                section.media_kind.value,
-            )
-            return SyncStats()
-
-        if self.profile_config.batch_requests:
-            log.info(
-                "[%s] Prefetching list entries for $$'%s'$$ (%s items)",
-                self.profile_name,
-                section.title,
-                len(items),
-            )
-            try:
-                if section.media_kind == MediaKind.MOVIE:
-                    await movie_sync.prefetch_entries(
-                        cast(Sequence[LibraryMovie], items)
-                    )
-                elif section.media_kind == MediaKind.SHOW:
-                    await show_sync.prefetch_entries(cast(Sequence[LibraryShow], items))
-            except Exception:
-                log.error(
-                    "[%s] Failed to prefetch list entries",
-                    self.profile_name,
-                )
-                log.exception(
-                    "[%s] Prefetch error details",
-                    self.profile_name,
-                )
-            if self.current_sync is not None:
-                self.current_sync.stage = "processing"
-                await asyncio.sleep(0)
-
-        for item in items:
-            try:
-                if item.media_kind == MediaKind.MOVIE:
-                    await movie_sync.process_media(cast(LibraryMovie, item))
-                elif item.media_kind == MediaKind.SHOW:
-                    await show_sync.process_media(cast(LibraryShow, item))
-                else:
-                    raise MediaTypeError(
-                        f"Unsupported media type '{type(item).__name__}' "
-                        "encountered during sync"
-                    )
-
-                if self.current_sync is not None:
-                    self.current_sync.stage = "processing"
-                    self.current_sync.section_items_processed += 1
-                    await asyncio.sleep(0)
-
-            except Exception:
-                log.error(
-                    "[%s] Failed to sync item $$'%s'$$",
-                    self.profile_name,
-                    item.title,
-                )
-                log.exception(
-                    "[%s] Item sync error details",
-                    self.profile_name,
-                )
-
-        try:
-            if self.profile_config.batch_requests:
-                if self.current_sync is not None:
-                    self.current_sync.stage = "finalizing"
-                    await asyncio.sleep(0)
-                await sync_client.batch_sync()
-        finally:
-            sync_client.flush_failure_history_cleanup()
-
-        return sync_client.sync_stats
+    @staticmethod
+    def _change_refs(changes: Sequence[Change]) -> tuple[Ref, ...]:
+        """Extract source refs from normalized change payloads."""
+        refs: list[Ref] = []
+        seen = set()
+        for change in changes:
+            ref = change.ref
+            if ref is None:
+                key = change.key
+                ref = Ref.anchor(str(key)) if key else None
+            if ref is None:
+                continue
+            marker = ref_to_key(ref)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            refs.append(ref)
+        return tuple(refs)

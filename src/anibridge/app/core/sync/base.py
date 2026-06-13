@@ -1,1043 +1,1004 @@
-"""Provider-agnostic base class for library/list synchronization."""
+"""Synchronization engine for the AniBridge provider contract."""
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping, MutableSet, Sequence, Set
-from copy import copy
-from datetime import UTC, datetime
-from typing import Any
+import asyncio
+import contextlib
+from collections import Counter
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from typing import cast
 
 import msgspec
-from anibridge.library import LibraryEntry, LibraryProvider
-from anibridge.list import ListEntry, ListProvider, ListStatus
-from anibridge.utils.mappings import AnibridgeDescriptorMapping
-from anibridge.utils.types import Comparable
+from anibridge.provider.base import (
+    DeleteRecord,
+    ExternalId,
+    FacetName,
+    NodeFlag,
+    Page,
+    Provider,
+    Record,
+    RecordField,
+    RecordQuery,
+    RecordWrite,
+    Ref,
+    ScanItem,
+    ScanQuery,
+    SupportsRecordReads,
+    SupportsRecordWrites,
+    SupportsScan,
+    WriteOp,
+    WriteResult,
+)
+from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.config.database import db
-from anibridge.app.config.settings import SyncField, SyncRulesConfig
+from anibridge.app.config.settings import SyncRulesConfig
 from anibridge.app.core.animap import AnimapClient
-from anibridge.app.core.sync.cache import SyncCacheManager
+from anibridge.app.core.sync import RefKey, ScanPlan, ref_from_payload, ref_to_key
 from anibridge.app.core.sync.history import SyncHistoryManager
-from anibridge.app.core.sync.rules import SyncRuleEngine, build_rule_context
+from anibridge.app.core.sync.planner import (
+    PreparedUpdate,
+    RecordPlanner,
+    SyncLabel,
+)
+from anibridge.app.core.sync.rules import SyncRuleEngine
 from anibridge.app.core.sync.stats import (
-    BatchUpdate,
-    EntrySnapshot,
-    ItemIdentifier,
+    RecordPlan,
+    RecordSnapshot,
+    SyncItem,
     SyncStats,
 )
-from anibridge.app.core.sync.targeting import SyncTarget, diff_snapshots
+from anibridge.app.core.sync.targeting import ResolvedTarget, TargetResolver
 from anibridge.app.logging import get_logger
+from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncOutcome
-from anibridge.app.utils.terminal import ARROW
 
-__all__ = ["BaseSyncClient"]
+__all__ = ["SyncClient"]
 
 log = get_logger(__name__)
 
-
-class _FieldApplicationState(msgspec.Struct):
-    """Track why individual sync fields were blocked during planning."""
-
-    pinned_blocked_fields: set[str] = msgspec.field(default_factory=set)
-    applied_sync_rules: dict[str, str] = msgspec.field(default_factory=dict)
-    sync_rules_blocked: dict[str, str] = msgspec.field(default_factory=dict)
-    status_gate_blocked: dict[str, str] = msgspec.field(default_factory=dict)
-    destructive_blocked_fields: set[str] = msgspec.field(default_factory=set)
-    unchanged_fields: set[str] = msgspec.field(default_factory=set)
-
-    def mark_block(self, field_name: str, reason: str | None) -> None:
-        """Record why a field was blocked during sync planning."""
-        if reason is None:
-            return
-        if reason == "pinned":
-            self.pinned_blocked_fields.add(field_name)
-        elif reason == "unchanged":
-            self.unchanged_fields.add(field_name)
-        elif reason == "destructive_disabled":
-            self.destructive_blocked_fields.add(field_name)
-        elif reason.startswith("sync_rules"):
-            self.sync_rules_blocked[field_name] = reason.partition(":")[2]
-
-    def mark_applied_rule(self, field_name: str, reason: str | None) -> None:
-        """Record which sync rule supplied an applied field value."""
-        if reason and reason != "default":
-            self.applied_sync_rules[field_name] = reason
+_OUTCOME_PRIORITY: Mapping[SyncOutcome, int] = {
+    SyncOutcome.FAILED: 5,
+    SyncOutcome.SYNCED: 4,
+    SyncOutcome.DELETED: 4,
+    SyncOutcome.NOT_FOUND: 3,
+    SyncOutcome.SKIPPED: 2,
+    SyncOutcome.PENDING: 1,
+}
 
 
-class BaseSyncClient[
-    ParentMediaT: LibraryEntry,
-    ChildMediaT: LibraryEntry,
-    GrandchildMediaT: LibraryEntry,
-](ABC):
-    """Provider-agnostic base class for media synchronization."""
+class _TargetWork(msgspec.Struct, frozen=True):
+    """One source record resolved to one target record location."""
+
+    item: ScanItem
+    sync_items: tuple[SyncItem, ...]
+    projected_record: Record
+    target_ref: Ref
+    target_kind: str
+    mappings: Sequence[AnibridgeMapping]
+    label: SyncLabel
+
+    @property
+    def key(self) -> _TargetRecordKey:
+        return _TargetRecordKey(ref_to_key(self.target_ref), self.target_kind)
+
+
+class _TargetRecordKey(msgspec.Struct, frozen=True):
+    ref: RefKey
+    kind: str
+
+
+class SyncClient:
+    """Synchronize records from one provider to another."""
 
     def __init__(
         self,
         *,
-        library_provider: LibraryProvider,
-        list_provider: ListProvider,
+        source_provider: Provider,
+        target_provider: Provider,
         animap_client: AnimapClient,
-        full_scan: bool,
         destructive_sync: bool,
-        empty_sync: bool = False,
-        search_fallback_threshold: int,
-        batch_requests: bool,
         dry_run: bool,
         profile_name: str,
         sync_rules: SyncRulesConfig | None = None,
     ) -> None:
-        """Initialize the base synchronization client.
+        """Initialize the normalized sync client."""
+        self.source_provider = source_provider
+        self.target_provider = target_provider
+        self.destructive_sync = destructive_sync
+        self.dry_run = dry_run
+        self.profile_name = profile_name
+        self.sync_stats = SyncStats()
+        self._target_resolver = TargetResolver(
+            target_provider=target_provider,
+            animap_client=animap_client,
+        )
 
-        Args:
-            library_provider (LibraryProvider): Source library provider.
-            list_provider (ListProvider): Destination list provider.
-            animap_client (AnimapClient): Animap client used for descriptor resolution.
-            full_scan (bool): Whether to include unplayed library items.
-            destructive_sync (bool): Whether sync may remove or decrease list state.
-            empty_sync (bool): Whether empty activity should still produce
-                planning entries.
-            search_fallback_threshold (int): Minimum fuzzy score for search fallback.
-            batch_requests (bool): Whether to queue updates for batch submission.
-            dry_run (bool): Whether to log changes without applying them.
-            profile_name (str): Active profile name.
-            sync_rules (SyncRulesConfig | None): Declarative per-field sync rules.
-        """
-        self.library_provider = library_provider
-        self.list_provider = list_provider
-        self.animap_client = animap_client
-        self._sync_rule_engine = SyncRuleEngine(
+        self._source_capabilities = source_provider.capabilities()
+        self._target_capabilities = target_provider.capabilities()
+        sync_rule_engine = SyncRuleEngine(
             variables=sync_rules.resolved_vars() if sync_rules else None,
             field_rules=sync_rules.field_rules() if sync_rules else None,
         )
-        self.full_scan = full_scan
-        self.destructive_sync = destructive_sync
-        self.empty_sync = empty_sync
-        self.search_fallback_threshold = search_fallback_threshold
-        self.batch_requests = batch_requests
-        self.dry_run = dry_run
-        self.profile_name = profile_name
-        self._sync_field_names = tuple(field.value for field in SyncField)
-        self._disabled_fields = frozenset(
-            field.value
-            for field in SyncField
-            if self._sync_rule_engine.is_disabled(field.value)
+        self._planner = RecordPlanner(
+            source_capabilities=self._source_capabilities,
+            target_capabilities=self._target_capabilities,
+            sync_rule_engine=sync_rule_engine,
+            destructive_sync=self.destructive_sync,
         )
-        self._rule_context_fields = {
-            field.value: self._sync_rule_engine.context_media_fields(field.value)
-            for field in SyncField
-        }
-        self.sync_stats = SyncStats()
-        self._pending_updates: list[BatchUpdate[ParentMediaT, ChildMediaT]] = []
-        self._cache = SyncCacheManager(
-            list_provider=self.list_provider,
-            profile_name=self.profile_name,
-            db_factory=lambda: db(),
+        self._planner.validate_provider_contracts(
+            source_provider=self.source_provider,
+            target_provider=self.target_provider,
         )
+        self._sync_fields = self._planner.sync_fields
+        if not self._sync_fields:
+            raise TypeError(
+                f"Providers '{self.source_provider.NAMESPACE}' and "
+                f"'{self.target_provider.NAMESPACE}' have no common readable/writable "
+                "record fields"
+            )
         self._history = SyncHistoryManager(
             profile_name=self.profile_name,
-            library_namespace=self.library_provider.NAMESPACE,
-            list_namespace=self.list_provider.NAMESPACE,
+            source_namespace=self.source_provider.NAMESPACE,
+            target_namespace=self.target_provider.NAMESPACE,
             db_factory=lambda: db(),
         )
-        self._field_calculators: dict[SyncField, Callable[..., Any]] = {
-            SyncField.STATUS: self._calculate_status,
-            SyncField.PROGRESS: self._calculate_progress,
-            SyncField.REPEATS: self._calculate_repeats,
-            SyncField.REVIEW: self._calculate_review,
-            SyncField.USER_RATING: self._calculate_user_rating,
-            SyncField.STARTED_AT: self._calculate_started_at,
-            SyncField.FINISHED_AT: self._calculate_finished_at,
-        }
 
     async def clear_cache(self) -> None:
-        """Clear all sync client caches.
+        """Clear sync and provider caches."""
+        await self.source_provider.clear_cache()
+        await self.target_provider.clear_cache()
 
-        Returns:
-            None: This method clears manager caches and decorated function caches.
-        """
-        self._cache.clear_cache()
-        self._history.clear_cache()
-
-    async def prefetch_entries(self, items: Sequence[ParentMediaT]) -> None:
-        """Prefetch list entries for a batch of library items.
-
-        Args:
-            items (Sequence[ParentMediaT]): Items whose list entries should be
-                loaded in advance.
-
-        Returns:
-            None: This method warms cache state for later sync operations.
-        """
-        await self._cache.prefetch_entries(
-            items=items, collect_keys=self._collect_prefetch_keys
+    async def scan_source_pages(
+        self,
+        *,
+        scan: ScanPlan,
+        page_size: int | None = None,
+    ) -> AsyncIterator[Page[ScanItem]]:
+        """Stream source scan pages using the provider contract."""
+        cursor: str | None = None
+        source_refs = tuple(scan.source_refs or ())
+        facets = frozenset(
+            facet
+            for facet in (FacetName.IDS, FacetName.STRUCTURE)
+            if facet in self._source_capabilities.facets
         )
+        native_record_kinds = frozenset(self._planner.source_record_kinds())
+        source_provider = cast(SupportsScan, self.source_provider)
 
-    def _get_pinned_fields(self, namespace: str, media_key: str | None) -> list[str]:
-        """Return the set of pinned fields for the given list media identifier."""
-        return self._cache.get_pinned_fields(namespace, media_key)
-
-    async def process_media(self, item: ParentMediaT) -> None:
-        """Process one library item through target resolution and sync.
-
-        Args:
-            item (ParentMediaT): Library item to process.
-
-        Returns:
-            None: This method updates sync stats and history as needed.
-        """
-        item_identifier = ItemIdentifier.from_item(item)
-        debug_title = self._debug_log_title(item=item, child_item=None)
-        ids_summary = self._debug_log_ids(
-            item=item, child_item=None, entry=None, media_key=None
-        )
-        log.debug(
-            "[%s] Processing %s %s %s",
-            self.profile_name,
-            item.media_kind.value,
-            debug_title,
-            ids_summary,
-        )
-
-        trackable = await self._get_all_trackable_items(item)
-        if not trackable:
-            log.debug(
-                "[%s] Skipping %s %s because it has no trackable items %s",
-                self.profile_name,
-                item.media_kind.value,
-                debug_title,
-                ids_summary,
-            )
-            self.sync_stats.track_item(item_identifier, SyncOutcome.SKIPPED)
-            return
-        self.sync_stats.register_pending_items(trackable)
-        self.sync_stats.track_item(item_identifier, SyncOutcome.PENDING)
-
-        targets = await self.resolve_targets(item)
-        found_match = bool(targets)
-        for child_item, grandchild_items, target in targets:
-            grandchildren = (
-                grandchild_items
-                if isinstance(grandchild_items, tuple)
-                else tuple(grandchild_items)
-            )
-            grandchild_ids = ItemIdentifier.from_items(grandchildren)
-            entry = target.entry
-            list_media_key = target.list_media_key
-            debug_title = self._debug_log_title(item=item, child_item=child_item)
-            debug_ids = self._debug_log_ids(
-                item=item, child_item=child_item, entry=entry, media_key=list_media_key
-            )
-            log.debug(
-                "[%s] %s list entry for %s %s %s",
-                self.profile_name,
-                "No existing" if entry is None else "Found",
-                item.media_kind.value,
-                debug_title,
-                debug_ids,
-            )
-            try:
-                outcome = await self.sync_media(
-                    item=item,
-                    child_item=child_item,
-                    grandchild_items=grandchildren,
-                    entry=entry,
-                    list_media_key=list_media_key,
-                    mappings=target.mappings,
+        async def fetch_page(cursor: str | None):
+            return await source_provider.scan(
+                ScanQuery(
+                    sources=source_refs,
+                    flags=frozenset({NodeFlag.TRACKABLE}),
+                    facets=facets,
+                    native_record_kinds=native_record_kinds,
+                    fields=frozenset(self._sync_fields),
+                    with_records=True,
+                    require_activity=scan.require_activity,
+                    cursor=cursor,
+                    limit=page_size,
                 )
-                self.sync_stats.track_items(grandchild_ids, outcome)
-                self.sync_stats.track_item(item_identifier, outcome)
+            )
+
+        page_task = asyncio.create_task(fetch_page(cursor))
+        try:
+            while True:
+                page = await page_task
+                if page.cursor is None:
+                    if page.items:
+                        yield page
+                    break
+
+                cursor = page.cursor
+                page_task = asyncio.create_task(fetch_page(cursor))
+                if page.items:
+                    yield page
+        finally:
+            if not page_task.done():
+                page_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await page_task
+            else:
+                with contextlib.suppress(asyncio.CancelledError):
+                    page_task.exception()
+
+    async def scan_source(
+        self,
+        *,
+        scan: ScanPlan,
+    ) -> tuple[ScanItem, ...]:
+        """Collect all source items for explicit batch-mode processing."""
+        items: list[ScanItem] = []
+        async for page in self.scan_source_pages(scan=scan):
+            items.extend(page.items)
+        return tuple(items)
+
+    async def process_item(self, item: ScanItem) -> None:
+        """Process one scanned source item through target resolution and sync."""
+        await self.process_page((item,))
+
+    async def process_page(self, items: Sequence[ScanItem]) -> None:
+        """Process one source scan page with batched target reads and writes."""
+        if not items:
+            return
+
+        outcomes, work_items = await self._resolve_work_items(items)
+        target_keys = [work.key for work in work_items]
+        target_key_counts = Counter(target_keys)
+        target_records = await self._fetch_target_records_batch(
+            (work.target_ref, work.target_kind)
+            for work, target_key in zip(work_items, target_keys, strict=True)
+            if target_key_counts[target_key] == 1
+        )
+        pinned_fields = self._fetch_pinned_fields_batch(
+            (work.target_ref, work.target_kind) for work in work_items
+        )
+
+        updates: list[tuple[_TargetWork, PreparedUpdate]] = []
+        for work, target_key in zip(work_items, target_keys, strict=True):
+            try:
+                if target_key_counts[target_key] > 1:
+                    target_record = await self._fetch_target_record(
+                        work.target_ref,
+                        work.target_kind,
+                    )
+                    outcome = await self.sync_record(
+                        item=work.item,
+                        source_record=work.projected_record,
+                        target_record=target_record,
+                        target_ref=work.target_ref,
+                        target_kind=work.target_kind,
+                        pinned_fields=pinned_fields.get(target_key, ()),
+                        mappings=work.mappings,
+                        label=work.label,
+                    )
+                    self._record_best_outcome(
+                        outcomes,
+                        work.sync_items,
+                        outcome,
+                    )
+                    continue
+
+                target_record = target_records.get(work.key)
+                planned = await self._prepare_record_update(
+                    item=work.item,
+                    source_record=work.projected_record,
+                    target_record=target_record,
+                    target_ref=work.target_ref,
+                    target_kind=work.target_kind,
+                    pinned_fields=pinned_fields.get(target_key, ()),
+                    mappings=work.mappings,
+                    label=work.label,
+                )
+                if isinstance(planned, SyncOutcome):
+                    self._record_best_outcome(
+                        outcomes,
+                        work.sync_items,
+                        planned,
+                    )
+                else:
+                    updates.append((work, planned))
             except Exception:
                 log.error(
-                    "[%s] Failed to process %s %s %s",
+                    "[%s] Failed to process %s %s with target %s",
                     self.profile_name,
-                    item.media_kind.value,
-                    debug_title,
-                    debug_ids,
+                    work.label.node_kind,
+                    work.label.source,
+                    work.label.target,
                 )
-                log.exception("[%s] Sync processing error details", self.profile_name)
-                self.sync_stats.track_items(grandchild_ids, SyncOutcome.FAILED)
-                self.sync_stats.track_item(item_identifier, SyncOutcome.FAILED)
-
-        if not found_match:
-            remaining_trackable = self.sync_stats.filter_tracked_items(trackable)
-            if not remaining_trackable:
-                log.debug(
-                    "[%s] Skipping %s %s because all eligible items were filtered %s",
+                log.exception(
+                    "[%s] Sync processing error details",
                     self.profile_name,
-                    item.media_kind.value,
-                    self._debug_log_title(item=item, child_item=None),
-                    ids_summary,
                 )
-                self.sync_stats.track_item(item_identifier, SyncOutcome.SKIPPED)
-                return
+                self._record_best_outcome(
+                    outcomes,
+                    work.sync_items,
+                    SyncOutcome.FAILED,
+                )
 
-            log.warning(
-                "[%s] No list entries found for %s %s %s",
-                self.profile_name,
-                item.media_kind.value,
-                self._debug_log_title(item=item, child_item=None),
-                ids_summary,
+        if updates:
+            batch_results = await self._apply_updates_batch(
+                [planned for _, planned in updates]
             )
-            await self._history.create_sync_history(
-                item=item,
-                child_item=None,
-                grandchild_items=None,
-                snapshots=(None, None),
-                list_media_key=None,
-                outcome=SyncOutcome.NOT_FOUND,
-                info={
-                    "trackable_count": len(remaining_trackable),
-                },
-                ephemeral=self.dry_run,
-            )
-            self.sync_stats.track_items(remaining_trackable, SyncOutcome.NOT_FOUND)
-            self.sync_stats.track_item(item_identifier, SyncOutcome.NOT_FOUND)
-
-    @abstractmethod
-    async def _get_all_trackable_items(
-        self, item: ParentMediaT
-    ) -> Sequence[ItemIdentifier]:
-        """Return all identifiers that should be tracked for the given item."""
-        ...
-
-    @abstractmethod
-    async def _collect_prefetch_keys(self, item: ParentMediaT) -> Sequence[str]:
-        """Collect list provider keys to prefetch for the given item."""
-        ...
-
-    @abstractmethod
-    async def resolve_mapping_targets(
-        self, item: ParentMediaT
-    ) -> Sequence[tuple[ChildMediaT, Sequence[GrandchildMediaT], SyncTarget]]:
-        """Resolve deterministic mapping-based targets for the supplied item."""
-        ...
-
-    @abstractmethod
-    async def resolve_search_targets(
-        self, item: ParentMediaT
-    ) -> Sequence[tuple[ChildMediaT, Sequence[GrandchildMediaT], SyncTarget]]:
-        """Resolve search-based targets for the supplied item."""
-        ...
-
-    async def resolve_targets(
-        self, item: ParentMediaT
-    ) -> Sequence[tuple[ChildMediaT, Sequence[GrandchildMediaT], SyncTarget]]:
-        """Resolve targets using mappings first, then explicit search fallback."""
-        targets = await self.resolve_mapping_targets(item)
-        if targets:
-            return targets
-        if self.search_fallback_threshold < 0:
-            return ()
-        return await self.resolve_search_targets(item)
-
-    async def sync_media(
-        self,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        list_media_key: str | None,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> SyncOutcome:
-        """Synchronize a mapped media item with the list provider.
-
-        Args:
-            item (ParentMediaT): Parent library item being synchronized.
-            child_item (ChildMediaT): Child item mapped to the target entry.
-            grandchild_items (Sequence[GrandchildMediaT]): Trackable descendants
-                used for field calculation.
-            entry (ListEntry): Current list entry to update.
-            list_media_key (str | None): Resolved list media key for the target entry.
-            mappings (Sequence[AnibridgeDescriptorMapping] | None): Source mapping
-                metadata used to
-                resolve the target.
-
-        Returns:
-            SyncOutcome: Final outcome for the sync operation.
-        """
-        original_entry = entry
-        planned_entry = copy(entry)
-        before_snapshot = EntrySnapshot.from_entry(original_entry)
-        resolved_list_key = (
-            list_media_key or original_entry.media().key or before_snapshot.media_key
-        )
-        debug_title = self._debug_log_title(item=item, child_item=child_item)
-        debug_ids = self._debug_log_ids(
-            item=item,
-            child_item=child_item,
-            entry=original_entry,
-            media_key=resolved_list_key,
-        )
-
-        pinned_fields = self._get_pinned_fields(
-            self.list_provider.NAMESPACE, resolved_list_key
-        )
-        skip_fields = set(pinned_fields)
-        field_state = _FieldApplicationState(pinned_blocked_fields=skip_fields.copy())
-
-        calc_kwargs = {
-            "item": item,
-            "child_item": child_item,
-            "grandchild_items": grandchild_items,
-            "entry": planned_entry,
-            "mappings": mappings,
-        }
-        computed_values = await self._calculate_computed_values(
-            calc_kwargs=calc_kwargs, disabled_fields=self._disabled_fields
-        )
-        current_values = {
-            field_name: getattr(planned_entry, field_name)
-            for field_name in self._sync_field_names
-        }
-
-        status_rule = self._sync_rule_engine.evaluate_field(
-            field_name=SyncField.STATUS.value,
-            current_values=current_values,
-            computed_values=computed_values,
-            rule_context=build_rule_context(
-                item=item,
-                child_item=child_item,
-                grandchild_items=grandchild_items,
-                list_media_key=resolved_list_key,
-                required_media_fields=self._rule_context_fields[SyncField.STATUS.value],
-                mappings=mappings,
-            ),
-        )
-
-        if status_rule.value is None:
-            if (
-                self.destructive_sync
-                and before_snapshot.status is not None
-                and SyncField.STATUS.value not in skip_fields
+            for (work, _), outcome in zip(
+                updates,
+                batch_results,
+                strict=True,
             ):
-                log.success(
-                    "[%s] Deleting list entry for %s %s %s",
-                    self.profile_name,
-                    item.media_kind.value,
-                    debug_title,
-                    debug_ids,
+                self._record_best_outcome(
+                    outcomes,
+                    work.sync_items,
+                    outcome,
                 )
-                if self.dry_run:
-                    log.debug(
-                        "[%s] Dry run; skipping deletion of %s %s %s",
+
+        for sync_item, outcome in outcomes.items():
+            self.sync_stats.track_item(sync_item, outcome)
+
+    async def _resolve_work_items(
+        self,
+        items: Sequence[ScanItem],
+    ) -> tuple[dict[SyncItem, SyncOutcome], list[_TargetWork]]:
+        outcomes: dict[SyncItem, SyncOutcome] = {}
+        work_items: list[_TargetWork] = []
+
+        for item in items:
+            label = self._sync_label(item=item)
+            log.debug(
+                "[%s] Processing %s %s",
+                self.profile_name,
+                label.node_kind,
+                label.source,
+            )
+
+            records = self._planner.syncable_source_records(item)
+            if not records:
+                log.debug(
+                    "[%s] Skipping %s %s because it has no trackable records",
+                    self.profile_name,
+                    label.node_kind,
+                    label.source,
+                )
+                continue
+
+            sync_items_by_record = [
+                SyncItem.from_record_parts(
+                    namespace=self.source_provider.NAMESPACE,
+                    node=item.node,
+                    record=record,
+                )
+                for record in records
+            ]
+            for sync_items in sync_items_by_record:
+                self.sync_stats.register_pending_items(sync_items)
+
+            for record, sync_items in zip(records, sync_items_by_record, strict=True):
+                for sync_item in sync_items:
+                    outcomes.setdefault(sync_item, SyncOutcome.SKIPPED)
+                matches = await self._target_resolver.resolve(
+                    node=item.node,
+                    record=record,
+                )
+                if not matches:
+                    log.warning(
+                        "[%s] No target refs found for %s %s record %s",
                         self.profile_name,
-                        item.media_kind.value,
-                        debug_title,
-                        debug_ids,
+                        label.node_kind,
+                        label.source,
+                        record.ref,
                     )
                     await self._history.create_sync_history(
-                        item=item,
-                        child_item=child_item,
-                        grandchild_items=grandchild_items,
-                        snapshots=(before_snapshot, None),
-                        list_media_key=resolved_list_key,
-                        mappings=mappings,
-                        outcome=SyncOutcome.DELETED,
+                        source_node=item.node,
+                        source_record=record,
+                        target_ref=None,
+                        snapshots=(None, None),
+                        outcome=SyncOutcome.NOT_FOUND,
+                        info={"trackable_count": len(sync_items)},
                         ephemeral=self.dry_run,
                     )
-                    return SyncOutcome.DELETED
-                await self.list_provider.delete_entry(before_snapshot.media_key)
-                self._cache.remove_entry(before_snapshot.media_key)
-                await self._history.create_sync_history(
+                    for sync_item in sync_items:
+                        outcomes[sync_item] = SyncOutcome.NOT_FOUND
+                    continue
+
+                work_items.extend(
+                    self._work_items_for_matches(
+                        item=item,
+                        source_record=record,
+                        sync_items=sync_items,
+                        matches=matches,
+                        label=label,
+                    )
+                )
+
+        return outcomes, work_items
+
+    def _work_items_for_matches(
+        self,
+        *,
+        item: ScanItem,
+        source_record: Record,
+        sync_items: tuple[SyncItem, ...],
+        matches: Sequence[ResolvedTarget],
+        label: SyncLabel,
+    ) -> tuple[_TargetWork, ...]:
+        target_kind = self._planner.target_record_kind_for(source_record.kind)
+        if target_kind is None:
+            log.debug(
+                "[%s] Skipping record kind $$'%s'$$ for %s %s because target "
+                "provider has no matching record kind",
+                self.profile_name,
+                source_record.kind,
+                label.node_kind,
+                label.source,
+            )
+            return ()
+
+        work_items: list[_TargetWork] = []
+        for match in matches:
+            target_ref = match.ref
+            work_label = self._sync_label(
+                item=item,
+                target_ref=target_ref,
+                source_descriptor=match.source_id,
+                target_descriptor=match.target_id,
+                mappings=match.mappings,
+            )
+            work_items.append(
+                _TargetWork(
                     item=item,
-                    child_item=child_item,
-                    grandchild_items=grandchild_items,
-                    snapshots=(before_snapshot, None),
-                    list_media_key=resolved_list_key,
-                    mappings=mappings,
-                    outcome=SyncOutcome.DELETED,
-                    ephemeral=self.dry_run,
+                    sync_items=sync_items,
+                    projected_record=self._planner.project_source_record(
+                        source_record,
+                        mappings=match.mappings,
+                    ),
+                    target_ref=target_ref,
+                    target_kind=target_kind,
+                    mappings=match.mappings,
+                    label=work_label,
                 )
-                return SyncOutcome.DELETED
-
-            if not status_rule.allowed:
-                skip_reason = (
-                    f"status blocked by sync rules ({status_rule.reason or 'blocked'})"
-                )
-            elif (
-                before_snapshot.status is not None
-                and SyncField.STATUS.value in skip_fields
-            ):
-                skip_reason = "status is pinned"
-            elif before_snapshot.status is not None:
-                skip_reason = "status would be cleared but destructive sync is disabled"
-            else:
-                skip_reason = "no syncable activity"
-            log.info(
-                "[%s] Skipping %s %s because %s %s",
-                self.profile_name,
-                item.media_kind.value,
-                debug_title,
-                skip_reason,
-                debug_ids,
-            )
-            return SyncOutcome.SKIPPED
-
-        considered_attrs: set[str] = set()
-        status_should_apply, status_reason = (
-            self._should_apply_field(
-                SyncField.STATUS, status_rule.value, before_snapshot.status, skip_fields
-            )
-            if status_rule.allowed
-            else (False, f"sync_rules:{status_rule.reason}")
-        )
-        if status_should_apply:
-            setattr(planned_entry, SyncField.STATUS.value, status_rule.value)
-            field_state.mark_applied_rule(SyncField.STATUS.value, status_rule.reason)
-        else:
-            field_state.mark_block(SyncField.STATUS.value, status_reason)
-        considered_attrs.add(SyncField.STATUS.value)
-
-        await self._apply_secondary_fields(
-            item=item,
-            child_item=child_item,
-            grandchild_items=grandchild_items,
-            list_media_key=resolved_list_key,
-            entry=planned_entry,
-            final_status=planned_entry.status,
-            current_values=current_values,
-            computed_values=computed_values,
-            skip_fields=skip_fields,
-            disabled_fields=self._disabled_fields,
-            considered_attrs=considered_attrs,
-            field_state=field_state,
-            mappings=mappings,
-        )
-
-        after_snapshot = EntrySnapshot.from_entry(planned_entry)
-        diff = diff_snapshots(before_snapshot, after_snapshot, considered_attrs)
-        sync_diagnostics = {
-            "field_blocks": ", ".join(
-                self._format_field_blocks(
-                    field_state=field_state,
-                    disabled_fields=self._disabled_fields,
-                )
-            ),
-            "applied_rules": ", ".join(
-                f"{k}({v})" if v else k
-                for k, v in sorted(field_state.applied_sync_rules.items())
-            ),
-        }
-
-        if not diff:
-            log.info(
-                "[%s] Skipping %s %s because it is already up to date %s",
-                self.profile_name,
-                item.media_kind.value,
-                debug_title,
-                debug_ids,
             )
             log.debug(
-                (
-                    "[%s] Field state: pinned=%s rules=%s gates=%s destructive=%s "
-                    "unchanged=%s %s"
-                ),
+                "[%s] Resolved target record for %s %s with target %s",
                 self.profile_name,
-                sorted(field_state.pinned_blocked_fields),
-                sorted(field_state.sync_rules_blocked),
-                sorted(field_state.status_gate_blocked),
-                sorted(field_state.destructive_blocked_fields),
-                sorted(field_state.unchanged_fields),
-                debug_ids,
+                work_label.node_kind,
+                work_label.source,
+                work_label.target,
             )
-            self._history.queue_failure_history_cleanup(
-                item=item, child_item=child_item, list_media_key=resolved_list_key
+
+        return tuple(work_items)
+
+    @staticmethod
+    def _record_best_outcome(
+        outcomes: dict[SyncItem, SyncOutcome],
+        sync_items: Iterable[SyncItem],
+        outcome: SyncOutcome,
+    ) -> None:
+        """Keep the highest-priority outcome for a source record."""
+        for sync_item in sync_items:
+            current = outcomes.get(sync_item, SyncOutcome.SKIPPED)
+            if _OUTCOME_PRIORITY[outcome] > _OUTCOME_PRIORITY[current]:
+                outcomes[sync_item] = outcome
+
+    async def sync_record(
+        self,
+        *,
+        item: ScanItem,
+        source_record: Record,
+        target_record: Record | None,
+        target_ref: Ref,
+        target_kind: str,
+        pinned_fields: Sequence[RecordField] = (),
+        mappings: Sequence[AnibridgeMapping] = (),
+        label: SyncLabel | None = None,
+    ) -> SyncOutcome:
+        """Synchronize one source record to one target record."""
+        label = label or self._sync_label(
+            item=item,
+            target_ref=target_ref,
+            mappings=mappings,
+        )
+        planned = await self._prepare_record_update(
+            item=item,
+            source_record=source_record,
+            target_record=target_record,
+            target_ref=target_ref,
+            target_kind=target_kind,
+            label=label,
+            pinned_fields=pinned_fields,
+            mappings=mappings,
+        )
+        if isinstance(planned, SyncOutcome):
+            return planned
+        return await self._apply_update(
+            planned.plan,
+            source_record=planned.source_record,
+            diff_str=planned.diff_str,
+            label=planned.label,
+        )
+
+    async def _prepare_record_update(
+        self,
+        *,
+        item: ScanItem,
+        source_record: Record,
+        target_record: Record | None,
+        target_ref: Ref,
+        target_kind: str,
+        label: SyncLabel,
+        pinned_fields: Sequence[RecordField] = (),
+        mappings: Sequence[AnibridgeMapping] = (),
+    ) -> PreparedUpdate | SyncOutcome:
+        """Plan one source-to-target record mutation without applying updates."""
+        before_snapshot = (
+            RecordSnapshot.from_record(target_record) if target_record else None
+        )
+
+        if not source_record.values and target_record is not None:
+            if self.destructive_sync:
+                return await self._delete_record(
+                    item=item,
+                    source_record=source_record,
+                    target_record=target_record,
+                    target_ref=target_ref,
+                    target_kind=target_kind,
+                    before_snapshot=before_snapshot,
+                    label=label,
+                )
+            log.info(
+                "[%s] Skipping %s %s because source record is empty and "
+                "destructive sync is disabled%s",
+                self.profile_name,
+                label.node_kind,
+                label.source,
+                self._target_suffix(label),
             )
             return SyncOutcome.SKIPPED
 
-        return await self._apply_update(
-            BatchUpdate(
-                item=item,
-                child=child_item,
-                grandchildren=grandchild_items,
-                before=before_snapshot,
-                after=after_snapshot,
-                entry=planned_entry,
-                source_entry=original_entry,
-                list_media_key=resolved_list_key,
-                mappings=tuple(mappings or ()),
-                diagnostics=sync_diagnostics,
-            ),
-            self._format_diff(diff),
-            debug_title,
-            debug_ids,
+        planned = self._planner.prepare_upsert(
+            item,
+            source_record=source_record,
+            target_record=target_record,
+            target_ref=target_ref,
+            target_kind=target_kind,
+            pinned_fields=pinned_fields,
+            label=label,
+            mappings=mappings,
         )
+        if planned == SyncOutcome.SKIPPED:
+            log.info(
+                "[%s] Skipping %s %s because it is already up to date%s",
+                self.profile_name,
+                label.node_kind,
+                label.source,
+                self._target_suffix(label),
+            )
+            self._history.queue_failure_history_cleanup(
+                source_ref=source_record.ref,
+                target_ref=target_ref,
+            )
+        return planned
 
     async def _apply_update(
         self,
-        plan: BatchUpdate[ParentMediaT, ChildMediaT],
+        plan: RecordPlan,
+        *,
+        source_record: Record,
         diff_str: str,
-        debug_title: str,
-        debug_ids: str,
+        label: SyncLabel,
     ) -> SyncOutcome:
-        """Queue or apply a list entry update."""
-        if self.batch_requests:
-            log.success(
-                "[%s] Queuing %s %s %s for batch sync",
-                self.profile_name,
-                plan.item.media_kind.value,
-                debug_title,
-                debug_ids,
-            )
-            log.success("\tQUEUED UPDATE: %s", diff_str)
-            self._pending_updates.append(plan)
-            return SyncOutcome.SYNCED
-
+        """Queue or apply a record update."""
         if self.dry_run:
             log.success(
-                "[%s] Dry run; skipping sync of %s %s %s",
+                "[%s] Dry run; skipping sync of %s %s",
                 self.profile_name,
-                plan.item.media_kind.value,
-                debug_title,
-                debug_ids,
+                label.node_kind,
+                self._source_with_target(label),
             )
             log.success("\tDRY RUN UPDATE: %s", diff_str)
             await self._history.create_sync_history(
-                item=plan.item,
-                child_item=plan.child,
-                grandchild_items=plan.grandchildren,
+                source_node=plan.item.node,
+                source_record=source_record,
+                target_ref=plan.target_ref,
                 snapshots=(plan.before, plan.after),
-                list_media_key=plan.list_media_key,
-                mappings=plan.mappings,
                 outcome=SyncOutcome.SYNCED,
-                info={**plan.diagnostics},
+                info=plan.diagnostics.as_info(),
                 ephemeral=self.dry_run,
             )
             return SyncOutcome.SYNCED
 
         try:
-            await self.list_provider.update_entry(plan.after.media_key, plan.entry)
-            self._cache.apply_planned_update(
-                source_entry=plan.source_entry,
-                planned_entry=plan.entry,
-                fields=self._sync_field_names,
-            )
+            await self._write_records([plan.write])
             log.success(
-                "[%s] Synced %s %s %s",
+                "[%s] Synced %s %s",
                 self.profile_name,
-                plan.item.media_kind.value,
-                debug_title,
-                debug_ids,
+                label.node_kind,
+                self._source_with_target(label),
             )
             log.success("\tUPDATE: %s", diff_str)
             await self._history.create_sync_history(
-                item=plan.item,
-                child_item=plan.child,
-                grandchild_items=plan.grandchildren,
+                source_node=plan.item.node,
+                source_record=source_record,
+                target_ref=plan.target_ref,
                 snapshots=(plan.before, plan.after),
-                list_media_key=plan.list_media_key,
-                mappings=plan.mappings,
                 outcome=SyncOutcome.SYNCED,
-                info={**plan.diagnostics},
+                info=plan.diagnostics.as_info(),
                 ephemeral=self.dry_run,
             )
             return SyncOutcome.SYNCED
         except Exception as exc:
+            if await self._target_matches_after(plan):
+                log.warning(
+                    "[%s] Provider raised after writing %s %s; target "
+                    "state matches the planned update, so marking it synced: %s",
+                    self.profile_name,
+                    label.node_kind,
+                    self._source_with_target(label),
+                    exc,
+                )
+                await self._history.create_sync_history(
+                    source_node=plan.item.node,
+                    source_record=source_record,
+                    target_ref=plan.target_ref,
+                    snapshots=(plan.before, plan.after),
+                    outcome=SyncOutcome.SYNCED,
+                    info={
+                        **plan.diagnostics.as_info(),
+                        "write_reconciled_after_error": True,
+                        "write_error_type": type(exc).__name__,
+                        "write_error": str(exc),
+                    },
+                    ephemeral=self.dry_run,
+                )
+                return SyncOutcome.SYNCED
+
             log.error(
-                "[%s] Failed to sync %s %s %s: %s",
+                "[%s] Failed to sync %s %s: %s",
                 self.profile_name,
-                plan.item.media_kind.value,
-                debug_title,
-                debug_ids,
+                label.node_kind,
+                self._source_with_target(label),
                 exc,
             )
             log.exception("[%s] Sync update error details", self.profile_name)
             await self._history.create_sync_history(
-                item=plan.item,
-                child_item=plan.child,
-                grandchild_items=plan.grandchildren,
+                source_node=plan.item.node,
+                source_record=source_record,
+                target_ref=plan.target_ref,
                 snapshots=(plan.before, plan.after),
-                list_media_key=plan.list_media_key,
-                mappings=plan.mappings,
                 outcome=SyncOutcome.FAILED,
                 error_message=str(exc),
-                info={**plan.diagnostics, "error_type": type(exc).__name__},
+                info={
+                    **plan.diagnostics.as_info(),
+                    "error_type": type(exc).__name__,
+                },
                 ephemeral=self.dry_run,
             )
             raise
 
-    async def _apply_secondary_fields(
+    async def _apply_updates_batch(
         self,
-        *,
-        item,
-        child_item,
-        grandchild_items,
-        list_media_key,
-        entry: ListEntry,
-        final_status: ListStatus | None,
-        current_values: Mapping[str, Any],
-        computed_values: Mapping[str, Any],
-        skip_fields: Set[str],
-        disabled_fields: Set[str],
-        considered_attrs: MutableSet[str],
-        field_state: _FieldApplicationState,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> None:
-        """Apply non-status sync fields when gates and rules allow it."""
-        for sync_field in SyncField:
-            if sync_field == SyncField.STATUS:
-                continue
-            if sync_field.value in skip_fields:
-                field_state.pinned_blocked_fields.add(sync_field.value)
-                continue
-            if (
-                reason := self._status_gate_reason(sync_field, final_status)
-            ) is not None:
-                field_state.status_gate_blocked[sync_field.value] = reason
-                continue
-            if self._sync_rule_engine.is_disabled(sync_field.value):
-                continue
-
-            rule_context = build_rule_context(
-                item=item,
-                child_item=child_item,
-                grandchild_items=grandchild_items,
-                list_media_key=list_media_key,
-                required_media_fields=self._rule_context_fields[sync_field.value],
-                mappings=mappings,
-            )
-
-            rule_decision = self._sync_rule_engine.evaluate_field(
-                field_name=sync_field.value,
-                current_values=current_values,
-                computed_values=computed_values,
-                rule_context=rule_context,
-            )
-            if not rule_decision.allowed:
-                field_state.mark_block(
-                    sync_field.value, f"sync_rules:{rule_decision.reason}"
-                )
-                continue
-
-            should_apply, apply_reason = self._should_apply_field(
-                sync_field,
-                rule_decision.value,
-                current_values[sync_field.value],
-                skip_fields,
-            )
-            if not should_apply:
-                field_state.mark_block(sync_field.value, apply_reason)
-                continue
-
-            setattr(entry, sync_field.value, rule_decision.value)
-            field_state.mark_applied_rule(sync_field.value, rule_decision.reason)
-            considered_attrs.add(sync_field.value)
-
-    async def _calculate_computed_values(
-        self, *, calc_kwargs: Mapping[str, Any], disabled_fields: Set[str]
-    ) -> dict[str, Comparable | None]:
-        """Calculate raw field values before any declarative rules are applied."""
-        computed: dict[str, Comparable | None] = {
-            SyncField.STATUS.value: await self._field_calculators[SyncField.STATUS](
-                **calc_kwargs
-            )
-        }
-
-        for sync_field in SyncField:
-            if sync_field == SyncField.STATUS:
-                continue
-            if sync_field.value in disabled_fields:
-                continue
-            computed[sync_field.value] = await self._field_calculators[sync_field](
-                **calc_kwargs
-            )
-
-        return computed
-
-    def _status_gate_reason(
-        self, field: SyncField, final_status: ListStatus | None
-    ) -> str | None:
-        """Return the status-based reason a field cannot be updated."""
-        if final_status is None:
-            return "status_unset"
-        if (
-            field in (SyncField.REPEATS, SyncField.FINISHED_AT)
-            and final_status < ListStatus.COMPLETED
-        ):
-            return "requires_completed"
-        if field == SyncField.STARTED_AT and final_status <= ListStatus.PLANNING:
-            return "requires_active_status"
-        return None
-
-    def _render_diff(self, plan: BatchUpdate[ParentMediaT, ChildMediaT]) -> str:
-        """Render a diff string for a planned update."""
-        after_fields = msgspec.structs.asdict(plan.after)
-        return self._format_diff(diff_snapshots(plan.before, plan.after, after_fields))
-
-    async def batch_sync(self) -> None:
-        """Flush queued updates to the list provider.
-
-        Returns:
-            None: This method submits pending updates and records history results.
-        """
-        if not self._pending_updates:
-            return
-
-        log.success(
-            "[%s] Syncing %s items to list provider in batch mode",
-            self.profile_name,
-            len(self._pending_updates),
-        )
+        updates: Sequence[PreparedUpdate],
+    ) -> tuple[SyncOutcome, ...]:
+        """Apply planned updates independently to avoid ambiguous partial batches."""
+        if not updates:
+            return ()
 
         if self.dry_run:
-            log.debug(
-                "[%s] Dry run; skipping batch sync of %s items",
-                self.profile_name,
-                len(self._pending_updates),
-            )
-            for update in self._pending_updates:
+            outcomes: list[SyncOutcome] = []
+            for update in updates:
                 log.success(
-                    "[%s] Dry run batch update for %s %s",
+                    "[%s] Dry run; skipping sync of %s %s",
                     self.profile_name,
-                    update.item.media_kind.value,
-                    self._debug_log_title(item=update.item, child_item=update.child),
+                    update.label.node_kind,
+                    self._source_with_target(update.label),
                 )
-                log.success("\tDRY RUN BATCH UPDATE: %s", self._render_diff(update))
+                log.success("\tDRY RUN UPDATE: %s", update.diff_str)
                 await self._history.create_sync_history(
-                    item=update.item,
-                    child_item=update.child,
-                    grandchild_items=update.grandchildren,
-                    snapshots=(update.before, update.after),
-                    list_media_key=update.list_media_key,
-                    mappings=update.mappings,
+                    source_node=update.plan.item.node,
+                    source_record=update.source_record,
+                    target_ref=update.plan.target_ref,
+                    snapshots=(update.plan.before, update.plan.after),
                     outcome=SyncOutcome.SYNCED,
-                    info={**update.diagnostics},
+                    info=update.plan.diagnostics.as_info(),
                     ephemeral=self.dry_run,
                 )
-            self._pending_updates.clear()
-            return
+                outcomes.append(SyncOutcome.SYNCED)
+            return tuple(outcomes)
 
         try:
-            updated = await self.list_provider.update_entries_batch(
-                [u.entry for u in self._pending_updates]
-            )
-            updated_keys = {e.media().key for e in updated if e is not None}
-            for update in self._pending_updates:
-                outcome = (
-                    SyncOutcome.SYNCED
-                    if update.after.media_key in updated_keys
-                    else SyncOutcome.FAILED
-                )
-                if outcome == SyncOutcome.SYNCED:
-                    self._cache.apply_planned_update(
-                        source_entry=update.source_entry,
-                        planned_entry=update.entry,
-                        fields=self._sync_field_names,
+            outcomes: list[SyncOutcome] = []
+            for update in updates:
+                try:
+                    outcomes.append(
+                        await self._apply_update(
+                            update.plan,
+                            source_record=update.source_record,
+                            diff_str=update.diff_str,
+                            label=update.label,
+                        )
                     )
-                await self._history.create_sync_history(
-                    item=update.item,
-                    child_item=update.child,
-                    grandchild_items=update.grandchildren,
-                    snapshots=(update.before, update.after),
-                    list_media_key=update.list_media_key,
-                    mappings=update.mappings,
-                    outcome=outcome,
-                    info={**update.diagnostics},
-                    ephemeral=self.dry_run,
-                )
+                except Exception:
+                    outcomes.append(SyncOutcome.FAILED)
+            return tuple(outcomes)
+        except Exception:
+            log.exception("[%s] Unexpected sequential write failure", self.profile_name)
+            return tuple(SyncOutcome.FAILED for _ in updates)
 
-            log.success(
-                "[%s] Batch sync completed for %s items with %s failures",
-                self.profile_name,
-                len(self._pending_updates),
-                len(self._pending_updates) - len(updated_keys),
+    async def _target_matches_after(self, plan: RecordPlan) -> bool:
+        """Return whether the current target state matches a planned upsert."""
+        if plan.target_ref is None or plan.after is None:
+            return False
+        if not isinstance(self.target_provider, SupportsRecordReads):
+            return False
+        try:
+            actual = await self._fetch_target_record(
+                plan.target_ref,
+                plan.after.kind,
             )
-        except Exception as exc:
-            log.error("Batch sync failed: %s", exc)
-            log.exception("Batch sync error details")
-            for update in self._pending_updates:
-                await self._history.create_sync_history(
-                    item=update.item,
-                    child_item=update.child,
-                    grandchild_items=update.grandchildren,
-                    snapshots=(update.before, update.after),
-                    list_media_key=update.list_media_key,
-                    mappings=update.mappings,
-                    outcome=SyncOutcome.FAILED,
-                    error_message=str(exc),
-                    info={**update.diagnostics, "error_type": type(exc).__name__},
-                    ephemeral=self.dry_run,
-                )
-            raise
-        finally:
-            self._pending_updates.clear()
+        except Exception:
+            log.exception("[%s] Failed to reconcile target state", self.profile_name)
+            return False
+        if actual is None:
+            return False
+
+        actual_snapshot = RecordSnapshot.from_record(actual)
+        for field, expected_value in plan.after.values.items():
+            if actual_snapshot.values.get(field) != expected_value:
+                return False
+        return True
 
     def flush_failure_history_cleanup(self) -> None:
-        """Flush queued failure-history cleanup operations.
-
-        Returns:
-            None: This method delegates cleanup to the history manager.
-        """
+        """Flush queued failure-history cleanup operations."""
         self._history.flush_failure_history_cleanup()
 
-    def _should_apply_field(
-        self, field: SyncField, new_value, current_value, skip_fields: Set[str]
-    ) -> tuple[bool, str | None]:
-        """Return whether field should be applied and a diagnostic reason."""
-        if field.value in skip_fields:
-            return False, "pinned"
-        if current_value == new_value:
-            return False, "unchanged"
-        if (
-            not self.destructive_sync
-            and current_value is not None
-            and new_value is None
-        ):
-            return False, "destructive_disabled"
-        return True, "applied"
-
-    def _format_diff(self, diff: dict[str, tuple[Any, Any]]) -> str:
-        """Format a diff dictionary for logging."""
-        return " | ".join(
-            f"{f}: {self._format_value(b)} {ARROW} {self._format_value(a)}"
-            for f, (b, a) in sorted(diff.items())
-        )
-
-    def _format_field_blocks(
+    async def _delete_record(
         self,
         *,
-        field_state: _FieldApplicationState,
-        disabled_fields: Set[str],
-    ) -> list[str]:
-        """Render a compact summary of why fields were not applied."""
-        blocked: list[str] = []
-        blocked.extend(f"{field}(disabled)" for field in sorted(disabled_fields))
-        blocked.extend(
-            f"{field}(pinned)" for field in sorted(field_state.pinned_blocked_fields)
+        item: ScanItem,
+        source_record: Record,
+        target_record: Record | None,
+        target_ref,
+        target_kind: str,
+        before_snapshot: RecordSnapshot | None,
+        label: SyncLabel,
+    ) -> SyncOutcome:
+        """Delete a target record when destructive sync permits it."""
+        if WriteOp.DELETE_RECORD not in self._target_capabilities.write_ops:
+            log.warning(
+                "[%s] Skipping deletion for %s %s because target provider "
+                "does not advertise delete_record",
+                self.profile_name,
+                label.node_kind,
+                self._source_with_target(label),
+            )
+            return SyncOutcome.SKIPPED
+        log.success(
+            "[%s] Deleting target record for %s %s",
+            self.profile_name,
+            label.node_kind,
+            self._source_with_target(label),
         )
-        blocked.extend(
-            f"{field}({reason})"
-            for field, reason in sorted(field_state.sync_rules_blocked.items())
+        if self.dry_run:
+            log.debug(
+                "[%s] Dry run; skipping deletion of %s %s",
+                self.profile_name,
+                label.node_kind,
+                self._source_with_target(label),
+            )
+            await self._history.create_sync_history(
+                source_node=item.node,
+                source_record=source_record,
+                target_ref=target_ref,
+                snapshots=(before_snapshot, None),
+                outcome=SyncOutcome.DELETED,
+                ephemeral=self.dry_run,
+            )
+            return SyncOutcome.DELETED
+
+        write = DeleteRecord(
+            ref=target_ref,
+            kind=target_kind,
+            key=target_record.key if target_record else None,
         )
-        blocked.extend(
-            f"{field}({reason})"
-            for field, reason in sorted(field_state.status_gate_blocked.items())
+        await self._write_records([write])
+        await self._history.create_sync_history(
+            source_node=item.node,
+            source_record=source_record,
+            target_ref=target_ref,
+            snapshots=(before_snapshot, None),
+            outcome=SyncOutcome.DELETED,
+            ephemeral=self.dry_run,
         )
-        blocked.extend(
-            f"{field}(destructive_disabled)"
-            for field in sorted(field_state.destructive_blocked_fields)
+        return SyncOutcome.DELETED
+
+    async def _write_records(self, writes: Sequence[RecordWrite]):
+        """Write records and raise when any write fails."""
+        results = await self._submit_record_writes(writes)
+        for result in results:
+            if not result.ok:
+                raise RuntimeError(result.error or result.code or "record write failed")
+        return results
+
+    async def _submit_record_writes(
+        self,
+        writes: Sequence[RecordWrite],
+    ) -> Sequence[WriteResult]:
+        """Write records and validate only positional result shape."""
+        if not isinstance(self.target_provider, SupportsRecordWrites):
+            raise TypeError(
+                f"Target provider '{self.target_provider.NAMESPACE}' must support "
+                "record writes"
+            )
+        results = await self.target_provider.write_records(writes)
+        if len(results) != len(writes):
+            raise ValueError(
+                f"Target provider '{self.target_provider.NAMESPACE}' returned "
+                f"{len(results)} write results for {len(writes)} writes"
+            )
+        return results
+
+    async def _fetch_target_record(self, target_ref, target_kind: str) -> Record | None:
+        """Fetch the existing target record for planning."""
+        if not isinstance(self.target_provider, SupportsRecordReads):
+            return None
+        page = await self.target_provider.fetch_records(
+            RecordQuery(
+                refs=(target_ref,),
+                native_record_kinds=(target_kind,),
+                fields=frozenset(self._sync_fields),
+                limit=1,
+            )
         )
-        return blocked
+        return page.items[0] if page.items else None
+
+    async def _fetch_target_records_batch(
+        self,
+        requests: Iterable[tuple[Ref, str]],
+    ) -> dict[_TargetRecordKey, Record]:
+        """Fetch existing target records grouped by native record kind."""
+        if not isinstance(self.target_provider, SupportsRecordReads):
+            return {}
+
+        grouped: dict[str, dict[RefKey, Ref]] = {}
+        for target_ref, target_kind in requests:
+            grouped.setdefault(target_kind, {}).setdefault(
+                ref_to_key(target_ref),
+                target_ref,
+            )
+
+        records: dict[_TargetRecordKey, Record] = {}
+        for target_kind, refs_by_key in grouped.items():
+            refs = tuple(refs_by_key.values())
+            if not refs:
+                continue
+            page = await self.target_provider.fetch_records(
+                RecordQuery(
+                    refs=refs,
+                    native_record_kinds=(target_kind,),
+                    fields=frozenset(self._sync_fields),
+                    limit=len(refs),
+                )
+            )
+            for record in page.items:
+                record_key = ref_to_key(record.ref)
+                records[_TargetRecordKey(record_key, record.kind)] = record
+                records.setdefault(_TargetRecordKey(record_key, target_kind), record)
+        return records
+
+    def _fetch_pinned_fields_batch(
+        self,
+        requests: Iterable[tuple[Ref, str]],
+    ) -> dict[_TargetRecordKey, list[RecordField]]:
+        """Fetch pinned fields for target records in one page-level query."""
+        wanted = [
+            _TargetRecordKey(ref_to_key(target_ref), record_kind)
+            for target_ref, record_kind in requests
+        ]
+        if not wanted:
+            return {}
+
+        with db() as ctx:
+            pins = (
+                ctx.session.query(Pin)
+                .filter(
+                    Pin.profile_name == self.profile_name,
+                    Pin.target_namespace == self.target_provider.NAMESPACE,
+                )
+                .all()
+            )
+
+        scored_fields: dict[_TargetRecordKey, tuple[int, list[RecordField]]] = {}
+        for pin in pins:
+            pin_ref = ref_from_payload(pin.target_ref)
+            if pin_ref is None:
+                continue
+            pin_ref_key = ref_to_key(pin_ref)
+            pin_fields: list[RecordField] = []
+            for field in pin.fields or []:
+                try:
+                    pin_fields.append(RecordField(field))
+                except ValueError:
+                    continue
+            for target_key in wanted:
+                if pin_ref_key == target_key.ref:
+                    ref_score = 2
+                elif pin_ref_key.covers(target_key.ref):
+                    ref_score = 1
+                else:
+                    continue
+                existing = scored_fields.get(target_key)
+                if existing is None or ref_score > existing[0]:
+                    scored_fields[target_key] = (ref_score, pin_fields)
+        return {key: fields for key, (_, fields) in scored_fields.items()}
+
+    def _sync_label(
+        self,
+        *,
+        item: ScanItem,
+        target_ref: Ref | None = None,
+        source_descriptor: ExternalId | None = None,
+        target_descriptor: ExternalId | None = None,
+        mappings: Sequence[AnibridgeMapping] = (),
+    ) -> SyncLabel:
+        """Return formatted source/target context for sync logs."""
+        source = self._node_log_label(
+            namespace=self.source_provider.NAMESPACE,
+            ref=item.node.ref,
+            title=item.node.title,
+            descriptor=source_descriptor,
+            mappings=mappings,
+            side="source",
+        )
+        target = (
+            self._node_log_label(
+                namespace=self.target_provider.NAMESPACE,
+                ref=target_ref,
+                title=None,
+                descriptor=target_descriptor,
+                mappings=mappings,
+                side="target",
+            )
+            if target_ref is not None
+            else None
+        )
+        return SyncLabel(node_kind=item.node.kind, source=source, target=target)
 
     @staticmethod
-    def _format_value(value: Any) -> str:
-        """Format individual values for diff logging."""
-        if isinstance(value, ListStatus):
-            return value.value
-        if isinstance(value, datetime):
-            dt = (
-                value.replace(tzinfo=UTC)
-                if value.tzinfo is None
-                else value.astimezone(UTC)
-            )
-            return dt.isoformat()
-        return "None" if value is None else repr(value)
+    def _source_with_target(context: SyncLabel) -> str:
+        """Return source label plus target phrase when a target exists."""
+        if context.target is None:
+            return context.source
+        return f"{context.source} with target {context.target}"
 
-    @abstractmethod
-    async def _calculate_status(
+    @staticmethod
+    def _target_suffix(context: SyncLabel) -> str:
+        """Return target phrase suffix when a target exists."""
+        if context.target is None:
+            return ""
+        return f" with target {context.target}"
+
+    def _node_log_label(
         self,
         *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> ListStatus | None:
-        """Calculate the desired status for the list entry."""
-        ...
-
-    @abstractmethod
-    async def _calculate_user_rating(
-        self,
-        *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> int | None:
-        """Calculate the desired score for the list entry."""
-        ...
-
-    @abstractmethod
-    async def _calculate_progress(
-        self,
-        *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> int | None:
-        """Calculate the desired progress for the list entry."""
-        ...
-
-    @abstractmethod
-    async def _calculate_repeats(
-        self,
-        *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> int | None:
-        """Calculate the desired repeat count for the list entry."""
-        ...
-
-    @abstractmethod
-    async def _calculate_started_at(
-        self,
-        *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> datetime | None:
-        """Calculate the desired start date for the list entry."""
-        ...
-
-    @abstractmethod
-    async def _calculate_finished_at(
-        self,
-        *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> datetime | None:
-        """Calculate the desired completion date for the list entry."""
-        ...
-
-    @abstractmethod
-    async def _calculate_review(
-        self,
-        *,
-        item: ParentMediaT,
-        child_item: ChildMediaT,
-        grandchild_items: Sequence[GrandchildMediaT],
-        entry: ListEntry,
-        mappings: Sequence[AnibridgeDescriptorMapping] | None = None,
-    ) -> str | None:
-        """Calculate the desired review/notes for the list entry."""
-        ...
-
-    @abstractmethod
-    def _debug_log_title(
-        self, *, item: ParentMediaT, child_item: ChildMediaT | None = None
+        namespace: str,
+        ref: Ref,
+        title: str | None,
+        descriptor: ExternalId | None,
+        mappings: Sequence[AnibridgeMapping],
+        side: str,
     ) -> str:
-        """Return a debug-friendly title representation."""
-        ...
+        """Return a title/ref/mapping label for sync logs."""
+        ref_key = self._node_ref_key(namespace, ref)
+        mapping = self._mapping_log_label(
+            descriptor=descriptor,
+            mappings=mappings,
+            side=side,
+        )
+        if title:
+            return f"$$'{title} ({ref_key})'$${mapping}"
+        return f"$$'({ref_key})'$${mapping}"
 
-    @abstractmethod
-    def _debug_log_ids(
-        self,
+    @staticmethod
+    def _mapping_log_label(
         *,
-        item: ParentMediaT,
-        child_item: ChildMediaT | None,
-        entry: ListEntry | None,
-        media_key: str | None,
+        descriptor: ExternalId | None,
+        mappings: Sequence[AnibridgeMapping],
+        side: str,
     ) -> str:
-        """Return a debug-friendly identifier representation."""
-        ...
+        """Return optional mapping descriptor/range context for sync logs."""
+        if descriptor is None or not mappings:
+            return ""
+        ranges = (
+            mapping.source_key if side == "source" else mapping.target_value
+            for mapping in mappings
+        )
+        descriptors = ", ".join(
+            f"{descriptor.descriptor}/{range_value}" for range_value in ranges
+        )
+        return f" $${{{descriptors}}}$$"
+
+    @staticmethod
+    def _node_ref_key(namespace: str, ref: Ref) -> str:
+        """Return a provider ref key for sync logs."""
+        del namespace
+        if not ref.path:
+            return ref.key
+        path = "/".join(f"{step.axis}={step.value}" for step in ref.path)
+        return f"{ref.key}/{path}"

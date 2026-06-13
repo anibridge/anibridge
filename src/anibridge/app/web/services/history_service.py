@@ -16,13 +16,15 @@ from sqlalchemy.sql import select
 from sqlalchemy.sql.functions import func
 
 from anibridge.app.config.database import db
-from anibridge.app.core.sync.refs import (
+from anibridge.app.core.sync import (
+    RefKey,
     RefPayload,
+    SyncRequest,
+    SyncTrigger,
     ref_from_payload,
     ref_payload_from_json,
     ref_to_key,
 )
-from anibridge.app.core.sync.request import SyncRequest, SyncTrigger
 from anibridge.app.core.sync.stats import RecordSnapshot
 from anibridge.app.exceptions import (
     HistoryItemNotFoundError,
@@ -41,8 +43,7 @@ __all__ = ["HistoryService", "get_history_service"]
 log = get_logger(__name__)
 
 
-_RefKey = tuple[str, tuple[tuple[str, int | str], ...]]
-_PinIndexEntry = tuple[str, _RefKey, list[str]]
+_PinIndexEntry = tuple[str, RefKey, list[str]]
 
 
 class HistoryItem(msgspec.Struct):
@@ -96,12 +97,12 @@ class HistoryService:
         namespace: str,
         provider: Any,
         refs: Sequence[Ref],
-    ) -> dict[tuple[str, tuple[tuple[str, int | str], ...]], ProviderMediaMetadata]:
+    ) -> dict[RefKey, ProviderMediaMetadata]:
         """Fetch provider node metadata for history refs when supported."""
         if not refs or not isinstance(provider, SupportsNodeReads):
             return {}
 
-        deduped: dict[tuple[str, tuple[tuple[str, int | str], ...]], Ref] = {}
+        deduped: dict[RefKey, Ref] = {}
         for ref in refs:
             deduped.setdefault(ref_to_key(ref), ref)
 
@@ -111,10 +112,7 @@ class HistoryService:
                 facets=frozenset({FacetName.ARTWORK}),
             )
         )
-        metadata: dict[
-            tuple[str, tuple[tuple[str, int | str], ...]],
-            ProviderMediaMetadata,
-        ] = {}
+        metadata: dict[RefKey, ProviderMediaMetadata] = {}
         for node in page.items:
             artwork = node.facets.get(FacetName.ARTWORK)
             key = ref_to_key(node.ref)
@@ -219,7 +217,7 @@ class HistoryService:
                         continue
                     if pin_ref_key == target_ref_key:
                         ref_score = 2
-                    elif pin_ref_key[0] == target_ref_key[0] and not pin_ref_key[1]:
+                    elif pin_ref_key.covers(target_ref_key):
                         ref_score = 1
                     else:
                         continue

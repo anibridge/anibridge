@@ -36,15 +36,14 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.13.3",
     "alembic>=1.18.4",
-    "anibridge-anilist-provider>=0.2.0",
-    "anibridge-emby-provider>=0.2.0",
-    "anibridge-jellyfin-provider>=0.2.0",
-    "anibridge-library-base>=0.2.1,<1.0.0",
-    "anibridge-list-base>=0.2.0,<1.0.0",
-    "anibridge-mal-provider>=0.2.0",
-    "anibridge-plex-provider>=0.2.0",
-    "anibridge-simkl-provider>=0.1.0",
-    "anibridge-trakt-provider>=0.2.0",
+    # "anibridge-anilist-provider>=0.2.0",
+    # "anibridge-emby-provider>=0.2.0",
+    # "anibridge-jellyfin-provider>=0.2.0",
+    # "anibridge-mal-provider>=0.2.0",
+    # "anibridge-plex-provider>=0.2.0",
+    "anibridge-provider-base>=0.1.0a1",
+    # "anibridge-simkl-provider>=0.1.0",
+    # "anibridge-trakt-provider>=0.2.0",
     "anibridge-utils>=0.2.1,<1.0.0",
     "bcrypt>=5.0.0",
     "colorama>=0.4.6",
@@ -131,17 +130,16 @@ module-name = "anibridge"
 namespace = true
 
 [tool.uv.sources]
-anibridge-anilist-provider = { git = "https://github.com/anibridge/anibridge-anilist-provider.git", tag = "main" }
-anibridge-emby-provider = { git = "https://github.com/anibridge/anibridge-emby-provider.git", tag = "main" }
-anibridge-jellyfin-provider = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git", tag = "main" }
-anibridge-library-base = { git = "https://github.com/anibridge/anibridge-library-base.git", tag = "main" }
-anibridge-list-base = { git = "https://github.com/anibridge/anibridge-list-base.git", tag = "main" }
-anibridge-mal-provider = { git = "https://github.com/anibridge/anibridge-mal-provider.git", tag = "main" }
-anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-provider.git", tag = "main" }
-anibridge-simkl-provider = { git = "https://github.com/anibridge/anibridge-simkl-provider.git", tag = "main" }
-anibridge-trakt-provider = { git = "https://github.com/anibridge/anibridge-trakt-provider.git", tag = "main" }
-anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
-py-spy = { git = "https://github.com/czardoz/py-spy.git" }                                                           # Until upstream suports Python 3.14
+# anibridge-anilist-provider = { git = "https://github.com/anibridge/anibridge-anilist-provider.git", tag = "main" }
+# anibridge-emby-provider = { git = "https://github.com/anibridge/anibridge-emby-provider.git", tag = "main" }
+# anibridge-jellyfin-provider = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git", tag = "main" }
+# anibridge-mal-provider = { git = "https://github.com/anibridge/anibridge-mal-provider.git", tag = "main" }
+# anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-provider.git", tag = "main" }
+# anibridge-provider-base = { git = "https://github.com/anibridge/anibridge-provider-base.git", branch = "main" }
+# anibridge-simkl-provider = { git = "https://github.com/anibridge/anibridge-simkl-provider.git", tag = "main" }
+# anibridge-trakt-provider = { git = "https://github.com/anibridge/anibridge-trakt-provider.git", tag = "main" }
+# anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
+py-spy = { git = "https://github.com/czardoz/py-spy.git" } # Until upstream suports Python 3.14
 
 [build-system]
 requires = ["uv_build>=0.11.0,<0.12.0"]

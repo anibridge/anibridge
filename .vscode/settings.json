@@ -43,10 +43,10 @@
         "packages/anibridge-anilist-provider",
         "packages/anibridge-emby-provider",
         "packages/anibridge-jellyfin-provider",
-        "packages/anibridge-library-base",
-        "packages/anibridge-list-base",
+        "packages/anibridge-provider-base",
         "packages/anibridge-mal-provider",
         "packages/anibridge-plex-provider",
+        "packages/anibridge-trakt-provider",
         "packages/anibridge-simkl-provider",
         "packages/anibridge-utils"
     ],

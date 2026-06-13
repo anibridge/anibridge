@@ -16,7 +16,9 @@ __all__ = [
     "SyncRulesConfig",
 ]
 
-_SYNC_FIELD_NAMES: Final[tuple[str, ...]] = tuple(field.value for field in RecordField)
+_RECORD_FIELD_NAMES: Final[tuple[str, ...]] = tuple(
+    field.value for field in RecordField
+)
 
 
 class BaseStrEnum(StrEnum):
@@ -120,7 +122,7 @@ class SyncRuleTemplate(BaseModel):
             validate_sync_rule_expression(expression)
         return value
 
-    @field_validator(*_SYNC_FIELD_NAMES)
+    @field_validator(*_RECORD_FIELD_NAMES)
     @classmethod
     def validate_field_rules(
         cls,
@@ -153,16 +155,14 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
     SyncRuleTemplateId.DISABLE_DROPPED_AND_PAUSED: SyncRuleTemplate(
         description=(
             "Prevent dropped and paused computed statuses from replacing the "
-            "current list status."
+            "current target status."
         ),
         status=[
             SyncRuleDefinition.model_validate(
                 {
                     "name": "Don't sync dropped or paused status changes",
                     "if": "computed.status in (Status.DROPPED, Status.PAUSED)",
-                    "set": (
-                        "Status.ACTIVE if current.status is None else current.status"
-                    ),
+                    "set": "current.status",
                 }
             ),
         ],
@@ -175,7 +175,7 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
     SyncRuleTemplateId.PREVENT_REGRESSIONS: SyncRuleTemplate(
         description=(
             "Prevent status, progress, repeat count, and watch dates from moving "
-            "backward by keeping the current list value instead."
+            "backward by keeping the current target value instead."
         ),
         status=[
             SyncRuleDefinition.model_validate(
@@ -195,6 +195,7 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
                     "name": "Prevent regressing progress",
                     "if": (
                         "current.progress is not None and "
+                        "current.progress.current is not None and "
                         "(computed.progress is None or "
                         "computed.progress.current is None or "
                         "computed.progress.current < current.progress.current)"
@@ -269,7 +270,9 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
                 {
                     "name": "Require completed status for rating sync",
                     "if": (
-                        "status_rank(computed.status) < status_rank(Status.COMPLETED)"
+                        "max(status_rank(computed.status), "
+                        "status_rank(current.status)) < "
+                        "status_rank(Status.COMPLETED)"
                     ),
                     "set": "current.rating",
                 }
@@ -309,7 +312,7 @@ class SyncRulesConfig(BaseModel):
         """Validate reusable variable names and expressions."""
         return SyncRuleTemplate.validate_vars(value)
 
-    @field_validator(*_SYNC_FIELD_NAMES)
+    @field_validator(*_RECORD_FIELD_NAMES)
     @classmethod
     def validate_field_rules(
         cls,
@@ -332,7 +335,7 @@ class SyncRulesConfig(BaseModel):
     def field_rules(self) -> dict[str, bool | list[dict[str, Any]]]:
         """Return configured field rules as plain runtime mappings."""
         payload: dict[str, bool | list[dict[str, Any]]] = {}
-        for field_name in _SYNC_FIELD_NAMES:
+        for field_name in _RECORD_FIELD_NAMES:
             value = self._resolve_field_rules(field_name)
             if value is True:
                 continue

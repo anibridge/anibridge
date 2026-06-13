@@ -1,13 +1,13 @@
-"""Declarative sync rules for transforming computed field values."""
+"""Declarative sync rules over provider-contract records."""
 
 import ast
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
-from functools import lru_cache
+from functools import lru_cache, total_ordering
 from typing import Any
 
 import msgspec
-from anibridge.list import ListStatus
+from anibridge.provider.base import Node, Record, RecordField, Ref, State, Status
 
 __all__ = [
     "SyncRuleDecision",
@@ -17,7 +17,22 @@ __all__ = [
 ]
 
 
-_SAFE_FUNCTIONS: dict[str, Any] = {
+def status_rank(value: Any) -> int:
+    """Return a stable order for normalized provider status values."""
+    if isinstance(value, State):
+        value = value.status
+    return {
+        None: 0,
+        Status.PLANNED: 1,
+        Status.DROPPED: 2,
+        Status.PAUSED: 3,
+        Status.ACTIVE: 4,
+        Status.COMPLETED: 5,
+        Status.REPEATING: 6,
+    }.get(value, 0)
+
+
+_FUNCTIONS: dict[str, Any] = {
     "abs": abs,
     "all": all,
     "any": any,
@@ -33,20 +48,22 @@ _SAFE_FUNCTIONS: dict[str, Any] = {
     "str": str,
     "sum": sum,
     "timedelta": timedelta,
+    "status_rank": status_rank,
 }
-
-_SAFE_GLOBALS: dict[str, Any] = {
-    "ListStatus": ListStatus,
+_GLOBALS: dict[str, Any] = {
+    "Status": Status,
+    "false": False,
+    "none": None,
+    "null": None,
+    "true": True,
 }
-
-_SAFE_METHODS = {
+_METHODS = {
     "astimezone",
     "capitalize",
     "casefold",
     "date",
     "endswith",
     "format",
-    "hour",
     "isoformat",
     "join",
     "lower",
@@ -55,32 +72,13 @@ _SAFE_METHODS = {
     "rstrip",
     "split",
     "startswith",
-    "strip",
     "strftime",
-    "time",
+    "strip",
     "title",
     "upper",
 }
-
-_ALIASES = {
-    "false": False,
-    "none": None,
-    "null": None,
-    "true": True,
-}
-
-_ALLOWED_NAMES = frozenset(
-    {
-        "computed",
-        "current",
-        "ctx",
-        "vars",
-        *_SAFE_FUNCTIONS,
-        *_SAFE_GLOBALS,
-        *_ALIASES,
-    }
-)
-_ALLOWED_NODES = (
+_NAMES = frozenset({"computed", "current", "ctx", "vars", *_FUNCTIONS, *_GLOBALS})
+_NODES = (
     ast.Add,
     ast.And,
     ast.Attribute,
@@ -126,306 +124,303 @@ _ALLOWED_NODES = (
 )
 
 
-class _ContextNamespace(Mapping[str, Any]):
-    """Mapping wrapper that exposes sync context values via attribute access."""
+@total_ordering
+class _Temporal:
+    """Rule-facing temporal value with date/datetime comparison semantics."""
+
+    def __init__(self, value: date | datetime) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        other_value = self._coerce_other(other)
+        if other_value is NotImplemented:
+            return False
+        return self._pair(other_value)[0] == self._pair(other_value)[1]
+
+    def __lt__(self, other: object) -> bool:
+        other_value = self._coerce_other(other)
+        if other_value is NotImplemented:
+            return NotImplemented
+        lhs, rhs = self._pair(other_value)
+        return lhs < rhs
+
+    def __bool__(self) -> bool:
+        return bool(self.value)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.value, name)
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def _pair(self, other: date | datetime) -> tuple[date | datetime, date | datetime]:
+        if self._date_only(self.value) or self._date_only(other):
+            return self._as_date(self.value), self._as_date(other)
+        return self.value, other
+
+    @staticmethod
+    def _coerce_other(other: object) -> date | datetime | Any:
+        if isinstance(other, _Temporal):
+            return other.value
+        if isinstance(other, date | datetime):
+            return other
+        return NotImplemented
+
+    @staticmethod
+    def _date_only(value: date | datetime) -> bool:
+        return isinstance(value, date) and not isinstance(value, datetime)
+
+    @staticmethod
+    def _as_date(value: date | datetime) -> date:
+        return value.date() if isinstance(value, datetime) else value
+
+
+class _Namespace(Mapping[str, Any]):
+    """Small mapping wrapper used as the rule expression object model."""
+
+    def __init__(self, values: Mapping[str, Any], *, missing: Any = ...) -> None:
+        self._values = values
+        self._missing = missing
 
     @classmethod
-    def wrap(cls, value: Any, *, missing_value: Any = ...) -> Any:
-        """Normalize arbitrary values into the rule-engine view types."""
+    def wrap(cls, value: Any, *, missing: Any = ...) -> Any:
         if isinstance(value, cls):
             return value
         if isinstance(value, Mapping):
-            return cls(value, missing_value=missing_value)
+            return cls(value, missing=missing)
         if isinstance(value, Sequence) and not isinstance(
-            value, (str, bytes, bytearray)
+            value, str | bytes | bytearray
         ):
-            return tuple(cls.wrap(item, missing_value=missing_value) for item in value)
+            return tuple(cls.wrap(item, missing=missing) for item in value)
+        if isinstance(value, date | datetime):
+            return _Temporal(value)
         return value
 
-    def __init__(
-        self,
-        values: Mapping[str, Any],
-        *,
-        missing_value: Any = ...,
-    ) -> None:
-        """Store raw context values for attribute and key access."""
-        self._values = values
-        self._missing_value = missing_value
-
     def __getitem__(self, key: str) -> Any:
-        """Return a normalized context value for the provided key."""
         if key not in self._values:
-            if self._missing_value is ...:
+            if self._missing is ...:
                 raise KeyError(key)
-            return self._missing_value
-        return self._normalize(self._values[key])
+            return self._missing
+        return self.wrap(self._values[key], missing=self._missing)
 
     def __iter__(self):
-        """Iterate over available context keys."""
         return iter(self._values)
 
     def __len__(self) -> int:
-        """Return the number of stored context values."""
         return len(self._values)
 
+    def __getattribute__(self, key: str) -> Any:
+        if not key.startswith("_"):
+            try:
+                values = object.__getattribute__(self, "_values")
+            except AttributeError:
+                pass
+            else:
+                if key in values:
+                    return self[key]
+        return object.__getattribute__(self, key)
+
     def __getattr__(self, key: str) -> Any:
-        """Expose mapping keys as attributes for expression evaluation."""
         try:
             return self[key]
         except KeyError as exc:
             raise AttributeError(key) from exc
 
-    def _normalize(self, value: Any) -> Any:
-        """Normalize values before exposing them to expressions."""
-        return self.wrap(value, missing_value=self._missing_value)
+
+def _unwrap(value: Any) -> Any:
+    return value.value if isinstance(value, _Temporal) else value
 
 
-def _build_rule_mapping_view(mapping: Any) -> _ContextNamespace:
-    """Build the stable mapping view exposed under `ctx.mappings`."""
-    return _ContextNamespace(
-        {
-            "source": mapping.source,
-            "target": mapping.target,
-            "mappings": tuple(
-                _ContextNamespace(
-                    {
-                        "source_range": _ContextNamespace(
-                            {
-                                "start": item.source_range.start,
-                                "end": item.source_range.end,
-                                "length": item.source_range.length,
-                            },
-                            missing_value=None,
-                        ),
-                        "target_ranges": tuple(
-                            _ContextNamespace(
-                                {
-                                    "start": range_.start,
-                                    "end": range_.end,
-                                    "length": range_.length,
-                                },
-                                missing_value=None,
-                            )
-                            for range_ in item.target_ranges
-                        ),
-                        "target_ratio": item.target_ratio,
-                        "source_weight": item.source_weight,
-                        "target_weight": item.target_weight,
-                    },
-                    missing_value=None,
-                )
-                for item in mapping.mappings
-            ),
-        },
-        missing_value=None,
+def _field_values(values: Mapping[RecordField, Any]) -> _Namespace:
+    return _Namespace(
+        {field.value: value for field, value in values.items()},
+        missing=None,
     )
 
 
-def _build_rule_media_view(
-    media: Any,
-    required_media_fields: frozenset[str],
-) -> _ContextNamespace:
-    """Build the stable media view exposed under `ctx` namespaces."""
-    payload = {
-        "key": getattr(media, "key", None),
-        "title": getattr(media, "title", None),
-        "media_kind": getattr(getattr(media, "media_kind", None), "value", None),
-    }
+def _ref_context(ref: Ref) -> _Namespace:
+    return _Namespace(
+        {
+            "key": ref.key,
+            "path": tuple(
+                _Namespace({"axis": step.axis, "value": step.value}, missing=None)
+                for step in ref.path
+            ),
+            "is_anchor": ref.is_anchor,
+        },
+        missing=None,
+    )
 
-    if "on_watching" in required_media_fields:
-        payload["on_watching"] = getattr(media, "on_watching", None)
-    if "on_watchlist" in required_media_fields:
-        payload["on_watchlist"] = getattr(media, "on_watchlist", None)
-    if "user_rating" in required_media_fields:
-        payload["user_rating"] = getattr(media, "user_rating", None)
-    if "view_count" in required_media_fields:
-        payload["view_count"] = getattr(media, "view_count", None)
-    if "index" in required_media_fields and hasattr(media, "index"):
-        payload["index"] = getattr(media, "index", None)
-    if "season_index" in required_media_fields and hasattr(media, "season_index"):
-        payload["season_index"] = getattr(media, "season_index", None)
 
-    return _ContextNamespace(payload, missing_value=None)
+def _record_context(record: Record | None) -> _Namespace:
+    if record is None:
+        return _Namespace({}, missing=None)
+    return _Namespace(
+        {
+            "ref": _ref_context(record.ref),
+            "kind": record.kind,
+            "key": record.key,
+            "url": record.url,
+            "updated_at": record.updated_at,
+            "revision": record.revision,
+            "ids": tuple(external_id.descriptor for external_id in record.ids),
+            "values": {field.value: value for field, value in record.values.items()},
+            "metadata": record.metadata,
+        },
+        missing=None,
+    )
+
+
+def _node_context(node: Node) -> _Namespace:
+    return _Namespace(
+        {
+            "ref": _ref_context(node.ref),
+            "kind": node.kind,
+            "title": node.title,
+            "url": node.url,
+            "labels": node.labels,
+            "flags": tuple(flag.value for flag in node.flags),
+        },
+        missing=None,
+    )
 
 
 def build_rule_context(
     *,
-    item: Any,
-    child_item: Any,
-    grandchild_items: Sequence[Any],
-    list_media_key: str | None,
-    required_media_fields: frozenset[str],
-    mappings: Sequence[Any] | None = None,
-) -> _ContextNamespace:
-    """Build the rule-facing `ctx` namespace for expression evaluation."""
-    return _ContextNamespace(
+    node: Node,
+    source_record: Record,
+    target_record: Record | None,
+    target_ref: Ref,
+) -> _Namespace:
+    """Build the `ctx` namespace exposed to sync rule expressions."""
+    return _Namespace(
         {
-            "list_media_key": list_media_key,
-            "item": _build_rule_media_view(item, required_media_fields),
-            "child": _build_rule_media_view(child_item, required_media_fields),
-            "grandchildren": tuple(
-                _build_rule_media_view(grandchild, required_media_fields)
-                for grandchild in grandchild_items
-            ),
-            "mappings": tuple(
-                _build_rule_mapping_view(mapping) for mapping in (mappings or ())
-            ),
+            "node": _node_context(node),
+            "source": _record_context(source_record),
+            "target": _record_context(target_record),
+            "target_ref": _ref_context(target_ref),
         },
-        missing_value=None,
+        missing=None,
     )
 
 
 class SyncRuleDecision(msgspec.Struct, frozen=True):
-    """Outcome of evaluating declarative rules for a single field."""
+    """Decision for one synced record field."""
 
     allowed: bool
     value: Any
     reason: str | None = None
 
 
-def _validate_expression_ast(expression: str) -> ast.Expression:
-    """Validate and return the AST for a rule expression."""
-    try:
-        tree = ast.parse(expression, mode="eval")
-    except SyntaxError as exc:
-        raise ValueError(f"invalid sync rule expression: {expression!r}") from exc
+class _Validator(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.bound_names: set[str] = set()
 
-    # Collect names bound by comprehensions so they are valid in Load contexts
-    # inside the comprehension body (e.g. `g` in `[g.index for g in ...]`).
-    comprehension_bound: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.comprehension) and isinstance(node.target, ast.Name):
-            comprehension_bound.add(node.target.id)
-    allowed_names = _ALLOWED_NAMES | comprehension_bound
-
-    for node in ast.walk(tree):
-        if not isinstance(node, _ALLOWED_NODES):
+    def generic_visit(self, node: ast.AST) -> None:
+        if not isinstance(node, _NODES):
             raise ValueError(
                 "sync rule expression contains unsupported syntax: "
                 f"{type(node).__name__}"
             )
+        super().generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
         if (
-            isinstance(node, ast.Name)
-            and not isinstance(node.ctx, ast.Store)
-            and node.id not in allowed_names
+            isinstance(node.ctx, ast.Load)
+            and node.id not in _NAMES
+            and node.id not in self.bound_names
         ):
             raise ValueError(
                 f"sync rule expression references unknown name: {node.id!r}"
             )
-        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
-            raise ValueError("sync rule expressions cannot access private attributes")
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id not in _SAFE_FUNCTIONS:
-                    raise ValueError(
-                        "sync rule expression calls unsupported function: "
-                        f"{node.func.id!r}"
-                    )
-            elif isinstance(node.func, ast.Attribute):
-                if (
-                    node.func.attr.startswith("_")
-                    or node.func.attr not in _SAFE_METHODS
-                ):
-                    raise ValueError(
-                        "sync rule expression calls an unsupported method: "
-                        f"{node.func.attr!r}"
-                    )
-            else:
-                raise ValueError(
-                    "sync rule expression contains an unsupported call target"
-                )
-            for keyword in node.keywords:
-                if keyword.arg is None:
-                    raise ValueError(
-                        "sync rule expressions do not support unpacked "
-                        "keyword arguments"
-                    )
 
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr.startswith("_"):
+            raise ValueError("sync rule expressions cannot access private attributes")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name):
+            if node.func.id not in _FUNCTIONS:
+                raise ValueError(
+                    f"sync rule expression calls unsupported function: {node.func.id!r}"
+                )
+        elif isinstance(node.func, ast.Attribute):
+            if node.func.attr.startswith("_") or node.func.attr not in _METHODS:
+                raise ValueError(
+                    "sync rule expression calls an unsupported method: "
+                    f"{node.func.attr!r}"
+                )
+        else:
+            raise ValueError("sync rule expression contains an unsupported call target")
+        if any(keyword.arg is None for keyword in node.keywords):
+            raise ValueError(
+                "sync rule expressions do not support unpacked keyword arguments"
+            )
+        self.generic_visit(node)
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension_expression(node.elt, node.generators)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension_expression(node.elt, node.generators)
+
+    def visit_comprehension(self, node: ast.comprehension) -> None:
+        names = set(_target_names(node.target))
+        self.visit(node.iter)
+        self.bound_names.update(names)
+        self.visit(node.target)
+        for condition in node.ifs:
+            self.visit(condition)
+
+    def _visit_comprehension_expression(
+        self,
+        element: ast.AST,
+        generators: list[ast.comprehension],
+    ) -> None:
+        previous = set(self.bound_names)
+        for generator in generators:
+            self.visit(generator)
+        self.visit(element)
+        self.bound_names = previous
+
+
+def _target_names(node: ast.AST) -> tuple[str, ...]:
+    if isinstance(node, ast.Name):
+        return (node.id,)
+    if isinstance(node, ast.Tuple | ast.List):
+        return tuple(name for item in node.elts for name in _target_names(item))
+    return ()
+
+
+def _validate_expression_ast(expression: str) -> ast.Expression:
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"invalid sync rule expression: {expression!r}") from exc
+    _Validator().visit(tree)
     return tree
 
 
-@lru_cache(maxsize=256)
-def _compile_expression(expression: str):
-    """Compile a validated rule expression for reuse."""
-    tree = _validate_expression_ast(expression)
-    return compile(tree, "<sync-rule>", "eval")
+@lru_cache(maxsize=512)
+def _compile(expression: str):
+    return compile(_validate_expression_ast(expression), "<sync-rule>", "eval")
 
 
 def validate_sync_rule_expression(expression: str) -> None:
-    """Validate that a sync rule expression uses the supported subset.
-
-    Args:
-        expression (str): Expression string to validate.
-
-    Returns:
-        None: This function raises if the expression is unsupported.
-    """
-    _compile_expression(expression)
+    """Raise ValueError when a sync rule expression is not supported."""
+    _compile(expression)
 
 
-def _evaluate_expression(expression: str, environment: Mapping[str, Any]) -> Any:
-    """Evaluate a previously validated rule expression."""
-    return eval(
-        _compile_expression(expression), {"__builtins__": {}}, dict(environment)
-    )
-
-
-def _ctx_field_refs_for_expression(expression: str) -> set[str]:
-    """Return media field names referenced under `ctx` in one expression."""
-    tree = _validate_expression_ast(expression)
-    refs: set[str] = set()
-
-    def _attribute_chain(node: ast.AST) -> list[str] | None:
-        parts: list[str] = []
-        current = node
-        while isinstance(current, ast.Attribute):
-            parts.append(current.attr)
-            current = current.value
-        if isinstance(current, ast.Subscript):
-            current = current.value
-            while isinstance(current, ast.Attribute):
-                parts.append(current.attr)
-                current = current.value
-        if not isinstance(current, ast.Name):
-            return None
-        parts.append(current.id)
-        parts.reverse()
-        return parts
-
-    # Collect comprehension variables that iterate over ctx media namespaces so
-    # that attribute accesses like `g.index` (where `g` iterates over
-    # `ctx.grandchildren`) are treated as `ctx.grandchildren.index` refs.
-    comprehension_vars: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.ListComp, ast.GeneratorExp)):
-            continue
-        for gen in node.generators:
-            chain = _attribute_chain(gen.iter)
-            if not chain or len(chain) < 2 or chain[0] != "ctx":
-                continue
-            if chain[1] not in {"item", "child", "grandchildren"}:
-                continue
-            if isinstance(gen.target, ast.Name):
-                comprehension_vars.add(gen.target.id)
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Attribute):
-            continue
-        chain = _attribute_chain(node)
-        if not chain or len(chain) < 2:
-            continue
-        if chain[0] == "ctx" and len(chain) >= 3:
-            if chain[1] not in {"item", "child", "grandchildren"}:
-                continue
-            refs.add(chain[2])
-        elif chain[0] in comprehension_vars:
-            refs.add(chain[1])
-
-    return refs
+def _eval(expression: str, environment: Mapping[str, Any]) -> Any:
+    return eval(_compile(expression), {"__builtins__": {}}, dict(environment))
 
 
 class SyncRuleEngine:
-    """Apply declarative sync rules to computed field values."""
+    """Evaluate declarative sync rules for provider-contract record fields."""
 
     def __init__(
         self,
@@ -433,182 +428,90 @@ class SyncRuleEngine:
         variables: Mapping[str, str] | None = None,
         field_rules: Mapping[str, bool | Sequence[Mapping[str, Any]]] | None = None,
     ) -> None:
-        """Store reusable expressions and per-field decision lists.
-
-        Args:
-            variables (Mapping[str, str] | None): Named expressions exposed under
-                `vars` in rule evaluation.
-            field_rules (Mapping[str, bool | Sequence[Mapping[str, Any]]] | None):
-                Runtime rule payload keyed by sync field name.
-
-        Returns:
-            None: This initializer stores rule state for later evaluation.
-        """
+        """Store reusable variables and per-field rule decisions."""
         self._variables = dict(variables or {})
-        self._field_rules = dict(field_rules or {})
-        self._ctx_fields_by_field: dict[str, frozenset[str]] = {}
-        for field_name in self._field_rules:
-            self._ctx_fields_by_field[field_name] = self._collect_ctx_fields(field_name)
+        self._field_rules = {
+            RecordField(field): rules
+            for field, rules in dict(field_rules or {}).items()
+        }
 
-    def has_field_rules(self, field_name: str) -> bool:
-        """Return whether a field has an ordered decision list configured.
-
-        Args:
-            field_name (str): Sync field name to inspect.
-
-        Returns:
-            bool: True when the field has a list of declarative rules.
-        """
-        return isinstance(
-            self._field_rules.get(field_name), Sequence
-        ) and not isinstance(self._field_rules.get(field_name), (str, bytes))
-
-    def is_disabled(self, field_name: str) -> bool:
-        """Return whether a field is explicitly disabled by declarative rules.
-
-        Args:
-            field_name (str): Sync field name to inspect.
-
-        Returns:
-            bool: True when the field is disabled by a `false` rule value.
-        """
-        return self._field_rules.get(field_name) is False
-
-    def context_media_fields(self, field_name: str) -> frozenset[str]:
-        """Return the media fields needed for `ctx` when evaluating a field."""
-        return self._ctx_fields_by_field.get(field_name, frozenset())
+    def is_disabled(self, field: RecordField) -> bool:
+        """Return whether a field is explicitly blocked by configuration."""
+        return self._field_rules.get(field) is False
 
     def evaluate_field(
         self,
         *,
-        field_name: str,
-        current_values: Mapping[str, Any],
-        computed_values: Mapping[str, Any],
-        rule_context: Mapping[str, Any] | _ContextNamespace | None = None,
+        field: RecordField,
+        current_values: Mapping[RecordField, Any],
+        computed_values: Mapping[RecordField, Any],
+        rule_context: Mapping[str, Any] | _Namespace | None = None,
     ) -> SyncRuleDecision:
-        """Resolve one field using first-match wins with default fallback.
+        """Return the first matching decision for a field."""
+        rules = self._field_rules.get(field, True)
+        current_value = current_values.get(field)
+        computed_value = computed_values.get(field)
 
-        Args:
-            field_name (str): Sync field name being evaluated.
-            current_values (Mapping[str, Any]): Current list-entry field values.
-            computed_values (Mapping[str, Any]): Newly computed field values before
-                declarative overrides.
-            rule_context (Mapping[str, Any] | _ContextNamespace | None): Sync
-                metadata exposed under `ctx` for rule expressions.
-
-        Returns:
-            SyncRuleDecision: Decision describing whether the field may sync and
-                which value should be applied.
-        """
-        rules = self._field_rules.get(field_name)
-        computed_value = computed_values.get(field_name)
-        current_value = current_values.get(field_name)
-        if rules is None:
-            return SyncRuleDecision(allowed=True, value=computed_value)
         if rules is True:
-            return SyncRuleDecision(allowed=True, value=computed_value)
+            return SyncRuleDecision(True, computed_value)
         if rules is False:
-            return SyncRuleDecision(
-                allowed=False, value=current_value, reason="disabled"
-            )
+            return SyncRuleDecision(False, current_value, "disabled")
 
-        environment = self._build_environment(
+        environment = self._environment(
             current_values=current_values,
             computed_values=computed_values,
             rule_context=rule_context,
         )
         for index, rule in enumerate(rules, start=1):
             condition = rule.get("if")
-            if condition is not None and not bool(
-                _evaluate_expression(str(condition), environment)
-            ):
+            if condition is not None and not bool(_eval(str(condition), environment)):
                 continue
 
-            if "set" not in rule:
-                raise ValueError(
-                    f"sync rule {index} for field {field_name!r} is missing "
-                    "required 'set'"
-                )
-            value = self._resolve_set_value(field_name, rule["set"], environment)
+            value = self._resolve(field, rule["set"], environment)
+            name = str(rule.get("name") or f"rule_{index}")
+            return SyncRuleDecision(True, value, name)
 
-            rule_name = str(rule.get("name") or f"rule_{index}")
-            return SyncRuleDecision(allowed=True, value=value, reason=rule_name)
+        return SyncRuleDecision(True, computed_value, "default")
 
-        return SyncRuleDecision(allowed=True, value=computed_value, reason="default")
-
-    def _collect_ctx_fields(self, field_name: str) -> frozenset[str]:
-        """Collect `ctx` media fields required by rules and shared variables."""
-        rules = self._field_rules.get(field_name)
-        if not isinstance(rules, Sequence) or isinstance(rules, (str, bytes)):
-            return frozenset()
-
-        refs: set[str] = set()
-        for expression in self._variables.values():
-            refs.update(_ctx_field_refs_for_expression(expression))
-
-        for rule in rules:
-            condition = rule.get("if")
-            if condition is not None:
-                refs.update(_ctx_field_refs_for_expression(str(condition)))
-            set_value = rule.get("set")
-            if isinstance(set_value, str):
-                refs.update(_ctx_field_refs_for_expression(set_value))
-
-        return frozenset(refs)
-
-    def _build_environment(
+    def _environment(
         self,
         *,
-        current_values: Mapping[str, Any],
-        computed_values: Mapping[str, Any],
-        rule_context: Mapping[str, Any] | _ContextNamespace | None = None,
+        current_values: Mapping[RecordField, Any],
+        computed_values: Mapping[RecordField, Any],
+        rule_context: Mapping[str, Any] | _Namespace | None,
     ) -> dict[str, Any]:
-        """Build the evaluation environment for expressions."""
-        current = _ContextNamespace(current_values, missing_value=None)
-        computed = _ContextNamespace(computed_values, missing_value=None)
-        ctx = _ContextNamespace.wrap(
-            rule_context if rule_context is not None else {},
-            missing_value=None,
-        )
+        base = {
+            **_FUNCTIONS,
+            **_GLOBALS,
+            "current": _field_values(current_values),
+            "computed": _field_values(computed_values),
+            "ctx": _Namespace.wrap(rule_context or {}, missing=None),
+        }
         variables: dict[str, Any] = {}
-        base_environment: dict[str, Any] = {
-            **_SAFE_FUNCTIONS,
-            **_SAFE_GLOBALS,
-            **_ALIASES,
-            "current": current,
-            "computed": computed,
-            "ctx": ctx,
-        }
-
         for name, expression in self._variables.items():
-            variables[name] = _evaluate_expression(
+            variables[name] = _eval(
                 expression,
-                {
-                    **base_environment,
-                    "vars": _ContextNamespace(variables),
-                },
+                {**base, "vars": _Namespace(variables, missing=None)},
             )
+        return {**base, "vars": _Namespace(variables, missing=None)}
 
-        return {
-            **base_environment,
-            "vars": _ContextNamespace(variables),
-        }
-
-    def _resolve_set_value(
+    def _resolve(
         self,
-        field_name: str,
+        field: RecordField,
         raw_value: Any,
         environment: Mapping[str, Any],
     ) -> Any:
-        """Resolve a rule's set payload into a final field value."""
         value = (
-            _evaluate_expression(raw_value, environment)
-            if isinstance(raw_value, str)
-            else raw_value
+            _eval(raw_value, environment) if isinstance(raw_value, str) else raw_value
         )
-        if field_name != "status" or value is None or isinstance(value, ListStatus):
+        value = _unwrap(value)
+        if (
+            field != RecordField.STATUS
+            or value is None
+            or isinstance(value, Status | State)
+        ):
             return value
         raise ValueError(
-            "sync rule for status must return a ListStatus or null, got "
-            f"{type(value).__name__}"
+            "sync rule for status must return a Status, State, or null; "
+            f"got {type(value).__name__}"
         )

@@ -37,15 +37,7 @@ class HtpasswdFile:
 
     @classmethod
     def from_file(cls, path: Path) -> HtpasswdFile:
-        """Initializes and loads an htpasswd file.
-
-        Args:
-            path: The path to the htpasswd file.
-
-        Raises:
-            OSError: If the file cannot be read.
-            ValueError: If the file is malformed.
-        """
+        """Initializes and loads an htpasswd file."""
         try:
             content = path.read_text("utf-8")
         except FileNotFoundError:
@@ -53,15 +45,7 @@ class HtpasswdFile:
         return cls(content)
 
     def check_password(self, username: str, password: str) -> bool:
-        """Checks if a username and password combination is valid.
-
-        Args:
-            username: The username to check.
-            password: The password to check.
-
-        Returns:
-            True if the password is valid, False otherwise.
-        """
+        """Checks if a username and password combination is valid."""
         pwhash = self.users.get(username)
         if pwhash is None:
             return False

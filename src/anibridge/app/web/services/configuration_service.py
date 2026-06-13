@@ -269,9 +269,5 @@ class ConfigurationService:
 
 @cache
 def get_configuration_service() -> ConfigurationService:
-    """Get the singleton ConfigurationService instance.
-
-    Returns:
-        ConfigurationService: The configuration service instance.
-    """
+    """Get the singleton ConfigurationService instance."""
     return ConfigurationService()

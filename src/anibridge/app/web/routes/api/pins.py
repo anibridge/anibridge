@@ -147,16 +147,7 @@ async def get_pin(
     media_key: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
-    """Retrieve pin configuration for a specific list entry.
-
-    Args:
-        profile (str): Profile name.
-        media_key (str): Media key.
-        with_media (bool): When True, include provider metadata.
-
-    Returns:
-        PinEntry: Pin configuration.
-    """
+    """Retrieve pin configuration for a specific target anchor ref."""
     service = get_pin_service()
     entry = await service.get_pin(profile, media_key, with_media=with_media)
     if not entry:
@@ -171,15 +162,8 @@ async def upsert_pin(
     media_key: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
-    """Create or update pin fields for a media item.
-
-    Args:
-        data (UpdatePinRequest): Pin update request payload.
-        profile (str): Profile name.
-        media_key (str): Media key.
-        with_media (bool): When True, include provider metadata.
-    """
-    allowed_fields = {field.value for field in SyncField}
+    """Create or update pin fields for a media item."""
+    allowed_fields = {field.value for field in RecordField}
     normalized_fields: list[str] = []
     for raw_field in data.fields:
         value = str(raw_field).strip().lower()
@@ -211,15 +195,7 @@ def delete_pin(
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
 ) -> OkResponse:
-    """Delete pin configuration for an list entry.
-
-    Args:
-        profile (str): Profile name.
-        media_key (str): Media key.
-
-    Returns:
-        OkResponse: Confirmation of successful deletion.
-    """
+    """Delete pin configuration for a target anchor ref."""
     get_pin_service().delete_pin(profile, media_key)
     return OkResponse()
 

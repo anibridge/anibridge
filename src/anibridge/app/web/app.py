@@ -51,14 +51,7 @@ _ROOT_RELATIVE_URL_RE = re.compile(r'((?:href|src)=["\']|import\(")/')
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None]:
-    """Application lifespan context manager.
-
-    Args:
-        app (Litestar): The Litestar application instance.
-
-    Returns:
-        AsyncGenerator: The application lifespan context manager.
-    """
+    """Application lifespan context manager."""
     scheduler: SchedulerClient | None = getattr(app.state, "scheduler", None)
     if scheduler is None:
         log.info("No scheduler passed; external lifecycle management expected")
@@ -100,14 +93,13 @@ def litestar_domain_exception_handler(
     request: LitestarRequest, exc: Exception
 ) -> LitestarResponse[dict[str, str]]:
     """Handle AniBridge errors inside the Litestar shell."""
-    status_code = getattr(exc.__class__, "status_code", 500)
     return LitestarResponse(
         content={
             "error": exc.__class__.__name__,
             "detail": str(exc) or exc.__class__.__doc__ or "",
             "path": request.url.path,
         },
-        status_code=status_code,
+        status_code=exc.status_code if isinstance(exc, AnibridgeError) else 500,
     )
 
 
@@ -186,14 +178,7 @@ async def serve_spa(
 
 
 def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
-    """Create the Litestar application.
-
-    Args:
-        scheduler (SchedulerClient | None): The scheduler client instance.
-
-    Returns:
-        Litestar: The created Litestar application.
-    """
+    """Create the Litestar application."""
     config = get_config()
     middleware: list[ASGIMiddleware | DefineMiddleware] = []
     compression_config = CompressionConfig(backend="gzip")
@@ -267,5 +252,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
 
     if scheduler:
         app.state.scheduler = scheduler
+    else:
+        app.state.scheduler = None
 
     return app

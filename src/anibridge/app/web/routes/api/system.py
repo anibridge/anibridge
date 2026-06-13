@@ -382,11 +382,7 @@ class RestartResponse(msgspec.Struct):
 
 @get(path="/settings", sync_to_thread=True)
 def api_settings() -> SettingsResponse:
-    """Return the current application configuration as JSON.
-
-    Returns:
-        SettingsResponse: The serialized configuration.
-    """
+    """Return the current application configuration as JSON."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         return SettingsResponse(global_config={}, profiles=[])
@@ -404,15 +400,7 @@ def api_settings() -> SettingsResponse:
 
 @get(path="/about")
 async def api_about() -> AboutResponse:
-    """Get runtime metadata.
-
-    Returns:
-        AboutResponse: The runtime metadata.
-
-    Raises:
-        SchedulerUnavailableError: If scheduler status cannot be retrieved.
-        AnibridgeError: Any domain error raised by underlying components.
-    """
+    """Get runtime metadata."""
     scheduler = get_app_state().scheduler
     status: dict[str, Any] = {}
     scheduler_runtime_metrics: dict[str, Any] = {}
@@ -527,24 +515,13 @@ async def api_about() -> AboutResponse:
 
 @get(path="/meta", sync_to_thread=True)
 def meta() -> MetaResponse:
-    """Application metadata (version, git hash).
-
-    Returns:
-        MetaResponse: The application metadata.
-    """
+    """Application metadata (version, git hash)."""
     return MetaResponse(version=__version__, git_hash=__git_hash__)
 
 
 @post(path="/restart", status_code=202, sync_to_thread=True)
 def api_restart() -> RestartResponse:
-    """Request a graceful scheduler shutdown and process restart.
-
-    Returns:
-        RestartResponse: Accepted restart request status.
-
-    Raises:
-        SchedulerUnavailableError: If scheduler is unavailable.
-    """
+    """Request a graceful scheduler shutdown and process restart."""
     require_config_api_access()
     app_state = get_app_state()
     scheduler = app_state.scheduler

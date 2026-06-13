@@ -9,11 +9,7 @@ __all__ = ["get_docker_status", "get_git_hash", "get_pyproject_version"]
 
 
 def get_pyproject_version() -> str:
-    """Get the AniBridge's version from the pyproject.toml file.
-
-    Returns:
-        str: AniBridge's version
-    """
+    """Get the AniBridge's version from the pyproject.toml file."""
     try:
         return importlib.metadata.version("anibridge")
     except importlib.metadata.PackageNotFoundError:
@@ -21,11 +17,7 @@ def get_pyproject_version() -> str:
 
 
 def get_git_hash() -> str:
-    """Get the git commit hash of the AniBridge repository.
-
-    Returns:
-        str: AniBridge's current commit hash
-    """
+    """Get the git commit hash of the AniBridge repository."""
     try:
         git_dir_path = PROJECT_ROOT / ".git"
         if not git_dir_path.exists() or not git_dir_path.is_dir():
@@ -61,10 +53,6 @@ def get_git_hash() -> str:
 
 
 def get_docker_status() -> bool:
-    """Check if AniBridge is running inside a Docker container.
-
-    Returns:
-        bool: True if running inside a Docker container, False otherwise
-    """
+    """Check if AniBridge is running inside a Docker container."""
     dockerenv_path = Path("/.dockerenv")
     return dockerenv_path.exists() and dockerenv_path.is_file()

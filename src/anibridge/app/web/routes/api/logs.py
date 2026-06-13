@@ -116,11 +116,7 @@ def _list_log_files() -> list[Path]:
 
 @get(path="/files", sync_to_thread=True)
 def list_log_files() -> list[LogFileModel]:
-    """Return metadata about available log files.
-
-    Returns:
-        list[LogFileModel]: Log file metadata sorted by most recent first.
-    """
+    """Return metadata about available log files."""
     files = _list_log_files()
     res: list[LogFileModel] = []
 
@@ -145,15 +141,7 @@ def list_log_files() -> list[LogFileModel]:
 
 
 def _safe_resolve(name: str) -> Path:
-    """Resolve a user-supplied file name safely within LOG_DIR.
-
-    Args:
-        name (str): The file name to resolve.
-
-    Raises:
-        InvalidLogFileNameError: If the file name is invalid or attempts traversal.
-        LogFileNotFoundError: If the file does not exist.
-    """
+    """Resolve a user-supplied file name safely within LOG_DIR."""
     if "/" in name or ".." in name:
         raise InvalidLogFileNameError("Invalid log file name")
 
@@ -170,16 +158,7 @@ def _safe_resolve(name: str) -> Path:
 
 
 def _tail_lines(path: Path, max_lines: int) -> list[str]:
-    """Return up to the last max_lines of the file efficiently.
-
-    Args:
-        path (Path): The path to the log file.
-        max_lines (int): The maximum number of lines to return. If 0, return all lines.
-
-    Returns:
-        list[str]: The last max_lines lines of the file (oldest first). If
-                   max_lines == 0, return all lines.
-    """
+    """Return up to the last max_lines of the file efficiently."""
     if max_lines < 0:
         return []
 
@@ -219,19 +198,7 @@ def get_log_file(
     name: Annotated[str, PathParameter()],
     lines: Annotated[int, QueryParameter()] = 500,
 ) -> list[LogEntryModel]:
-    """Return the last N lines of a log file parsed into JSON entries.
-
-    Args:
-        name (str): File name (basename) of the log file.
-        lines (int): Maximum number of lines to return (tail). Default 500.
-
-    Returns:
-        list[LogEntryModel]: Ordered list (oldest first) of parsed log entries.
-
-    Raises:
-        InvalidLogFileNameError: If the file name is invalid.
-        LogFileNotFoundError: If the requested log file does not exist.
-    """
+    """Return the last N lines of a log file parsed into JSON entries."""
     path = _safe_resolve(name)
     raw_lines = _tail_lines(path, lines)
     res: list[LogEntryModel] = []

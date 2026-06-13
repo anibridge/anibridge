@@ -285,14 +285,7 @@ class MappingOverridesService:
         return entries
 
     async def get_mapping_detail(self, descriptor: str) -> dict[str, Any]:
-        """Fetch mapping detail with layered upstream/custom targets.
-
-        Args:
-            descriptor (str): The mapping descriptor to retrieve.
-
-        Returns:
-            dict[str, Any]: The mapping detail data structure.
-        """
+        """Fetch mapping detail with layered upstream/custom targets."""
         parsed = parse_mapping_descriptor(descriptor)
         provider, entry_id, scope = parsed
         descriptor_str = descriptor_key(parsed)
@@ -403,15 +396,7 @@ class MappingOverridesService:
         descriptor: str | None,
         targets: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
-        """Persist overrides for a descriptor and trigger DB sync.
-
-        Args:
-            descriptor (str | None): The mapping descriptor to override.
-            targets (list[dict[str, Any]] | None): Target mapping override payloads.
-
-        Returns:
-            dict[str, Any]: The updated mapping detail after saving.
-        """
+        """Persist overrides for a descriptor and trigger DB sync."""
         if descriptor is None:
             raise MissingDescriptorError("descriptor is required")
 
@@ -450,9 +435,5 @@ class MappingOverridesService:
 
 @cache
 def get_mapping_overrides_service() -> MappingOverridesService:
-    """Return a singleton mapping overrides service instance.
-
-    Returns:
-        MappingOverridesService: The singleton service instance.
-    """
+    """Return a singleton mapping overrides service instance."""
     return MappingOverridesService()

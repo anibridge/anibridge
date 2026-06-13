@@ -323,11 +323,7 @@ for spec in _QUERY_FIELDS:
 
 @cache
 def get_query_field_specs() -> list[QueryFieldSpec]:
-    """Return the query field specifications.
-
-    Returns:
-        list[QueryFieldSpec]: All available query field specifications.
-    """
+    """Return the query field specifications."""
     # Collect dynamic `source.provider` and `target.provider` values from the database.
     with db() as ctx:
         stmt = (
@@ -352,9 +348,5 @@ def get_query_field_specs() -> list[QueryFieldSpec]:
 
 
 def get_query_field_map() -> Mapping[str, QueryFieldSpec]:
-    """Return a mapping of lowercase key/aliases to field specs.
-
-    Returns:
-        Mapping[str, QueryFieldSpec]: Mapping of field keys and aliases to specs.
-    """
+    """Return a mapping of lowercase key/aliases to field specs."""
     return dict(_FIELD_MAP)

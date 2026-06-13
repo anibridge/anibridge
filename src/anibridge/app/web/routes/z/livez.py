@@ -23,11 +23,7 @@ class LivezResponse(msgspec.Struct):
 
 @get(path=["/livez", "/healthz"], include_in_schema=False)
 async def livez() -> LivezResponse:
-    """Liveness check endpoint.
-
-    Returns:
-        LivezResponse: Always returns status "ok" if the application is running.
-    """
+    """Liveness check endpoint."""
     return LivezResponse()
 
 

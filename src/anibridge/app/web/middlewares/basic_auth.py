@@ -53,15 +53,7 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
         self._htpasswd_mtime_ns: int | None = None
 
     def _validate_plain(self, username: str, password: str) -> bool:
-        """Validate plain username and password credentials.
-
-        Args:
-            username (str): The provided username.
-            password (str): The provided password.
-
-        Returns:
-            bool: True if credentials are valid, False otherwise.
-        """
+        """Validate plain username and password credentials."""
         username_match = (
             secrets.compare_digest(username, self.username)
             if self.username is not None
@@ -107,15 +99,7 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
         return self._htpasswd
 
     def _validate_htpasswd(self, username: str, password: str) -> bool:
-        """Validate credentials against an htpasswd file.
-
-        Args:
-            username (str): The provided username.
-            password (str): The provided password.
-
-        Returns:
-            bool: True if credentials are valid, False otherwise.
-        """
+        """Validate credentials against an htpasswd file."""
         htpasswd = self._load_htpasswd()
         return htpasswd.check_password(username, password) if htpasswd else False
 

@@ -72,25 +72,7 @@ async def get_history(
     library_namespace: Annotated[str | None, QueryParameter()] = None,
     list_namespace: Annotated[str | None, QueryParameter()] = None,
 ) -> GetHistoryResponse:
-    """Get paginated timeline for profile.
-
-    Args:
-        profile (str): The profile name.
-        limit (int): Maximum number of items to return.
-        before_id (int | None): Cursor for loading older items.
-        after_id (int | None): Cursor for loading newer items.
-        include_stats (bool): Include grouped outcome stats when true.
-        outcome (str | None): Filter by outcome.
-        library_namespace (str | None): Filter by library provider namespace.
-        list_namespace (str | None): Filter by list provider namespace.
-
-    Returns:
-        GetHistoryResponse: The paginated history response.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile is unknown.
-    """
+    """Get paginated timeline for profile."""
     return await get_history_service().get_page(
         profile=profile,
         limit=limit,
@@ -108,18 +90,7 @@ async def delete_history(
     profile: Annotated[str, PathParameter()],
     item_id: Annotated[int, PathParameter()],
 ) -> OkResponse:
-    """Delete a history item.
-
-    Args:
-        profile (str): The profile name.
-        item_id (int): The ID of the history item to delete.
-
-    Returns:
-        OkResponse: The response indicating success.
-
-    Raises:
-        HistoryItemNotFoundError: If the specified item does not exist.
-    """
+    """Delete a history item."""
     await get_history_service().delete_item(profile, item_id)
     return OkResponse()
 
@@ -152,21 +123,7 @@ async def retry_history(
     profile: Annotated[str, PathParameter()],
     item_id: Annotated[int, PathParameter()],
 ) -> RetryResponse:
-    """Retry a failed or missing history item.
-
-    Args:
-        profile (str): The profile name.
-        item_id (int): The ID of the history item to retry.
-
-    Returns:
-        RetryResponse: The response indicating success.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile is unknown.
-        HistoryItemNotFoundError: If the specified item does not exist.
-        HistoryPermissionError: If the user does not have permission to retry the item.
-    """
+    """Retry a failed or missing history item."""
     await get_history_service().retry_item(profile, item_id)
     return RetryResponse()
 

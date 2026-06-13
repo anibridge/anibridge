@@ -42,14 +42,7 @@ class GlobalSyncCoordinator:
         work: Callable[[], Awaitable[None]],
         timeout_: float | None = None,
     ) -> None:
-        """Execute maintenance work with exclusive access against profile syncs.
-
-        Args:
-            work: Async callable to execute under the maintenance lock.
-            timeout_: Maximum seconds the work may run before being cancelled.
-                `None` means no limit.  When exceeded the work coroutine is
-                cancelled, the lock is released, and `TimeoutError` is raised.
-        """
+        """Execute maintenance work with exclusive access against profile syncs."""
         self._maintenance_waiting += 1
         try:
             await self._wait_for(

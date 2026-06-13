@@ -35,14 +35,7 @@ class MappingsClient:
     _MAX_INCLUDE_CONCURRENCY: ClassVar[int] = 8
 
     def __init__(self, data_path: Path, upstream_url: str | None) -> None:
-        """Initialize the MappingsClient with the data path.
-
-        Args:
-            data_path (Path): Path to the data directory for storing mappings and cache
-                              files.
-            upstream_url (str | None): URL to the upstream mappings source JSON or YAML
-                                      file. If None, no upstream mappings will be used.
-        """
+        """Initialize the MappingsClient with the data path."""
         self.data_path = data_path
         self.upstream_url = upstream_url
         self._loaded_sources: set[str] = set()
@@ -73,32 +66,15 @@ class MappingsClient:
         self._content_hash = md5()
 
     async def __aenter__(self) -> MappingsClient:
-        """Context manager enter method.
-
-        Returns:
-            MappingsClient: The initialized mappings client instance.
-        """
+        """Context manager enter method."""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit method.
-
-        Args:
-            exc_type: Exception type if an exception occurred.
-            exc_val: Exception value if an exception occurred.
-            exc_tb: Traceback object if an exception occurred.
-        """
+        """Context manager exit method."""
         await self.close()
 
     def _is_file(self, src: str) -> bool:
-        """Check if the source is a file.
-
-        Args:
-            src (str): Source to check
-
-        Returns:
-            bool: True if the source is a file, False otherwise
-        """
+        """Check if the source is a file."""
         try:
             parsed = Path(src)
         except Exception:
@@ -106,14 +82,7 @@ class MappingsClient:
         return parsed.is_file()
 
     def _is_url(self, src: str) -> bool:
-        """Check if the source is a URL.
-
-        Args:
-            src (str): Source to check
-
-        Returns:
-            bool: True if the source is a URL, False otherwise
-        """
+        """Check if the source is a URL."""
         parsed = urlparse(src)
         return bool(parsed.scheme) and bool(parsed.netloc)
 
@@ -195,15 +164,7 @@ class MappingsClient:
         return merged
 
     def _resolve_path(self, include_path: str, parent_path: str) -> str:
-        """Resolve a path relative to the parent path.
-
-        Args:
-            include_path (str): Path to resolve
-            parent_path (str): Parent path to resolve against
-
-        Returns:
-            str: Resolved path
-        """
+        """Resolve a path relative to the parent path."""
         is_url = self._is_url(include_path)
         is_file = self._is_file(include_path)
         is_parent_url = self._is_url(str(parent_path))
@@ -226,17 +187,7 @@ class MappingsClient:
     async def _load_includes(
         self, includes: list[str], loaded_chain: set[str], parent: str
     ) -> AnimapDict:
-        """Load mappings from included files or URLs.
-
-        Args:
-            includes (list[str]): List of file paths or URLs to include
-            loaded_chain (set[str]): Set of already loaded includes to prevent circular
-                                     includes
-            parent (str): Parent path or URL to resolve relative paths against
-
-        Returns:
-            AnimapDict: Merged mappings from all included files
-        """
+        """Load mappings from included files or URLs."""
         mappings: dict[str, dict[str, Any]] = {}
         semaphore = asyncio.Semaphore(self._MAX_INCLUDE_CONCURRENCY)
 
@@ -338,16 +289,7 @@ class MappingsClient:
     async def _load_mappings(
         self, src: str, loaded_chain: set[str] | None = None
     ) -> AnimapDict:
-        """Load mappings from a file or URL.
-
-        Args:
-            src (str): Path to the file or URL to load mappings from
-            loaded_chain (set[str]): Set of already loaded includes to prevent
-                                     circular includes (default: empty set)
-
-        Returns:
-            AnimapDict: Mappings loaded from the file or URL
-        """
+        """Load mappings from a file or URL."""
         if loaded_chain is None:
             loaded_chain = set()
         loaded_chain = loaded_chain | {src}
@@ -382,9 +324,6 @@ class MappingsClient:
         Loads custom mappings from local files (if they exist) and default mappings
         from the CDN URL, then merges them with custom mappings taking precedence.
         Filters out any keys starting with '$' from the final result.
-
-        Returns:
-            AnimapDict: Merged mappings with system keys removed
         """
         self._loaded_sources = set()
         self._provenance = {}
@@ -449,12 +388,6 @@ class MappingsClient:
         This resets internal provenance and loaded-source tracking so callers can
         inspect the raw payload and provenance produced by that specific source
         (plus any of its includes).
-
-        Args:
-            src (str): File path or URL to load.
-
-        Returns:
-            AnimapDict: Parsed mapping payload, or an empty dict on failure.
         """
         self._loaded_sources = set()
         self._provenance = {}

@@ -47,14 +47,7 @@ class BridgeClient:
         global_config: AnibridgeConfig,
         shared_animap_client: AnimapClient,
     ) -> None:
-        """Initialize the bridge client for a single profile.
-
-        Args:
-            profile_name (str): The name of the profile.
-            profile_config (AnibridgeProfileConfig): The profile-specific configuration.
-            global_config (AnibridgeConfig): The global application configuration.
-            shared_animap_client (AnimapClient): Shared Animap client instance.
-        """
+        """Initialize the bridge client for one profile."""
         self.profile_name = profile_name
         self.profile_config = profile_config
         self.global_config = global_config
@@ -281,17 +274,8 @@ class BridgeClient:
     async def sync(
         self, poll: bool = False, library_keys: Sequence[str] | None = None
     ) -> None:
-        """Run a synchronization cycle for the configured profile.
-
-        Args:
-            poll (bool): Whether to poll for updates.
-            library_keys (Sequence[str] | None): Sequence of library media keys to
-                restrict the sync scope.
-        """
-        library_user = self.library_provider.user()
-        list_user = self.list_provider.user()
-        library_label = library_user.title if library_user else "unknown"
-        list_label = list_user.title if list_user else "unknown"
+        """Run a synchronization cycle for the configured profile."""
+        request = request or SyncRequest()
 
         log.info(
             "[%s] Starting %s%ssync for library user $$'%s'$$ %s list user $$'%s'$$",

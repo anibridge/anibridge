@@ -85,11 +85,7 @@ class ReadyzResponse(msgspec.Struct):
 
 @get(path="/readyz", include_in_schema=False)
 async def readyz() -> Response[ReadyzResponse]:
-    """Readiness check endpoint.
-
-    Returns:
-        ReadyzResponse: Readiness status and profile summary.
-    """
+    """Readiness check endpoint."""
     scheduler = get_app_state().scheduler
     if scheduler is None:
         return Response(

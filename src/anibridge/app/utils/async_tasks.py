@@ -7,6 +7,8 @@ from anibridge.utils.tasks import schedule_task as schedule_shared_task
 
 from anibridge.app.logging import get_logger
 
+__all__ = ["schedule_task"]
+
 log = get_logger(__name__)
 
 
@@ -16,10 +18,5 @@ def _on_task_error(name: str, _: Exception) -> None:
 
 
 def schedule_task(coro: Coroutine[Any, Any, Any], *, name: str) -> None:
-    """Schedule a coroutine in the background with error logging.
-
-    Args:
-        coro (Coroutine[Any, Any, Any]): Coroutine to execute.
-        name (str): Task name for logging context.
-    """
+    """Schedule a coroutine in the background with error logging."""
     schedule_shared_task(coro, name=name, on_error=_on_task_error)

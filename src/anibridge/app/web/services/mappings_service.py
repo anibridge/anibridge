@@ -961,21 +961,7 @@ class MappingsService:
         with_anilist: bool = False,
         cancel_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
-        """List mapping entries with pagination and optional booru-like query.
-
-        Args:
-            page (int): The page number (1-based).
-            per_page (int): The number of items per page.
-            q (str | None): The booru-like query string.
-            custom_only (bool): Whether to include only custom mappings.
-            with_anilist (bool): Whether to attach AniList metadata.
-            cancel_check (Callable[[], Awaitable[bool]] | None): Optional async
-                function to check for cancellation.
-
-        Returns:
-            tuple[list[dict[str, Any]], int]: A tuple of the list of mapping items
-                and the total number of matching items.
-        """
+        """List mapping entries with pagination and optional booru-like query."""
 
         async def ensure_not_cancelled() -> None:
             task = asyncio.current_task()
@@ -1072,14 +1058,7 @@ class MappingsService:
         return [msgspec.to_builtins(item) for item in items], total
 
     async def get_mapping(self, descriptor: str) -> dict[str, Any]:
-        """Return a single mapping entry by descriptor.
-
-        Args:
-            descriptor (str): The mapping descriptor to fetch.
-
-        Returns:
-            dict[str, Any]: The mapping item.
-        """
+        """Return a single mapping entry by descriptor."""
         parsed = parse_mapping_descriptor(descriptor)
         provider, entry_id, scope = parsed
         with db() as ctx:
@@ -1109,9 +1088,5 @@ class MappingsService:
 
 @cache
 def get_mappings_service() -> MappingsService:
-    """Return a singleton mappings service instance.
-
-    Returns:
-        MappingsService: The singleton service instance.
-    """
+    """Return a singleton mappings service instance."""
     return MappingsService()

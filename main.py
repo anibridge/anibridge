@@ -24,9 +24,6 @@ async def run() -> int:
     """Main application entry point.
 
     Initializes and runs the application scheduler until shutdown.
-
-    Returns:
-        int: Exit code (0 for success, 1 for error)
     """
     app_scheduler: SchedulerClient | None = None
     server_task: asyncio.Task | None = None
@@ -195,12 +192,6 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point.
 
     Initializes the application and runs the main event loop.
-
-    Args:
-        argv (list[str] | None): Command-line arguments (unused).
-
-    Returns:
-        int: Exit code (0 for success, 1 for error)
     """
     try:
         return asyncio.run(run())

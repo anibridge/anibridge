@@ -30,22 +30,13 @@ class AnilistClient:
     API_URL: ClassVar[str] = "https://graphql.anilist.co"
 
     def __init__(self, anilist_token: str | None) -> None:
-        """Initialize the AniList client.
-
-        Args:
-            anilist_token (str | None): Authentication token for AniList API; if None,
-                client operates in public mode for read-only queries.
-        """
+        """Initialize the AniList client."""
         self.anilist_token = anilist_token
         self._session: aiohttp.ClientSession | None = None
         self.offline_anilist_entries: LRUDict[int, Media] = LRUDict(maxsize=1024)
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create the aiohttp session.
-
-        Returns:
-            aiohttp.ClientSession: The active session for making HTTP requests.
-        """
+        """Get or create the aiohttp session."""
         if self._session is None or self._session.closed:
             headers = {
                 "Accept": "application/json",
@@ -70,11 +61,7 @@ class AnilistClient:
 
     @cache
     def _get_genres_and_tags(self) -> tuple[Iterable[str], Iterable[str]]:
-        """Get the list of AniList genres and tags.
-
-        Returns:
-            Iterable[str]: List of AniList genres and tags.
-        """
+        """Get the list of AniList genres and tags."""
         query = """
         query {
             genres: GenreCollection
@@ -91,21 +78,13 @@ class AnilistClient:
 
     @property
     def available_genres(self) -> Iterable[str]:
-        """Get the list of available AniList genres.
-
-        Returns:
-            Iterable[str]: List of AniList genres.
-        """
+        """Get the list of available AniList genres."""
         genres, _ = self._get_genres_and_tags()
         return genres
 
     @property
     def available_tags(self) -> Iterable[str]:
-        """Get the list of available AniList tags.
-
-        Returns:
-            Iterable[str]: List of AniList tags.
-        """
+        """Get the list of available AniList tags."""
         _, tags = self._get_genres_and_tags()
         return tags
 
@@ -117,18 +96,7 @@ class AnilistClient:
         max_results: int = 1000,
         per_page: int = 50,
     ) -> list[int]:
-        """Execute a filtered media search returning AniList identifiers only.
-
-        Args:
-            filters (dict[str, Any]): GraphQL-compatible media arguments. Keys must
-                match AniList's `Media` query arguments (e.g. `search` or
-                `duration_greater`).
-            max_results (int): Maximum number of identifiers to return.
-            per_page (int): AniList page size to request per API call.
-
-        Returns:
-            list[int]: Ordered AniList identifiers matching the filter.
-        """
+        """Execute a filtered media search returning AniList identifiers only."""
         if not filters:
             raise AniListFilterError("AniList search requires at least one filter")
 
@@ -294,15 +262,6 @@ class AnilistClient:
         Attempts to fetch anime data from local cache first, falling back to
         batch API requests for entries not found in cache. Processes requests
         in batches of 10 to avoid overwhelming the API.
-
-        Args:
-            anilist_ids (list[int]): The AniList IDs of the anime to retrieve.
-
-        Returns:
-            list[Media]: Detailed information about the requested anime.
-
-        Raises:
-            aiohttp.ClientError: If the API request fails.
         """
         BATCH_SIZE = 50
 

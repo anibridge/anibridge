@@ -22,12 +22,7 @@ async def provider_webhook(
     provider_namespace: Annotated[str, PathParameter()],
     request: Request,
 ) -> None:
-    """Receive Provider webhook and trigger a targeted sync.
-
-    Args:
-        provider_namespace (str): The provider namespace from the URL path.
-        request (Request): The incoming HTTP request.
-    """
+    """Receive Provider webhook and trigger a targeted sync."""
     log.info("Received webhook for provider '%s'", provider_namespace)
     scheduler = get_app_state().scheduler
     if not scheduler:

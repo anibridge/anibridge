@@ -43,13 +43,6 @@ class AnibridgeDb:
 
         Performs database setup including directory creation, model registration,
         engine creation, session initialization, and migration execution.
-
-        Args:
-            data_path (Path): Directory where the database should be stored
-
-        Raises:
-            PermissionError: If the process lacks write permissions for data_path
-            ValueError: If data_path exists but is a file instead of a directory
         """
         self.data_path = data_path
         self.db_path = data_path / "anibridge.db"
@@ -75,15 +68,7 @@ class AnibridgeDb:
         self._do_migrations()
 
     def _setup_db(self) -> Engine:
-        """Creates and initializes the SQLite database.
-
-        Returns:
-            Engine: Configured SQLAlchemy engine instance
-
-        Raises:
-            PermissionError: If unable to create the data directory
-            ValueError: If data_path exists but is a file instead of a directory
-        """
+        """Creates and initializes the SQLite database."""
         if not self.data_path.exists():
             log.debug(
                 "Creating data directory at $$'%s'$$",
@@ -147,10 +132,6 @@ class AnibridgeDb:
 
         Configures Alembic to use the SQLite database and runs all pending
         migrations to bring the schema up to the latest version.
-
-        Raises:
-            AlembicError: If migration execution fails
-            FileNotFoundError: If Alembic migration scripts are not found
         """
         import sqlite3
 
@@ -250,8 +231,5 @@ def db() -> AnibridgeDb:
     """Get the singleton instance of the AnibridgeDb.
 
     Uses LRU caching to ensure only one instance is created and reused.
-
-    Returns:
-        AnibridgeDb: The singleton database manager instance
     """
     return AnibridgeDb(get_config().data_path)

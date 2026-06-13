@@ -212,11 +212,7 @@ class StatusResponse(msgspec.Struct):
 
 @get(path="")
 async def status() -> StatusResponse:
-    """Get the status of the application.
-
-    Returns:
-        StatusResponse: The serialized application status.
-    """
+    """Get the status of the application."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         return StatusResponse(profiles={}, scheduler=None)

@@ -72,19 +72,7 @@ async def sync_profile(
     profile: Annotated[str, PathParameter()],
     poll: Annotated[bool, QueryParameter()] = False,
 ) -> OkResponse:
-    """Trigger a sync for a specific profile.
-
-    Args:
-        profile (str): The profile to sync.
-        poll (bool): Whether to poll for updates.
-
-    Returns:
-        OkResponse: The response containing the sync status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile does not exist.
-    """
+    """Trigger a sync for a specific profile."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
@@ -102,19 +90,7 @@ async def sync_profile(
 
 @post(path="/profile/{profile:str}/reinitialize")
 async def reinitialize_profile(profile: Annotated[str, PathParameter()]) -> OkResponse:
-    """Rebuild and restart a single profile.
-
-    Args:
-        profile (str): The profile to reinitialize.
-
-    Returns:
-        OkResponse: The response containing the reinitialization status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile does not exist.
-        SchedulerUnavailableError: If the profile fails during reinitialization.
-    """
+    """Rebuild and restart a single profile."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")

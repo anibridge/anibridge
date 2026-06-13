@@ -85,18 +85,7 @@ class BackupService:
     """Service for listing and restoring provider-managed backups."""
 
     def list_backups(self, profile: str) -> list[BackupMeta]:
-        """Enumerate available backups for a profile.
-
-        Args:
-            profile: Profile name.
-
-        Returns:
-            list[BackupMeta]: List of backup metadata, newest first.
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-        """
+        """Enumerate available backups for a profile."""
         scheduler = get_app_state().scheduler
         if not scheduler:
             raise SchedulerNotInitializedError("Scheduler not available")
@@ -162,21 +151,7 @@ class BackupService:
         return list(reversed(metas))  # Newest first
 
     def read_backup_raw(self, profile: str, filename: str) -> Any:
-        """Return the raw JSON content of a backup file.
-
-        Args:
-            profile: Profile name
-            filename: Backup filename (basename only)
-
-        Returns:
-            Any: Parsed JSON content.
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-            InvalidBackupFilenameError: If the filename is invalid.
-            BackupFileNotFoundError: If the file does not exist.
-        """
+        """Return the raw JSON content of a backup file."""
         scheduler = get_app_state().scheduler
         if not scheduler:
             raise SchedulerNotInitializedError("Scheduler not available")
@@ -205,20 +180,7 @@ class BackupService:
         return path
 
     async def restore_backup(self, profile: str, filename: str) -> None:
-        """Restore a backup file for a profile.
-
-        Args:
-            profile: Profile name
-            filename: Backup filename (basename only)
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-            SchedulerUnavailableError: If the profile failed initialization.
-            InvalidBackupFilenameError: If the filename is invalid.
-            BackupFileNotFoundError: If the file does not exist.
-            BackupParseError: If there was an error parsing or restoring the backup.
-        """
+        """Restore a backup file for a profile."""
         scheduler = get_app_state().scheduler
         if not scheduler:
             raise SchedulerNotInitializedError("Scheduler not available")
@@ -261,9 +223,5 @@ class BackupService:
 
 @cache
 def get_backup_service() -> BackupService:
-    """Get the singleton BackupService instance.
-
-    Returns:
-        BackupService: The singleton BackupService instance.
-    """
+    """Get the singleton BackupService instance."""
     return BackupService()

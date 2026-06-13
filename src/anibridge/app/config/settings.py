@@ -160,11 +160,7 @@ class WebConfig(BaseModel):
 
     @property
     def has_auth(self) -> bool:
-        """Whether web authentication is configured.
-
-        Returns:
-            bool: True if authentication is configured, False otherwise.
-        """
+        """Whether web authentication is configured."""
         return bool(
             (
                 self.basic_auth.username
@@ -255,14 +251,7 @@ class AnibridgeProfileConfig(BaseModel):
 
     @property
     def parent(self) -> AnibridgeConfig:
-        """Get the parent multi-config instance.
-
-        Returns:
-            AnibridgeConfig: Parent configuration.
-
-        Raises:
-            ProfileConfigError: If this config is not part of a multi-config.
-        """
+        """Get the parent multi-config instance."""
         if not self._parent:
             raise ProfileConfigError(
                 "This configuration is not part of a multi-config instance"
@@ -384,23 +373,12 @@ class AnibridgeConfig(BaseSettings):
 
     @cached_property
     def data_path(self) -> Path:
-        """Get the data path for AniBridge.
-
-        Returns:
-            Path: The data path resolved from the environment or default location.
-        """
+        """Get the data path for AniBridge."""
         return Path(os.getenv("AB_DATA_PATH", "./data")).resolve()
 
     @model_validator(mode="after")
     def validate_global_config(self) -> AnibridgeConfig:
-        """Validates global configuration settings.
-
-        Returns:
-            AnibridgeConfig: Self with validated settings.
-
-        Raises:
-            ValueError: If required global settings are missing or invalid.
-        """
+        """Validates global configuration settings."""
         if (
             not self.model_fields_set
             and not self.profiles
@@ -446,17 +424,7 @@ class AnibridgeConfig(BaseSettings):
         return self
 
     def get_profile(self, name: str) -> AnibridgeProfileConfig:
-        """Get a specific profile configuration.
-
-        Args:
-            name: Profile name
-
-        Returns:
-            AnibridgeProfileConfig: The profile configuration.
-
-        Raises:
-            ProfileNotFoundError: If profile doesn't exist.
-        """
+        """Get a specific profile configuration."""
         if name not in self.profiles:
             raise ProfileNotFoundError(
                 f"Profile '{name}' not found. Available profiles: "
@@ -465,11 +433,7 @@ class AnibridgeConfig(BaseSettings):
         return self.profiles[name]
 
     def __str__(self) -> str:
-        """Creates a human-readable representation of the configuration.
-
-        Returns:
-            str: Configuration summary with profile count and global settings.
-        """
+        """Creates a human-readable representation of the configuration."""
         profile_count = len(self.profiles)
         profile_names = ", ".join(self.profiles.keys())
 
@@ -574,11 +538,7 @@ _ConfigDumper.add_multi_representer(BaseStrEnum, _repr_enum)
 
 
 def find_yaml_config_file() -> Path:
-    """Find the YAML configuration file in the data path.
-
-    Returns:
-        Path: The path to an existing YAML configuration file or the default location.
-    """
+    """Find the YAML configuration file in the data path."""
     data_path = Path(os.getenv("AB_DATA_PATH", "./data")).resolve()
 
     for ext in ("yaml", "yml"):
@@ -647,10 +607,6 @@ def _ensure_default_config_file() -> Path:
 
 @cache
 def get_config() -> AnibridgeConfig:
-    """Get the singleton instance of AnibridgeConfig.
-
-    Returns:
-        AnibridgeConfig: The singleton configuration instance.
-    """
+    """Get the singleton instance of `AnibridgeConfig`."""
     _ensure_default_config_file()
     return AnibridgeConfig()

@@ -96,24 +96,8 @@ def _collect_class_overrides(config: AnibridgeConfig) -> set[str]:
     return classes
 
 
-def _ensure_default_provider(namespace: str) -> None:
-    """Import the default provider class for a namespace if not yet loaded."""
-    class_path = _DEFAULT_LIBRARY_CLASSES_BY_NS.get(
-        namespace
-    ) or _DEFAULT_LIST_CLASSES_BY_NS.get(namespace)
-    if class_path and class_path not in _LOADED_CLASSES:
-        _register_classes((class_path,))
-
-
-def build_library_provider(profile: AnibridgeProfileConfig) -> LibraryProvider:
-    """Instantiate the configured library provider for the profile.
-
-    Args:
-        profile (AnibridgeProfileConfig): The profile configuration.
-
-    Returns:
-        LibraryProvider: The instantiated library provider.
-    """
+    """Instantiate provider endpoint for a profile."""
+    _register_classes(_DEFAULT_PROVIDER_CLASSES)
     _register_classes(_collect_class_overrides(profile.parent))
     _ensure_default_provider(profile.library_provider)
 
@@ -136,32 +120,5 @@ def build_library_provider(profile: AnibridgeProfileConfig) -> LibraryProvider:
         ) from exc
 
 
-def build_list_provider(profile: AnibridgeProfileConfig) -> ListProvider:
-    """Instantiate the configured list provider for the profile.
-
-    Args:
-        profile (AnibridgeProfileConfig): The profile configuration.
-
-    Returns:
-        ListProvider: The instantiated list provider.
-    """
-    _register_classes(_collect_class_overrides(profile.parent))
-    _ensure_default_provider(profile.list_provider)
-
-    namespace = profile.list_provider
-    config = profile.list_provider_config.get(namespace)
-    try:
-        provider_cls = list_registry.get(namespace)
-    except LookupError:
-        logger = log
-    else:
-        logger = get_logger(provider_cls.__module__)
-
-    try:
-        return list_registry.create(namespace, logger=logger, config=config)
-    except LookupError as exc:
-        raise ProfileConfigError(
-            f"No list provider registered for namespace '{namespace}'. "
-            "Ensure the provider package is installed and listed under "
-            "provider_classes."
-        ) from exc
+    """Instantiate the configured source and target providers for a profile."""
+    source_provider = build_provider(

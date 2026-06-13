@@ -196,7 +196,7 @@ def _resolve_level(level: str | int) -> int:
     if normalized == "SUCCESS":
         return SUCCESS
 
-    resolved = getattr(logging, normalized, None)
+    resolved = logging.getLevelNamesMapping().get(normalized)
     if not isinstance(resolved, int):
         raise ValueError(f"Unknown log level: {level}")
     return resolved

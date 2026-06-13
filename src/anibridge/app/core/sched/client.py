@@ -35,11 +35,7 @@ class SchedulerClient:
     """
 
     def __init__(self, global_config: AnibridgeConfig):
-        """Initialize the application scheduler.
-
-        Args:
-            global_config (AnibridgeConfig): Global application configuration.
-        """
+        """Initialize the application scheduler."""
         self.global_config = global_config
         self.shared_animap_client = AnimapClient(
             global_config.data_path, global_config.mappings_url
@@ -63,19 +59,14 @@ class SchedulerClient:
         return self._running
 
     def get_next_database_sync_at(self) -> datetime | None:
-        """Get the next scheduled database sync time in UTC.
-
-        Returns:
-            datetime | None: The next scheduled database sync time in UTC, or None if
-                the scheduler is not running.
-        """
+        """Return the next scheduled database sync time in UTC."""
         if not self._running:
             return None
         now = datetime.now(UTC)
         return self._get_next_1am_utc(now)
 
     async def initialize(self) -> None:
-        """Initialize the application scheduler and all components."""
+        """Initialize the mapping database and all configured bridge clients."""
         log.info("Initializing application scheduler")
 
         log.info("Initializing anime mapping database")
@@ -275,17 +266,7 @@ class SchedulerClient:
         library_keys: Sequence[str] | None = None,
         source: str = "manual",
     ) -> None:
-        """Trigger a sync for a single profile.
-
-        Args:
-            profile_name (str): Specific profile to sync.
-            poll (bool): Whether to use polling mode for the sync.
-            library_keys (Sequence[str] | None): Optional library media keys to scope.
-            source (str): Origin of the trigger request.
-
-        Raises:
-            ProfileNotFoundError: If the specified profile does not exist.
-        """
+        """Trigger a sync for a single profile."""
         if profile_name not in self.bridge_clients:
             raise ProfileNotFoundError(f"Profile '{profile_name}' not found")
 
@@ -478,14 +459,7 @@ class SchedulerClient:
         release_memory()
 
     def _get_next_1am_utc(self, now: datetime) -> datetime:
-        """Calculate the next 1:00 AM UTC, handling DST transitions properly.
-
-        Args:
-            now: Current UTC datetime
-
-        Returns:
-            datetime: Next 1:00 AM UTC
-        """
+        """Calculate the next 1:00 AM UTC."""
         candidate = now.replace(hour=1, minute=0, second=0, microsecond=0)
         if now >= candidate:
             candidate += timedelta(days=1)

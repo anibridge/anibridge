@@ -176,9 +176,8 @@ class ConfigUpdateResponse(msgspec.Struct):
 
 def require_config_api_access() -> None:
     """Ensure configuration API access is not exposed without explicit opt-in."""
-    web_config = getattr(globals().get("runtime_config"), "web", None)
-    if web_config is None:
-        web_config = get_config().web
+    config = globals().get("runtime_config") or get_config()
+    web_config = config.web
     if web_config.has_auth or web_config.allow_config_without_auth:
         return
 
@@ -194,11 +193,7 @@ def require_config_api_access() -> None:
 
 @get(path="", sync_to_thread=True)
 def get_configuration() -> ConfigDocumentResponse:
-    """Return the current configuration as raw YAML text.
-
-    Returns:
-        ConfigDocumentResponse: The configuration document details.
-    """
+    """Return the current configuration as raw YAML text."""
     require_config_api_access()
     try:
         payload = get_configuration_service().load_document_text()
@@ -222,14 +217,7 @@ def get_configuration() -> ConfigDocumentResponse:
 async def update_configuration(
     data: Annotated[ConfigDocumentUpdateRequest, Body()],
 ) -> ConfigUpdateResponse:
-    """Persist the provided configuration document.
-
-    Args:
-        data (ConfigDocumentUpdateRequest): The configuration update request.
-
-    Returns:
-        ConfigUpdateResponse: The result of the update operation.
-    """
+    """Persist the provided configuration document."""
     require_config_api_access()
     try:
         (
@@ -273,14 +261,7 @@ async def update_configuration(
 async def update_configuration_structured(
     data: Annotated[ConfigStructuredUpdateRequest, Body()],
 ) -> ConfigUpdateResponse:
-    """Persist the provided structured configuration payload.
-
-    Args:
-        data (ConfigStructuredUpdateRequest): The structured configuration update.
-
-    Returns:
-        ConfigUpdateResponse: The result of the update operation.
-    """
+    """Persist the provided structured configuration payload."""
     require_config_api_access()
     try:
         (

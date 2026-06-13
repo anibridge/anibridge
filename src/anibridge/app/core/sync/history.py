@@ -31,15 +31,7 @@ class SyncHistoryManager:
         list_namespace: str,
         db_factory: Callable[[], Any],
     ) -> None:
-        """Initialize history persistence helpers.
-
-        Args:
-            profile_name (str): Sync profile name.
-            library_namespace (str): Library provider namespace.
-            list_namespace (str): List provider namespace.
-            db_factory (Callable[[], Any]): Factory returning a database context
-                manager.
-        """
+        """Initialize history persistence helpers."""
         self.profile_name = profile_name
         self.library_namespace = library_namespace
         self.list_namespace = list_namespace
@@ -64,28 +56,7 @@ class SyncHistoryManager:
         info: Mapping[str, Any] | None = None,
         ephemeral: bool = False,
     ) -> None:
-        """Persist a sync history record.
-
-        Args:
-            item (LibraryEntry): Parent library item being synchronized.
-            child_item (LibraryEntry | None): Child item associated with the sync
-                attempt.
-            grandchild_items (Sequence[LibraryEntry] | None): Grandchild items
-                included in the sync attempt.
-            snapshots (tuple[EntrySnapshot | None, EntrySnapshot | None]): Before
-                and after entry snapshots.
-            list_media_key (str | None): Resolved list media key.
-            mappings (Sequence[AnibridgeDescriptorMapping] | None): Source-to-target
-                descriptor mappings used to resolve the target entry.
-            outcome (SyncOutcome): Final synchronization outcome.
-            error_message (str | None): Optional failure message.
-            info (Mapping[str, Any] | None): Additional diagnostic metadata.
-            ephemeral (bool): Whether this history record should be treated as
-                temporary and subject to cleanup.
-
-        Returns:
-            None: This method writes history rows and updates failure records.
-        """
+        """Persist a sync history record."""
         before_snapshot, after_snapshot = snapshots
         before_state = msgspec.to_builtins(before_snapshot) if before_snapshot else None
         after_state = msgspec.to_builtins(after_snapshot) if after_snapshot else None

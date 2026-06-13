@@ -111,19 +111,18 @@ class SyncItem(msgspec.Struct, frozen=True):
         ref: Ref,
         part: Part | None,
     ) -> str:
-        """Generate a label for a record.
-
-        Uses the format <namespace:key/path "title">, with optional part title.
-        """
-        label = node.title or record.ref.key
-        if part and part.title:
-            label = f"{label} - {part.title}"
+        """Generate a label for a provider ref coordinate."""
         # Quote and truncate label
+        label = node.title or record.ref.key
         label = label.replace("\\", "\\\\").replace('"', '\\"')
-        label = label[:50] + "…" if len(label) > 50 else label
+        label = label[:35] + "…" if len(label) > 35 else label
 
-        path = "".join(f"/{step.axis}={step.value}" for step in ref.path)
-        return f'<{namespace}:{ref.key}{path} "{label}">'
+        segments = [
+            (node.kind, ref.key),
+            *((step.axis, step.value) for step in ref.path),
+        ]
+        path = "/".join(f"{axis}={value}" for axis, value in segments)
+        return f'<{namespace}:{path} "{label}">'
 
     @staticmethod
     def coverage_parts(node: Node, record: Record) -> tuple[Part, ...]:
@@ -149,6 +148,12 @@ class SyncItem(msgspec.Struct, frozen=True):
     def __hash__(self) -> int:
         """Hash by provider namespace and normalized ref."""
         return hash((self.namespace, self.ref))
+
+    def __eq__(self, other: object) -> bool:
+        """Compare by provider namespace and normalized ref only."""
+        if not isinstance(other, SyncItem):
+            return NotImplemented
+        return (self.namespace, self.ref) == (other.namespace, other.ref)
 
     def __repr__(self) -> str:
         """Return a readable item label for logs."""

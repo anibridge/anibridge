@@ -37,7 +37,6 @@ __all__ = [
     "AnibridgeProfileConfig",
     "LogLevel",
     "ScanMode",
-    "SyncField",
     "SyncRuleDefinition",
     "SyncRuleTemplateId",
     "SyncRulesConfig",
@@ -47,6 +46,10 @@ __all__ = [
 log = get_logger(__name__)
 
 _SCHEMA_EXTRA_BEHAVIOR_KEY = "x-anibridge-extraBehavior"
+ProviderConfigMap = dict[str, object]
+ProviderNamespaceConfigMap = dict[str, ProviderConfigMap]
+
+# TODO: backwards compatability for list/library keywords?
 
 
 class LogLevel(BaseStrEnum):
@@ -64,27 +67,6 @@ class LogLevel(BaseStrEnum):
     WARNING = "WARNING"  # Potential problems or issues
     ERROR = "ERROR"  # Error that prevented an operation
     CRITICAL = "CRITICAL"  # Error that prevents further program execution
-
-
-class SyncField(BaseStrEnum):
-    """Enumeration of list fields that can be synchronized with the list provider."""
-
-    STATUS = "status"  # Watch status (watching, completed, etc.)
-    PROGRESS = "progress"  # Number of episodes/movies watched
-    REPEATS = "repeats"  # Number of times rewatched
-    REVIEW = "review"  # User's review/comments (text)
-    USER_RATING = "user_rating"  # User's rating/score
-    STARTED_AT = "started_at"  # When the user started watching (date)
-    FINISHED_AT = "finished_at"  # When the user finished watching (date)
-
-    @classmethod
-    def field_names(cls) -> tuple[str, ...]:
-        """Get a tuple of all sync field names.
-
-        Returns:
-            tuple[str, ...]: All sync field names as strings.
-        """
-        return tuple(field.value for field in cls)
 
 
 class ScanMode(BaseStrEnum):
@@ -174,14 +156,15 @@ class WebConfig(BaseModel):
 class AnibridgeProfileConfig(BaseModel):
     """Configuration for a single AniBridge profile."""
 
-    library_provider: str = Field(
+    source_provider: str = Field(
         default="",
-        description="Namespace of the library provider to use",
+        description="Namespace of the source provider to use",
     )
-    list_provider: str = Field(
+    target_provider: str = Field(
         default="",
-        description="Namespace of the list provider to use",
+        description="Namespace of the target provider to use",
     )
+
     scan_modes: list[ScanMode] = Field(
         default_factory=lambda: [ScanMode.PERIODIC, ScanMode.POLL, ScanMode.WEBHOOK],
         description="List of enabled scan modes (periodic, poll, webhook)",
@@ -201,13 +184,6 @@ class AnibridgeProfileConfig(BaseModel):
         default=False,
         description="Allow decreasing watch progress and removing list entries",
     )
-    empty_sync: bool = Field(
-        default=False,
-        description=(
-            "When enabled, entries with no watch activity/history are synced as "
-            "planning instead of being skipped"
-        ),
-    )
     sync_rules: SyncRulesConfig = Field(
         default_factory=SyncRulesConfig,
         description=(
@@ -225,26 +201,20 @@ class AnibridgeProfileConfig(BaseModel):
         ),
     )
     batch_requests: bool = Field(
-        default=False, description="Batch API requests for better performance"
-    )
-    search_fallback_threshold: int = Field(
-        default=-1, ge=-1, le=100, description="Fuzzy search threshold"
+        default=False,
+        description="Collect scan items before processing provider writes",
     )
     dry_run: bool = Field(
         default=False, description="Log changes without applying them"
     )
 
-    library_provider_config: dict[str, dict] = Field(
+    source_provider_config: ProviderNamespaceConfigMap = Field(
         default_factory=dict,
-        exclude=True,
-        repr=False,
-        description="Library provider configuration by namespace",
+        description="Source provider configuration payloads by provider namespace",
     )
-    list_provider_config: dict[str, dict] = Field(
+    target_provider_config: ProviderNamespaceConfigMap = Field(
         default_factory=dict,
-        exclude=True,
-        repr=False,
-        description="List provider configuration by namespace",
+        description="Target provider configuration payloads by provider namespace",
     )
 
     _parent: AnibridgeConfig | None = None
@@ -264,7 +234,7 @@ class AnibridgeProfileConfig(BaseModel):
             return self
 
         for field in self.__class__.model_fields:
-            if field in ("library_provider_config", "list_provider_config"):
+            if field in ("source_provider_config", "target_provider_config"):
                 # Special handling to merge provider configs one level deep.
                 global_providers = getattr(self._parent.global_config, field)
                 profile_providers = getattr(self, field)

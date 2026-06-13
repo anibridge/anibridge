@@ -4,27 +4,19 @@ import keyword
 from enum import StrEnum
 from typing import Any, Final, cast
 
+from anibridge.provider.base import RecordField
 from pydantic import BaseModel, Field, field_validator
 
 from anibridge.app.core.sync.rules import validate_sync_rule_expression
 
 __all__ = [
-    "SYNC_FIELD_NAMES",
     "SYNC_RULE_TEMPLATES",
     "SyncRuleDefinition",
     "SyncRuleTemplateId",
     "SyncRulesConfig",
 ]
 
-SYNC_FIELD_NAMES: Final[tuple[str, ...]] = (
-    "status",
-    "progress",
-    "repeats",
-    "review",
-    "user_rating",
-    "started_at",
-    "finished_at",
-)
+_SYNC_FIELD_NAMES: Final[tuple[str, ...]] = tuple(field.value for field in RecordField)
 
 
 class BaseStrEnum(StrEnum):
@@ -36,14 +28,7 @@ class BaseStrEnum(StrEnum):
 
     @classmethod
     def _missing_(cls, value: object) -> BaseStrEnum | None:
-        """Handle case-insensitive lookup for enum values.
-
-        Args:
-            value: The value to look up in the enumeration
-
-        Returns:
-            BaseStrEnum | None: The matching enum member if found, None otherwise
-        """
+        """Handle case-insensitive lookup for enum values."""
         value = value.lower() if isinstance(value, str) else value
         for member in cls:
             if member.lower() == value:
@@ -107,11 +92,12 @@ class SyncRuleTemplate(BaseModel):
     )
     status: bool | list[SyncRuleDefinition] | None = None
     progress: bool | list[SyncRuleDefinition] | None = None
-    repeats: bool | list[SyncRuleDefinition] | None = None
-    review: bool | list[SyncRuleDefinition] | None = None
-    user_rating: bool | list[SyncRuleDefinition] | None = None
+    rating: bool | list[SyncRuleDefinition] | None = None
     started_at: bool | list[SyncRuleDefinition] | None = None
     finished_at: bool | list[SyncRuleDefinition] | None = None
+    last_activity_at: bool | list[SyncRuleDefinition] | None = None
+    repeat_count: bool | list[SyncRuleDefinition] | None = None
+    notes: bool | list[SyncRuleDefinition] | None = None
 
     @field_validator("vars")
     @classmethod
@@ -134,7 +120,7 @@ class SyncRuleTemplate(BaseModel):
             validate_sync_rule_expression(expression)
         return value
 
-    @field_validator(*SYNC_FIELD_NAMES)
+    @field_validator(*_SYNC_FIELD_NAMES)
     @classmethod
     def validate_field_rules(
         cls,
@@ -157,10 +143,10 @@ class SyncRuleTemplateId(BaseStrEnum):
     """Built-in sync-rule template identifiers."""
 
     DISABLE_DROPPED_AND_PAUSED = "disable_dropped_and_paused"
-    DISABLE_USER_RATING_AND_REVIEW = "disable_user_rating_and_review"
+    DISABLE_RATING_AND_NOTES = "disable_rating_and_notes"
     PREVENT_REGRESSIONS = "prevent_regressions"
     PROMOTE_REWATCH = "promote_rewatch"
-    USER_RATING_REQUIRES_COMPLETED = "user_rating_requires_completed"
+    RATING_REQUIRES_COMPLETED = "rating_requires_completed"
 
 
 SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
@@ -173,23 +159,22 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
             SyncRuleDefinition.model_validate(
                 {
                     "name": "Don't sync dropped or paused status changes",
-                    "if": "computed.status in (ListStatus.DROPPED, ListStatus.PAUSED)",
+                    "if": "computed.status in (Status.DROPPED, Status.PAUSED)",
                     "set": (
-                        "ListStatus.CURRENT if current.status is None "
-                        "else current.status"
+                        "Status.ACTIVE if current.status is None else current.status"
                     ),
                 }
             ),
         ],
     ),
-    SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW: SyncRuleTemplate(
-        description="Disable syncing for review and user rating fields.",
-        review=False,
-        user_rating=False,
+    SyncRuleTemplateId.DISABLE_RATING_AND_NOTES: SyncRuleTemplate(
+        description="Disable syncing for notes and rating fields.",
+        notes=False,
+        rating=False,
     ),
     SyncRuleTemplateId.PREVENT_REGRESSIONS: SyncRuleTemplate(
         description=(
-            "Prevent status, progress, repeats, and watch dates from moving "
+            "Prevent status, progress, repeat count, and watch dates from moving "
             "backward by keeping the current list value instead."
         ),
         status=[
@@ -198,7 +183,7 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
                     "name": "Prevent regressing status",
                     "if": (
                         "current.status is not None and "
-                        "(computed.status is None or computed.status < current.status)"
+                        "status_rank(computed.status) < status_rank(current.status)"
                     ),
                     "set": "current.status",
                 }
@@ -211,22 +196,23 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
                     "if": (
                         "current.progress is not None and "
                         "(computed.progress is None or "
-                        "computed.progress < current.progress)"
+                        "computed.progress.current is None or "
+                        "computed.progress.current < current.progress.current)"
                     ),
                     "set": "current.progress",
                 }
             )
         ],
-        repeats=[
+        repeat_count=[
             SyncRuleDefinition.model_validate(
                 {
-                    "name": "Prevent regressing repeats",
+                    "name": "Prevent regressing repeat count",
                     "if": (
-                        "current.repeats is not None and "
-                        "(computed.repeats is None or "
-                        "computed.repeats < current.repeats)"
+                        "current.repeat_count is not None and "
+                        "(computed.repeat_count is None or "
+                        "computed.repeat_count < current.repeat_count)"
                     ),
-                    "set": "current.repeats",
+                    "set": "current.repeat_count",
                 }
             )
         ],
@@ -267,28 +253,25 @@ SYNC_RULE_TEMPLATES: Final[dict[SyncRuleTemplateId, SyncRuleTemplate]] = {
                 {
                     "name": "Promote rewatch to repeating",
                     "if": (
-                        "current.status in (ListStatus.COMPLETED, "
-                        "ListStatus.REPEATING) and "
-                        "computed.status == ListStatus.CURRENT"
+                        "current.status in (Status.COMPLETED, "
+                        "Status.REPEATING) and "
+                        "computed.status == Status.ACTIVE"
                     ),
-                    "set": "ListStatus.REPEATING",
+                    "set": "Status.REPEATING",
                 }
             )
         ],
     ),
-    SyncRuleTemplateId.USER_RATING_REQUIRES_COMPLETED: SyncRuleTemplate(
-        description=(
-            "Keep the current user rating until the resolved status is completed."
-        ),
-        user_rating=[
+    SyncRuleTemplateId.RATING_REQUIRES_COMPLETED: SyncRuleTemplate(
+        description=("Keep the current rating until the resolved status is completed."),
+        rating=[
             SyncRuleDefinition.model_validate(
                 {
                     "name": "Require completed status for rating sync",
                     "if": (
-                        "computed.status is None or "
-                        "computed.status < ListStatus.COMPLETED"
+                        "status_rank(computed.status) < status_rank(Status.COMPLETED)"
                     ),
-                    "set": "current.user_rating",
+                    "set": "current.rating",
                 }
             )
         ],
@@ -301,8 +284,8 @@ class SyncRulesConfig(BaseModel):
 
     templates: list[SyncRuleTemplateId] = Field(
         default_factory=lambda: [
-            SyncRuleTemplateId.USER_RATING_REQUIRES_COMPLETED,
-            SyncRuleTemplateId.DISABLE_USER_RATING_AND_REVIEW,
+            SyncRuleTemplateId.RATING_REQUIRES_COMPLETED,
+            SyncRuleTemplateId.DISABLE_RATING_AND_NOTES,
             SyncRuleTemplateId.PREVENT_REGRESSIONS,
         ],
         description="Built-in templates to apply in order after the user-defined rules",
@@ -313,11 +296,12 @@ class SyncRulesConfig(BaseModel):
     )
     status: bool | list[SyncRuleDefinition] = True
     progress: bool | list[SyncRuleDefinition] = True
-    repeats: bool | list[SyncRuleDefinition] = True
-    review: bool | list[SyncRuleDefinition] = True
-    user_rating: bool | list[SyncRuleDefinition] = True
+    rating: bool | list[SyncRuleDefinition] = True
     started_at: bool | list[SyncRuleDefinition] = True
     finished_at: bool | list[SyncRuleDefinition] = True
+    last_activity_at: bool | list[SyncRuleDefinition] = True
+    repeat_count: bool | list[SyncRuleDefinition] = True
+    notes: bool | list[SyncRuleDefinition] = True
 
     @field_validator("vars")
     @classmethod
@@ -325,7 +309,7 @@ class SyncRulesConfig(BaseModel):
         """Validate reusable variable names and expressions."""
         return SyncRuleTemplate.validate_vars(value)
 
-    @field_validator(*SYNC_FIELD_NAMES)
+    @field_validator(*_SYNC_FIELD_NAMES)
     @classmethod
     def validate_field_rules(
         cls,
@@ -348,7 +332,7 @@ class SyncRulesConfig(BaseModel):
     def field_rules(self) -> dict[str, bool | list[dict[str, Any]]]:
         """Return configured field rules as plain runtime mappings."""
         payload: dict[str, bool | list[dict[str, Any]]] = {}
-        for field_name in SYNC_FIELD_NAMES:
+        for field_name in _SYNC_FIELD_NAMES:
             value = self._resolve_field_rules(field_name)
             if value is True:
                 continue

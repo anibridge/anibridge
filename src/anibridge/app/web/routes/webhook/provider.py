@@ -7,6 +7,7 @@ from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter
 from litestar.router import Router
 
+from anibridge.app.core.sync.request import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.logging import get_logger
 from anibridge.app.utils.async_tasks import schedule_task
@@ -29,25 +30,27 @@ async def provider_webhook(
         log.warning("Scheduler not available")
         raise SchedulerNotInitializedError("Scheduler not available")
 
-    candidates = scheduler.get_profiles_for_library_provider(provider_namespace)
+    candidates = scheduler.get_profiles_for_source_provider(provider_namespace)
     for profile_name in candidates:
         try:
-            is_valid, library_keys = await scheduler.bridge_clients[
+            is_valid, source_refs = await scheduler.bridge_clients[
                 profile_name
             ].parse_webhook(request)
             if not is_valid:
                 continue
 
             log.info(
-                "Triggering sync for profile '%s' and library keys: %s",
+                "Triggering sync for profile '%s' and source refs: %s",
                 profile_name,
-                library_keys,
+                source_refs,
             )
             schedule_task(
                 scheduler.trigger_profile_sync(
                     profile_name,
-                    poll=False,
-                    library_keys=library_keys,
+                    request=SyncRequest(
+                        trigger=SyncTrigger.WEBHOOK,
+                        source_refs=tuple(source_refs) if source_refs else None,
+                    ),
                     source="webhook:provider",
                 ),
                 name=f"webhook_sync:{profile_name}",

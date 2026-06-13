@@ -2,9 +2,8 @@
 
 import asyncio
 from collections.abc import Mapping
-from operator import attrgetter
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import yaml
 from anibridge.utils.cache import cache
@@ -47,10 +46,7 @@ class ConfigDocumentPayload(TypedDict):
 
 def _normalize_value(value: object) -> object:
     if isinstance(value, BaseModel):
-        return {
-            field_name: _normalize_value(getattr(value, field_name))
-            for field_name in value.__class__.model_fields
-        }
+        return _normalize_value(value.model_dump(mode="python"))
     if isinstance(value, SecretStr):
         return value.get_secret_value()
     if isinstance(value, Path):
@@ -60,6 +56,14 @@ def _normalize_value(value: object) -> object:
     if isinstance(value, (list, tuple, set)):
         return [_normalize_value(item) for item in value]
     return value
+
+
+def _resolve_nested_value(payload: object, field_path: str) -> object:
+    for part in field_path.split("."):
+        if not isinstance(payload, Mapping) or part not in payload:
+            raise KeyError(field_path)
+        payload = cast(Mapping[str, object], payload)[part]
+    return payload
 
 
 class ConfigurationService:
@@ -144,9 +148,12 @@ class ConfigurationService:
         runtime_config = get_config()
         scheduler = get_app_state().scheduler
 
+        runtime_snapshot = _normalize_value(runtime_config)
+        next_snapshot = _normalize_value(next_config)
+
         requires_restart = any(
-            _normalize_value(attrgetter(field_path)(runtime_config))
-            != _normalize_value(attrgetter(field_path)(next_config))
+            _resolve_nested_value(runtime_snapshot, field_path)
+            != _resolve_nested_value(next_snapshot, field_path)
             for field_path in _RESTART_REQUIRED_FIELDS
         )
         current_profiles = {
@@ -230,8 +237,9 @@ class ConfigurationService:
             normalized_content = content if content.endswith("\n") else f"{content}\n"
             self._config_path.write_text(normalized_content, encoding="utf-8")
             log.info(
-                f"Configuration updated with {len(config.profiles)} profile(s) at "
-                f"{self._config_path}",
+                "Configuration updated with %s profile(s) at %s",
+                len(config.profiles),
+                self._config_path,
             )
 
             requires_restart = await self._apply_runtime_config(config)
@@ -259,8 +267,9 @@ class ConfigurationService:
             self._config_path.parent.mkdir(parents=True, exist_ok=True)
             self._config_path.write_text(rendered, encoding="utf-8")
             log.info(
-                f"Configuration updated with {len(config.profiles)} profile(s) at "
-                f"{self._config_path}",
+                "Configuration updated with %s profile(s) at %s",
+                len(config.profiles),
+                self._config_path,
             )
 
             requires_restart = await self._apply_runtime_config(config)

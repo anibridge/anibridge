@@ -1,18 +1,29 @@
 """Sync history service."""
 
-from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 
 import msgspec
-from anibridge.library.base import LibraryMedia
-from anibridge.list.base import ListMedia
+from anibridge.provider.base import (
+    Artwork,
+    FacetName,
+    NodeQuery,
+    Ref,
+    SupportsNodeReads,
+)
 from anibridge.utils.cache import cache
 from sqlalchemy.sql import select
 from sqlalchemy.sql.functions import func
 
 from anibridge.app.config.database import db
-from anibridge.app.core.sync.stats import EntrySnapshot
+from anibridge.app.core.sync.refs import (
+    RefPayload,
+    ref_from_payload,
+    ref_payload_from_json,
+    ref_to_key,
+)
+from anibridge.app.core.sync.request import SyncRequest, SyncTrigger
+from anibridge.app.core.sync.stats import RecordSnapshot
 from anibridge.app.exceptions import (
     HistoryItemNotFoundError,
     HistoryPermissionError,
@@ -30,483 +41,240 @@ __all__ = ["HistoryService", "get_history_service"]
 log = get_logger(__name__)
 
 
+_RefKey = tuple[str, tuple[tuple[str, int | str], ...]]
+_PinIndexEntry = tuple[str, _RefKey, list[str]]
+
+
 class HistoryItem(msgspec.Struct):
     """Serializable history entry with optional provider metadata."""
 
-    id: Annotated[
-        int,
-        msgspec.Meta(
-            ge=1,
-            description="Monotonic database identifier for the history item.",
-            examples=[42],
-        ),
-    ]
-    profile_name: Annotated[
-        str,
-        msgspec.Meta(
-            min_length=1,
-            description="Profile that produced the history item.",
-            examples=["default"],
-        ),
-    ]
-    outcome: Annotated[
-        str,
-        msgspec.Meta(
-            min_length=1,
-            description="Normalized sync outcome for the item.",
-            examples=["synced"],
-        ),
-    ]
-    timestamp: Annotated[
-        str,
-        msgspec.Meta(
-            min_length=1,
-            description="ISO-8601 timestamp when the history item was recorded.",
-            examples=["2026-01-01T00:00:00+00:00"],
-        ),
-    ]
-    library_namespace: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="Library provider namespace for the synced item.",
-                examples=["plex"],
-            ),
-        ]
-        | None
-    ) = None
-    library_section_key: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="Provider-specific library section identifier.",
-                examples=["tv"],
-            ),
-        ]
-        | None
-    ) = None
-    library_media_key: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="Provider-specific library media identifier.",
-                examples=["ratingKey:1234"],
-            ),
-        ]
-        | None
-    ) = None
-    list_namespace: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="List provider namespace for the synced entry.",
-                examples=["anilist"],
-            ),
-        ]
-        | None
-    ) = None
-    list_media_key: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="Provider-specific list entry identifier.",
-                examples=["5114"],
-            ),
-        ]
-        | None
-    ) = None
-    animap_provider: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="AniMap provider namespace used during resolution.",
-                examples=["anilist"],
-            ),
-        ]
-        | None
-    ) = None
-    animap_id: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="AniMap entry identifier used during resolution.",
-                examples=["5114"],
-            ),
-        ]
-        | None
-    ) = None
-    animap_scope: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="AniMap scope applied to the mapping, when present.",
-                examples=["s1"],
-            ),
-        ]
-        | None
-    ) = None
-    media_kind: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="Normalized media kind for the synchronized item.",
-                examples=["show"],
-            ),
-        ]
-        | None
-    ) = None
-    before_state: (
-        Annotated[
-            dict[str, Any],
-            msgspec.Meta(
-                description="Serialized list entry state before sync was applied.",
-                examples=[{"status": "PLANNING", "progress": 11}],
-            ),
-        ]
-        | None
-    ) = None
-    after_state: (
-        Annotated[
-            dict[str, Any],
-            msgspec.Meta(
-                description="Serialized list entry state after sync was applied.",
-                examples=[{"status": "CURRENT", "progress": 12}],
-            ),
-        ]
-        | None
-    ) = None
-    info: (
-        Annotated[
-            dict[str, str],
-            msgspec.Meta(
-                description="Additional string metadata recorded alongside the event.",
-                examples=[{"reason": "pinned field skipped"}],
-            ),
-        ]
-        | None
-    ) = None
-    error_message: (
-        Annotated[
-            str,
-            msgspec.Meta(
-                description="Error message captured for failed history items.",
-                examples=["Rate limit exceeded"],
-            ),
-        ]
-        | None
-    ) = None
-    ephemeral: Annotated[
-        bool,
-        msgspec.Meta(
-            description="Whether the history item exists only in memory.",
-            examples=[False],
-        ),
-    ] = False
-    library_media: (
-        Annotated[
-            ProviderMediaMetadata,
-            msgspec.Meta(
-                description="Resolved library-side media metadata when requested.",
-                examples=[{"namespace": "plex", "key": "ratingKey:1234"}],
-            ),
-        ]
-        | None
-    ) = None
-    list_media: (
-        Annotated[
-            ProviderMediaMetadata,
-            msgspec.Meta(
-                description="Resolved list-side media metadata when requested.",
-                examples=[{"namespace": "anilist", "key": "5114"}],
-            ),
-        ]
-        | None
-    ) = None
-    pinned_fields: (
-        Annotated[
-            list[str],
-            msgspec.Meta(
-                description="Pinned sync fields that prevented updates for the item.",
-                examples=[["status", "progress"]],
-            ),
-        ]
-        | None
-    ) = None
+    id: Annotated[int, msgspec.Meta(ge=1)]
+    profile_name: Annotated[str, msgspec.Meta(min_length=1)]
+    outcome: Annotated[str, msgspec.Meta(min_length=1)]
+    timestamp: Annotated[str, msgspec.Meta(min_length=1)]
+    source_namespace: str | None = None
+    source_ref: RefPayload | None = None
+    target_namespace: str | None = None
+    target_ref: RefPayload | None = None
+    animap_provider: str | None = None
+    animap_id: str | None = None
+    animap_scope: str | None = None
+    before_state: RecordSnapshot | None = None
+    after_state: RecordSnapshot | None = None
+    info: dict[str, str] | None = None
+    error_message: str | None = None
+    ephemeral: bool = False
+    source_media: ProviderMediaMetadata | None = None
+    target_media: ProviderMediaMetadata | None = None
+    pinned_fields: list[str] | None = None
 
 
 class HistoryPage(msgspec.Struct):
     """Cursor-based history slice wrapper."""
 
-    items: Annotated[
-        list[HistoryItem],
-        msgspec.Meta(
-            description="Ordered history items for the requested page.",
-            examples=[
-                [
-                    {
-                        "id": 42,
-                        "profile_name": "default",
-                        "outcome": "synced",
-                        "timestamp": "2026-01-01T00:00:00+00:00",
-                    }
-                ]
-            ],
-        ),
-    ]
-    limit: Annotated[
-        int,
-        msgspec.Meta(
-            ge=1,
-            description="Requested page size used to build the history slice.",
-            examples=[25],
-        ),
-    ]
-    has_more: Annotated[
-        bool,
-        msgspec.Meta(
-            description="Whether another older page of history exists.",
-            examples=[True],
-        ),
-    ]
-    next_before_id: (
-        Annotated[
-            int,
-            msgspec.Meta(
-                ge=1,
-                description="Cursor to request the next older page of history.",
-                examples=[41],
-            ),
-        ]
-        | None
-    ) = None
-    latest_id: (
-        Annotated[
-            int,
-            msgspec.Meta(
-                ge=1,
-                description=(
-                    "Most recent history item ID currently known for the profile."
-                ),
-                examples=[42],
-            ),
-        ]
-        | None
-    ) = None
-    stats: (
-        Annotated[
-            dict[str, int],
-            msgspec.Meta(
-                description="Grouped outcome counters for the selected history window.",
-                examples=[{"synced": 12, "failed": 1}],
-            ),
-        ]
-        | None
-    ) = None
+    items: list[HistoryItem]
+    limit: int
+    has_more: bool
+    next_before_id: int | None = None
+    latest_id: int | None = None
+    stats: dict[str, int] | None = None
+
+
+def _snapshot_from_json(payload: Mapping[str, Any] | None) -> RecordSnapshot | None:
+    """Deserialize a database JSON record snapshot payload."""
+    if not payload:
+        return None
+    return msgspec.convert(payload, type=RecordSnapshot)
 
 
 class HistoryService:
-    """Service to paginate and enrich sync history records."""
+    """Service to paginate and operate on sync history records."""
+
+    async def _fetch_node_metadata(
+        self,
+        *,
+        namespace: str,
+        provider: Any,
+        refs: Sequence[Ref],
+    ) -> dict[tuple[str, tuple[tuple[str, int | str], ...]], ProviderMediaMetadata]:
+        """Fetch provider node metadata for history refs when supported."""
+        if not refs or not isinstance(provider, SupportsNodeReads):
+            return {}
+
+        deduped: dict[tuple[str, tuple[tuple[str, int | str], ...]], Ref] = {}
+        for ref in refs:
+            deduped.setdefault(ref_to_key(ref), ref)
+
+        page = await provider.fetch_nodes(
+            NodeQuery(
+                refs=tuple(deduped.values()),
+                facets=frozenset({FacetName.ARTWORK}),
+            )
+        )
+        metadata: dict[
+            tuple[str, tuple[tuple[str, int | str], ...]],
+            ProviderMediaMetadata,
+        ] = {}
+        for node in page.items:
+            artwork = node.facets.get(FacetName.ARTWORK)
+            key = ref_to_key(node.ref)
+            metadata[key] = ProviderMediaMetadata(
+                namespace=namespace,
+                key=node.ref.key,
+                title=node.title,
+                poster_url=artwork.poster if isinstance(artwork, Artwork) else None,
+                external_url=node.url,
+                labels=list(node.labels) if node.labels else None,
+            )
+        return metadata
 
     async def _build_history_items(
         self,
         profile: str,
         rows: Sequence[SyncHistory],
         *,
-        include_library_media: bool = True,
-        include_list_media: bool = True,
+        include_source_media: bool = True,
+        include_target_media: bool = True,
     ) -> list[HistoryItem]:
-        """Convert ORM rows into API DTOs with optional metadata enrichment."""
+        """Convert ORM rows into API DTOs."""
         if not rows:
             return []
 
-        list_pairs: dict[str, set[str]] = defaultdict(set)
-        library_pairs: dict[tuple[str, str | None], set[str]] = defaultdict(set)
+        bridge = get_bridge(profile)
+        source_refs: list[Ref] = []
+        target_refs: list[Ref] = []
         for row in rows:
-            if row.list_namespace and row.list_media_key:
-                list_pairs[row.list_namespace].add(row.list_media_key)
-            if row.library_namespace and row.library_media_key:
-                library_pairs[(row.library_namespace, row.library_section_key)].add(
-                    row.library_media_key
-                )
+            if row.source_namespace == bridge.source_provider.NAMESPACE:
+                source_ref = ref_from_payload(row.source_ref)
+                if source_ref is not None:
+                    source_refs.append(source_ref)
+            if row.target_namespace == bridge.target_provider.NAMESPACE:
+                target_ref = ref_from_payload(row.target_ref)
+                if target_ref is not None:
+                    target_refs.append(target_ref)
+        source_media = (
+            await self._fetch_node_metadata(
+                namespace=bridge.source_provider.NAMESPACE,
+                provider=bridge.source_provider,
+                refs=source_refs,
+            )
+            if include_source_media
+            else {}
+        )
+        target_media = (
+            await self._fetch_node_metadata(
+                namespace=bridge.target_provider.NAMESPACE,
+                provider=bridge.target_provider,
+                refs=target_refs,
+            )
+            if include_target_media
+            else {}
+        )
 
-        pin_map: dict[tuple[str, str], list[str]] = {}
-        if list_pairs:
-            namespaces = tuple(list_pairs)
-            keys = {key for media_keys in list_pairs.values() for key in media_keys}
-            if keys:
-                with db() as ctx:
-                    pin_rows = (
-                        ctx.session.query(Pin)
-                        .filter(
-                            Pin.profile_name == profile,
-                            Pin.list_namespace.in_(namespaces),
-                            Pin.list_media_key.in_(tuple(keys)),
-                        )
-                        .all()
+        pin_index: list[_PinIndexEntry] = []
+        has_target_refs = False
+        for row in rows:
+            if row.target_namespace and ref_payload_from_json(row.target_ref):
+                has_target_refs = True
+                break
+
+        if has_target_refs:
+            with db() as ctx:
+                pin_rows = (
+                    ctx.session.query(Pin).filter(Pin.profile_name == profile).all()
+                )
+            for pin in pin_rows:
+                pin_ref = ref_from_payload(pin.target_ref)
+                if pin_ref is None:
+                    continue
+                pin_index.append(
+                    (
+                        pin.target_namespace,
+                        ref_to_key(pin_ref),
+                        list(pin.fields or []),
                     )
-                    pin_map = {
-                        (pin.list_namespace, pin.list_media_key): list(pin.fields or [])
-                        for pin in pin_rows
-                    }
-
-        list_media_map: dict[tuple[str, str], ListMedia] = {}
-        if include_list_media:
-            for namespace, keys in list_pairs.items():
-                if not keys:
-                    continue
-                metadata = await self._fetch_list_metadata_batch(
-                    profile, namespace, tuple(sorted(keys))
                 )
-                for key, payload in metadata.items():
-                    list_media_map[(namespace, key)] = payload
 
-        library_media_map: dict[tuple[str, str], LibraryMedia] = {}
-        if include_library_media:
-            for (namespace, section_key), keys in library_pairs.items():
-                if not keys:
-                    continue
-                metadata = await self._fetch_library_metadata_batch(
-                    profile, namespace, section_key, tuple(sorted(keys))
-                )
-                for key, payload in metadata.items():
-                    library_media_map[(namespace, key)] = payload
-
-        dto_items: list[HistoryItem] = []
+        items: list[HistoryItem] = []
         for row in rows:
-            list_media: ListMedia | None = None
-            if row.list_namespace and row.list_media_key:
-                list_media = list_media_map.get(
-                    (row.list_namespace, row.list_media_key)
-                )
-            library_media: LibraryMedia | None = None
-            if row.library_namespace and row.library_media_key:
-                library_media = library_media_map.get(
-                    (row.library_namespace, row.library_media_key)
-                )
+            source_ref = ref_payload_from_json(row.source_ref)
+            target_ref = ref_payload_from_json(row.target_ref)
+            before_state = _snapshot_from_json(row.before_state)
+            after_state = _snapshot_from_json(row.after_state)
+            source_ref_value = ref_from_payload(source_ref)
+            target_ref_value = ref_from_payload(target_ref)
 
-            list_metadata: ProviderMediaMetadata | None = None
-            if list_media and row.list_media_key is not None:
-                list_metadata = ProviderMediaMetadata(
-                    namespace=row.list_namespace,
-                    key=row.list_media_key,
-                    title=list_media.title,
-                    poster_url=list_media.poster_image,
-                    external_url=list_media.external_url,
-                    labels=(
-                        list(list_media.labels)
-                        if list_media.labels is not None
-                        else None
-                    ),
-                )
-            library_metadata: ProviderMediaMetadata | None = None
-            if library_media:
-                library_metadata = ProviderMediaMetadata(
-                    namespace=row.library_namespace,
-                    key=row.library_media_key,
-                    title=library_media.title,
-                    # Special condition for posters since it's known to be expensive.
-                    # Only include if list media doesn't have a poster.
-                    poster_url=library_media.poster_image
-                    if not list_media or not list_media.poster_image
-                    else None,
-                    external_url=library_media.external_url,
-                )
+            pinned_fields: list[str] | None = None
+            target_ref_key = (
+                ref_to_key(target_ref_value) if target_ref_value is not None else None
+            )
+            if row.target_namespace is not None and target_ref_key is not None:
+                best_score = 0
+                for (
+                    pin_namespace,
+                    pin_ref_key,
+                    pin_fields,
+                ) in pin_index:
+                    if pin_namespace != row.target_namespace:
+                        continue
+                    if pin_ref_key == target_ref_key:
+                        ref_score = 2
+                    elif pin_ref_key[0] == target_ref_key[0] and not pin_ref_key[1]:
+                        ref_score = 1
+                    else:
+                        continue
 
-            dto_items.append(
+                    if ref_score > best_score:
+                        best_score = ref_score
+                        pinned_fields = pin_fields
+
+            items.append(
                 HistoryItem(
                     id=row.id,
                     profile_name=row.profile_name,
-                    library_namespace=row.library_namespace,
-                    library_section_key=row.library_section_key,
-                    library_media_key=row.library_media_key,
-                    list_namespace=row.list_namespace,
-                    list_media_key=row.list_media_key,
+                    source_namespace=row.source_namespace,
+                    source_ref=source_ref,
+                    target_namespace=row.target_namespace,
+                    target_ref=target_ref,
                     animap_provider=row.animap_provider,
                     animap_id=row.animap_id,
                     animap_scope=row.animap_scope,
-                    media_kind=row.media_kind.value if row.media_kind else None,
                     outcome=str(row.outcome),
-                    before_state=row.before_state,
-                    after_state=row.after_state,
+                    before_state=before_state,
+                    after_state=after_state,
                     info=row.info,
                     error_message=row.error_message,
                     ephemeral=row.ephemeral,
                     timestamp=row.timestamp.isoformat(),
-                    library_media=library_metadata,
-                    list_media=list_metadata,
-                    pinned_fields=(
-                        pin_map.get((row.list_namespace, row.list_media_key))
-                        if row.list_namespace and row.list_media_key
+                    source_media=(
+                        source_media.get(ref_to_key(source_ref_value))
+                        if source_ref_value is not None
                         else None
                     ),
+                    target_media=(
+                        target_media.get(ref_to_key(target_ref_value))
+                        if target_ref_value is not None
+                        else None
+                    ),
+                    pinned_fields=pinned_fields,
                 )
             )
-
-        return dto_items
-
-    async def _fetch_list_metadata_batch(
-        self,
-        profile: str,
-        namespace: str,
-        media_keys: tuple[str, ...],
-    ) -> dict[str, ListMedia]:
-        """Fetch list provider metadata for a batch of media keys."""
-        if not media_keys:
-            return {}
-        bridge = get_bridge(profile)
-        if namespace != bridge.list_provider.NAMESPACE:
-            return {}
-
-        entries = await bridge.list_provider.get_entries_batch(media_keys)
-        metadata: dict[str, ListMedia] = {}
-        for entry in entries:
-            if entry is None:
-                continue
-            media = entry.media()
-            metadata[media.key] = media
-        return metadata
-
-    async def _fetch_library_metadata_batch(
-        self,
-        profile: str,
-        namespace: str,
-        section_key: str | None,
-        media_keys: tuple[str, ...],
-    ) -> dict[str, LibraryMedia]:
-        if not media_keys:
-            return {}
-        if section_key is None:
-            return {}
-        bridge = get_bridge(profile)
-        if namespace != bridge.library_provider.NAMESPACE:
-            return {}
-
-        sections = await bridge.library_provider.get_sections()
-        section = next((s for s in sections if s.key == section_key), None)
-        if section is None:
-            return {}
-
-        metadata: dict[str, LibraryMedia] = {}
-        items = await bridge.library_provider.list_items(section, keys=list(media_keys))
-        for item in items:
-            media = item.media()
-            metadata[str(item.key)] = media
-        return metadata
+        return items
 
     async def _fetch_profile_stats(
         self,
         profile: str,
-        library_namespace: str,
-        list_namespace: str,
+        source_namespace: str,
+        target_namespace: str,
     ) -> dict[str, int]:
-        """Cached profile statistics fetch."""
+        """Fetch grouped outcome statistics."""
         with db() as ctx:
             stats_rows = (
                 ctx.session.query(SyncHistory.outcome, func.count(SyncHistory.id))
                 .filter(
                     SyncHistory.profile_name == profile,
-                    SyncHistory.library_namespace == library_namespace,
-                    SyncHistory.list_namespace == list_namespace,
+                    SyncHistory.source_namespace == source_namespace,
+                    SyncHistory.target_namespace == target_namespace,
                 )
                 .group_by(SyncHistory.outcome)
                 .all()
@@ -518,40 +286,42 @@ class HistoryService:
         profile: str,
         *,
         outcome: str | None = None,
-        library_namespace: str | None = None,
-        list_namespace: str | None = None,
+        source_namespace: str | None = None,
+        target_namespace: str | None = None,
     ) -> tuple[str, str, list[Any]]:
-        """Resolve provider filters and produce common SQLAlchemy predicates."""
+        """Resolve provider filters and produce SQLAlchemy predicates."""
         bridge = get_bridge(profile)
-        effective_library_namespace = (
-            library_namespace or bridge.library_provider.NAMESPACE
+        effective_source_namespace = (
+            source_namespace or bridge.source_provider.NAMESPACE
         )
-        effective_list_namespace = list_namespace or bridge.list_provider.NAMESPACE
+        effective_target_namespace = (
+            target_namespace or bridge.target_provider.NAMESPACE
+        )
 
         base_filters = [
             SyncHistory.profile_name == profile,
-            SyncHistory.library_namespace == effective_library_namespace,
-            SyncHistory.list_namespace == effective_list_namespace,
+            SyncHistory.source_namespace == effective_source_namespace,
+            SyncHistory.target_namespace == effective_target_namespace,
         ]
         if outcome:
             base_filters.append(SyncHistory.outcome == outcome)
 
-        return effective_library_namespace, effective_list_namespace, base_filters
+        return effective_source_namespace, effective_target_namespace, base_filters
 
     async def get_latest_id(
         self,
         profile: str,
         *,
         outcome: str | None = None,
-        library_namespace: str | None = None,
-        list_namespace: str | None = None,
+        source_namespace: str | None = None,
+        target_namespace: str | None = None,
     ) -> int | None:
         """Return the most recent history row id for the requested filter scope."""
         _, _, base_filters = await self._resolve_filters(
             profile,
             outcome=outcome,
-            library_namespace=library_namespace,
-            list_namespace=list_namespace,
+            source_namespace=source_namespace,
+            target_namespace=target_namespace,
         )
         with db() as ctx:
             latest_stmt = select(func.max(SyncHistory.id)).where(*base_filters)
@@ -564,33 +334,13 @@ class HistoryService:
         before_id: int | None = None,
         after_id: int | None = None,
         outcome: str | None = None,
-        library_namespace: str | None = None,
-        list_namespace: str | None = None,
-        include_library_media: bool = True,
-        include_list_media: bool = True,
+        source_namespace: str | None = None,
+        target_namespace: str | None = None,
+        include_source_media: bool = True,
+        include_target_media: bool = True,
         include_stats: bool = False,
     ) -> HistoryPage:
-        """Return cursor-based history slice enriched as requested.
-
-        Args:
-            profile (str): The profile name to filter history entries.
-            limit (int): The max number of entries to return.
-            before_id (int | None): If provided, only return rows where id < before_id.
-            after_id (int | None): If provided, only return rows where id > after_id.
-            outcome (str | None): Optional filter for the sync outcome.
-            library_namespace (str | None): Optional filter for library provider.
-            list_namespace (str | None): Optional filter for list provider.
-            include_library_media (bool): Include library provider metadata when True.
-            include_list_media (bool): Include list provider metadata when True.
-            include_stats (bool): Include grouped outcome counts when True.
-
-        Returns:
-            HistoryPage: The history slice response.
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-        """
+        """Return cursor-based history slice."""
         if limit < 1:
             raise ValueError("limit must be >= 1")
         if limit > 250:
@@ -598,15 +348,11 @@ class HistoryService:
         if before_id is not None and after_id is not None:
             raise ValueError("before_id and after_id are mutually exclusive")
 
-        (
-            effective_library_namespace,
-            effective_list_namespace,
-            base_filters,
-        ) = await self._resolve_filters(
+        source_namespace, target_namespace, base_filters = await self._resolve_filters(
             profile,
             outcome=outcome,
-            library_namespace=library_namespace,
-            list_namespace=list_namespace,
+            source_namespace=source_namespace,
+            target_namespace=target_namespace,
         )
 
         if before_id is not None:
@@ -616,8 +362,8 @@ class HistoryService:
 
         latest_filters = [
             SyncHistory.profile_name == profile,
-            SyncHistory.library_namespace == effective_library_namespace,
-            SyncHistory.list_namespace == effective_list_namespace,
+            SyncHistory.source_namespace == source_namespace,
+            SyncHistory.target_namespace == target_namespace,
         ]
         if outcome:
             latest_filters.append(SyncHistory.outcome == outcome)
@@ -625,7 +371,6 @@ class HistoryService:
         with db() as ctx:
             latest_stmt = select(func.max(SyncHistory.id)).where(*latest_filters)
             latest_id = ctx.session.execute(latest_stmt).scalar_one_or_none()
-
             stmt = (
                 select(SyncHistory)
                 .where(*base_filters)
@@ -636,49 +381,30 @@ class HistoryService:
 
         has_more = len(rows) > limit
         rows = rows[:limit]
-
         dto_items = await self._build_history_items(
             profile,
             rows,
-            include_library_media=include_library_media,
-            include_list_media=include_list_media,
+            include_source_media=include_source_media,
+            include_target_media=include_target_media,
         )
 
-        stats: dict[str, int] | None = None
-        if include_stats:
-            stats = await self._fetch_profile_stats(
-                profile,
-                effective_library_namespace,
-                effective_list_namespace,
-            )
-
-        next_before_id = rows[-1].id if rows and has_more else None
-
-        page_obj = HistoryPage(
+        stats = (
+            await self._fetch_profile_stats(profile, source_namespace, target_namespace)
+            if include_stats
+            else None
+        )
+        return HistoryPage(
             items=dto_items,
             limit=limit,
             has_more=has_more,
-            next_before_id=next_before_id,
+            next_before_id=rows[-1].id if rows and has_more else None,
             latest_id=latest_id,
             stats=stats,
         )
-        return page_obj
 
     async def delete_item(self, profile: str, item_id: int) -> None:
-        """Delete a single history item for a profile.
-
-        Args:
-            profile (str): The profile name.
-            item_id (int): The ID of the history item to delete.
-
-        Raises:
-            HistoryItemNotFoundError: If the item does not exist.
-        """
-        log.info(
-            "Deleting history item id=%s for profile %s",
-            item_id,
-            profile,
-        )
+        """Delete a single history item for a profile."""
+        log.info("Deleting history item id=%s for profile %s", item_id, profile)
         with db() as ctx:
             row = (
                 ctx.session.query(SyncHistory)
@@ -690,159 +416,12 @@ class HistoryService:
             ctx.session.delete(row)
             ctx.session.commit()
 
-    async def undo_item(self, profile: str, item_id: int) -> HistoryItem:
-        """Undo a history item by reverting or deleting the AniList entry.
-
-        Args:
-            profile (str): Profile name
-            item_id (int): History row id to undo
-
-        Returns:
-            HistoryItem: Newly created history record representing the undo action.
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-            HistoryItemNotFoundError: If the specified item does not exist.
-        """
-        log.info(
-            "Undoing history item id=%s for profile %s",
-            item_id,
-            profile,
-        )
-        bridge = get_bridge(profile)
-        list_provider = bridge.list_provider
-
-        with db() as ctx:
-            row = (
-                ctx.session.query(SyncHistory)
-                .filter(SyncHistory.profile_name == profile, SyncHistory.id == item_id)
-                .first()
-            )
-            if not row:
-                raise HistoryItemNotFoundError("Not found")
-
-        if not row.list_media_key:
-            raise HistoryItemNotFoundError(
-                "Cannot undo history item without list media key"
-            )
-        if row.profile_name != profile:
-            raise HistoryPermissionError("Profile mismatch for history item")
-        if row.list_namespace != list_provider.NAMESPACE:
-            raise HistoryPermissionError(
-                "History item belongs to a different list provider"
-            )
-        if row.library_namespace != bridge.library_provider.NAMESPACE:
-            raise HistoryPermissionError(
-                "History item belongs to a different library provider"
-            )
-        if row.outcome not in (SyncOutcome.SYNCED, SyncOutcome.DELETED):
-            raise HistoryPermissionError(
-                "Undo is only supported for synced or deleted items"
-            )
-
-        before_snapshot = (
-            msgspec.convert(row.before_state, type=EntrySnapshot)
-            if row.before_state
-            else None
-        )
-        after_snapshot = (
-            msgspec.convert(row.after_state, type=EntrySnapshot)
-            if row.after_state
-            else None
-        )
-
-        if not row.before_state and not after_snapshot:
-            raise HistoryPermissionError("History item does not contain undo data")
-        if not before_snapshot and not row.list_media_key:
-            raise HistoryItemNotFoundError(
-                "Cannot undo history item without list media key"
-            )
-        if not before_snapshot and not bridge.profile_config.destructive_sync:
-            raise HistoryPermissionError(
-                "Cannot undo history item that requires deletion when destructive "
-                "sync is disabled"
-            )
-
-        if before_snapshot is None:
-            log.success(
-                "Deleting list entry %s as part of undo",
-                row.list_media_key,
-            )
-            if bridge.profile_config.dry_run:
-                log.info(
-                    "Dry run enabled; skipping deletion of list entry %s",
-                    row.list_media_key,
-                )
-            else:
-                await list_provider.delete_entry(row.list_media_key)
-        else:
-            log.success(
-                "Restoring list entry %s to previous state",
-                before_snapshot.media_key,
-            )
-            if bridge.profile_config.dry_run:
-                log.info(
-                    "Dry run enabled; skipping restoration of list entry %s",
-                    before_snapshot.media_key,
-                )
-            else:
-                entry = await list_provider.get_entry(before_snapshot.media_key)
-                if entry is None:
-                    raise HistoryItemNotFoundError(
-                        "List entry no longer exists on the provider"
-                    )
-                entry.status = before_snapshot.status
-                entry.progress = before_snapshot.progress
-                entry.repeats = before_snapshot.repeats
-                entry.review = before_snapshot.review
-                entry.user_rating = before_snapshot.user_rating
-                entry.started_at = before_snapshot.started_at
-                entry.finished_at = before_snapshot.finished_at
-                await list_provider.update_entry(before_snapshot.media_key, entry)
-
-        with db() as ctx:
-            source_info = {
-                key: value for key, value in (row.info or {}).items() if value
-            }
-            undo_row = SyncHistory(
-                profile_name=row.profile_name,
-                library_namespace=row.library_namespace,
-                library_section_key=row.library_section_key,
-                library_media_key=row.library_media_key,
-                list_namespace=row.list_namespace,
-                list_media_key=row.list_media_key,
-                animap_provider=row.animap_provider,
-                animap_id=row.animap_id,
-                animap_scope=row.animap_scope,
-                media_kind=row.media_kind,
-                outcome=SyncOutcome.UNDONE,
-                before_state=row.after_state,
-                after_state=row.before_state,
-                ephemeral=bridge.profile_config.dry_run,
-                info={
-                    **source_info,
-                    "source_history_id": str(row.id),
-                    "source_outcome": str(row.outcome),
-                },
-            )
-            ctx.session.add(undo_row)
-            ctx.session.commit()
-            ctx.session.refresh(undo_row)
-
-        dto_items = await self._build_history_items(profile, [undo_row])
-        return dto_items[0]
-
     async def retry_item(self, profile: str, item_id: int) -> None:
-        """Retry a failed history item by re-triggering a targeted sync."""
-        log.info(
-            "Retrying history item id=%s for profile %s",
-            item_id,
-            profile,
-        )
+        """Retry a failed history item by re-triggering a targeted source scan."""
+        log.info("Retrying history item id=%s for profile %s", item_id, profile)
 
         scheduler = get_app_state().scheduler
-        if not scheduler:
+        if scheduler is None:
             raise SchedulerNotInitializedError("Scheduler not available")
 
         with db() as ctx:
@@ -851,29 +430,32 @@ class HistoryService:
                 .filter(SyncHistory.profile_name == profile, SyncHistory.id == item_id)
                 .first()
             )
-        if not row:
+        if row is None:
             raise HistoryItemNotFoundError("Not found")
 
         bridge = get_bridge(profile)
-
-        if row.library_namespace != bridge.library_provider.NAMESPACE:
+        if row.source_namespace != bridge.source_provider.NAMESPACE:
             raise HistoryPermissionError(
-                "History item belongs to a different library provider"
+                "History item belongs to a different source provider"
             )
         if row.outcome not in (SyncOutcome.FAILED, SyncOutcome.NOT_FOUND):
             raise HistoryPermissionError(
                 "Retry is only available for failed or not found items"
             )
-        if not row.library_media_key:
+
+        source_ref = ref_from_payload(row.source_ref)
+        if source_ref is None:
             raise HistoryPermissionError(
-                "Cannot retry history item without library media key"
+                "Cannot retry history item without a source ref"
             )
 
         schedule_task(
             scheduler.trigger_profile_sync(
                 profile,
-                poll=False,
-                library_keys=[row.library_media_key],
+                request=SyncRequest(
+                    trigger=SyncTrigger.MANUAL,
+                    source_refs=(source_ref,),
+                ),
                 source="history:retry_item",
             ),
             name=f"retry_history_item:{profile}:{item_id}",
@@ -900,9 +482,5 @@ class HistoryService:
 
 @cache
 def get_history_service() -> HistoryService:
-    """Get the singleton HistoryService instance.
-
-    Returns:
-        HistoryService: The history service instance.
-    """
+    """Get the singleton HistoryService instance."""
     return HistoryService()

@@ -21,39 +21,39 @@ __all__ = [
 class ProfileConfigModel(msgspec.Struct):
     """Serialized profile configuration exposed to the web UI."""
 
-    library_namespace: Annotated[
+    source_namespace: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Configured library provider namespace.",
+            description="Configured source provider namespace.",
             examples=["plex"],
         ),
     ]
-    list_namespace: Annotated[
+    target_namespace: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Configured list provider namespace.",
+            description="Configured target provider namespace.",
             examples=["anilist"],
         ),
     ]
-    library_user: (
+    source_account: (
         Annotated[
             str,
             msgspec.Meta(
                 description=(
-                    "Library-side account or profile label used by the sync profile."
+                    "Source-side account or profile label used by the sync profile."
                 ),
                 examples=["DemoUser"],
             ),
         ]
         | None
     ) = None
-    list_user: (
+    target_account: (
         Annotated[
             str,
             msgspec.Meta(
-                description="List-provider account label used by the sync profile.",
+                description="Target-provider account label used by the sync profile.",
                 examples=["AniListUser"],
             ),
         ]
@@ -140,7 +140,15 @@ class ProfileRuntimeStatusModel(msgspec.Struct):
                 description=(
                     "Live sync progress payload when the profile is actively syncing."
                 ),
-                examples=[{"state": "running", "completed": 5, "total": 12}],
+                examples=[
+                    {
+                        "state": "running",
+                        "stage": "processing",
+                        "processed_items": 5,
+                        "scanned_items": 8,
+                        "total_items": 12,
+                    }
+                ],
             ),
         ]
         | None
@@ -166,7 +174,7 @@ class ProfileStatusModel(msgspec.Struct):
         ProfileConfigModel,
         msgspec.Meta(
             description="Static configuration summary for the profile.",
-            examples=[{"library_namespace": "plex", "list_namespace": "anilist"}],
+            examples=[{"source_namespace": "plex", "target_namespace": "anilist"}],
         ),
     ]
     status: Annotated[
@@ -187,8 +195,8 @@ class StatusResponse(msgspec.Struct):
                 {
                     "default": {
                         "config": {
-                            "library_namespace": "plex",
-                            "list_namespace": "anilist",
+                            "source_namespace": "plex",
+                            "target_namespace": "anilist",
                         },
                         "status": {"running": True},
                     }
@@ -228,10 +236,10 @@ def construct_profile_status(data: dict[str, Any]) -> ProfileStatusModel:
     st = data.get("status", {})
     return ProfileStatusModel(
         config=ProfileConfigModel(
-            library_namespace=cfg.get("library_namespace"),
-            list_namespace=cfg.get("list_namespace"),
-            library_user=cfg.get("library_user"),
-            list_user=cfg.get("list_user"),
+            source_namespace=cfg.get("source_namespace"),
+            target_namespace=cfg.get("target_namespace"),
+            source_account=cfg.get("source_account"),
+            target_account=cfg.get("target_account"),
             poll_interval=cfg.get("poll_interval"),
             scan_interval=cfg.get("scan_interval"),
             scan_modes=list(cfg.get("scan_modes") or []),

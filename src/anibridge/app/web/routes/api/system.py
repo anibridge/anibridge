@@ -37,7 +37,9 @@ class SettingsProfileModel(msgspec.Struct):
         dict[str, Any],
         msgspec.Meta(
             description="Serialized profile settings payload.",
-            examples=[{"library_provider": "plex", "list_provider": "anilist"}],
+            examples=[
+                {"source": {"namespace": "plex"}, "target": {"namespace": "anilist"}}
+            ],
         ),
     ]
 
@@ -56,7 +58,9 @@ class SettingsResponse(msgspec.Struct):
         list[SettingsProfileModel],
         msgspec.Meta(
             description="Per-profile configuration payloads.",
-            examples=[[{"name": "default", "settings": {"library_provider": "plex"}}]],
+            examples=[
+                [{"name": "default", "settings": {"source": {"namespace": "plex"}}}]
+            ],
         ),
     ]
 
@@ -233,8 +237,8 @@ class SchedulerSummaryModel(msgspec.Struct):
                 {
                     "default": {
                         "config": {
-                            "library_namespace": "plex",
-                            "list_namespace": "anilist",
+                            "source_namespace": "plex",
+                            "target_namespace": "anilist",
                         },
                         "status": {"running": True},
                     }
@@ -332,8 +336,8 @@ class AboutResponse(msgspec.Struct):
                 {
                     "default": {
                         "config": {
-                            "library_namespace": "plex",
-                            "list_namespace": "anilist",
+                            "source_namespace": "plex",
+                            "target_namespace": "anilist",
                         },
                         "status": {"running": True},
                     }

@@ -7,6 +7,7 @@ from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
+from anibridge.app.core.sync.request import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.utils.async_tasks import schedule_task
 from anibridge.app.web.state import get_app_state
@@ -25,23 +26,18 @@ class OkResponse(msgspec.Struct):
 
 
 @post(path="")
-async def sync_all(poll: Annotated[bool, QueryParameter()] = False) -> OkResponse:
-    """Trigger a sync for all profiles.
-
-    Args:
-        poll (bool): Whether to poll for updates.
-
-    Returns:
-        OkResponse: The response containing the sync status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-    """
+async def sync_all(
+    trigger: Annotated[SyncTrigger, QueryParameter()] = SyncTrigger.MANUAL,
+) -> OkResponse:
+    """Trigger a sync for all profiles."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
     schedule_task(
-        scheduler.trigger_all_profiles_sync(poll=poll, source="api:sync_all"),
+        scheduler.trigger_all_profiles_sync(
+            request=SyncRequest(trigger=trigger),
+            source="api:sync_all",
+        ),
         name="sync_all_profiles",
     )
     return OkResponse(ok=True)
@@ -49,14 +45,7 @@ async def sync_all(poll: Annotated[bool, QueryParameter()] = False) -> OkRespons
 
 @post(path="/database")
 async def sync_database() -> OkResponse:
-    """Trigger a sync for the database.
-
-    Returns:
-        OkResponse: The response containing the sync status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-    """
+    """Trigger a sync for the database."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
@@ -70,7 +59,7 @@ async def sync_database() -> OkResponse:
 @post(path="/profile/{profile:str}")
 async def sync_profile(
     profile: Annotated[str, PathParameter()],
-    poll: Annotated[bool, QueryParameter()] = False,
+    trigger: Annotated[SyncTrigger, QueryParameter()] = SyncTrigger.MANUAL,
 ) -> OkResponse:
     """Trigger a sync for a specific profile."""
     scheduler = get_app_state().scheduler
@@ -79,8 +68,7 @@ async def sync_profile(
     schedule_task(
         scheduler.trigger_profile_sync(
             profile,
-            poll=poll,
-            library_keys=None,
+            request=SyncRequest(trigger=trigger),
             source="api:sync_profile",
         ),
         name=f"sync_profile:{profile}",

@@ -7,13 +7,11 @@ from litestar.handlers.http_handlers.decorators import delete, get, post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
-from anibridge.app.web.services.history_service import (
-    HistoryItem,
-    HistoryPage,
-    get_history_service,
-)
+from anibridge.app.web.services.history_service import HistoryPage, get_history_service
 
 __all__ = ["router"]
+
+# TODO: restore the undo endpoint/functionality?
 
 GetHistoryResponse = HistoryPage
 
@@ -28,25 +26,6 @@ class OkResponse(msgspec.Struct):
             examples=[True],
         ),
     ] = True
-
-
-class UndoResponse(msgspec.Struct):
-    """Response model for undo operation."""
-
-    item: Annotated[
-        HistoryItem,
-        msgspec.Meta(
-            description="History item that was undone and re-recorded.",
-            examples=[
-                {
-                    "id": 42,
-                    "profile_name": "default",
-                    "outcome": "undone",
-                    "timestamp": "2026-01-01T00:00:00+00:00",
-                }
-            ],
-        ),
-    ]
 
 
 class RetryResponse(msgspec.Struct):
@@ -69,8 +48,8 @@ async def get_history(
     after_id: Annotated[int | None, QueryParameter()] = None,
     include_stats: Annotated[bool, QueryParameter()] = True,
     outcome: Annotated[str | None, QueryParameter()] = None,
-    library_namespace: Annotated[str | None, QueryParameter()] = None,
-    list_namespace: Annotated[str | None, QueryParameter()] = None,
+    source_namespace: Annotated[str | None, QueryParameter()] = None,
+    target_namespace: Annotated[str | None, QueryParameter()] = None,
 ) -> GetHistoryResponse:
     """Get paginated timeline for profile."""
     return await get_history_service().get_page(
@@ -79,8 +58,8 @@ async def get_history(
         before_id=before_id,
         after_id=after_id,
         outcome=outcome,
-        library_namespace=library_namespace,
-        list_namespace=list_namespace,
+        source_namespace=source_namespace,
+        target_namespace=target_namespace,
         include_stats=include_stats,
     )
 
@@ -95,29 +74,6 @@ async def delete_history(
     return OkResponse()
 
 
-@post(path="/{profile:str}/{item_id:int}/undo", status_code=200)
-async def undo_history(
-    profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
-) -> UndoResponse:
-    """Undo a history item if possible.
-
-    Args:
-        profile (str): The profile name.
-        item_id (int): The ID of the history item to undo.
-
-    Returns:
-        UndoResponse: The response containing the undone item.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile is unknown.
-        HistoryItemNotFoundError: If the specified item does not exist.
-    """
-    item = await get_history_service().undo_item(profile, item_id)
-    return UndoResponse(item=item)
-
-
 @post(path="/{profile:str}/{item_id:int}/retry", status_code=200)
 async def retry_history(
     profile: Annotated[str, PathParameter()],
@@ -130,5 +86,5 @@ async def retry_history(
 
 router = Router(
     path="/history",
-    route_handlers=[get_history, delete_history, undo_history, retry_history],
+    route_handlers=[get_history, delete_history, retry_history],
 )

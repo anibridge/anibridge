@@ -1,18 +1,18 @@
-"""API routes for managing field pins across list providers."""
+"""API routes for managing target record-field pins."""
 
 from typing import Annotated
 
 import msgspec
+from anibridge.provider.base import RecordField
 from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import delete, get, put
 from litestar.params import Body, PathParameter, QueryParameter
 from litestar.router import Router
 
-from anibridge.app.config.settings import SyncField
-from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.web.services.pin_service import (
     PinEntry,
     PinFieldOption,
+    PinSearchResult,
     get_pin_service,
 )
 
@@ -30,8 +30,8 @@ class PinListResponse(msgspec.Struct):
                 [
                     {
                         "profile_name": "default",
-                        "list_namespace": "anilist",
-                        "list_media_key": "5114",
+                        "target_namespace": "anilist",
+                        "target_ref": {"key": "5114", "path": []},
                         "fields": ["status"],
                     }
                 ]
@@ -52,40 +52,11 @@ class PinOptionsResponse(msgspec.Struct):
     ]
 
 
-class PinSearchItem(msgspec.Struct):
-    """Search result item combining provider metadata with existing pin state."""
-
-    media: Annotated[
-        ProviderMediaMetadata,
-        msgspec.Meta(
-            description="Provider metadata for the matched media item.",
-            examples=[{"namespace": "anilist", "key": "5114"}],
-        ),
-    ]
-    pin: (
-        Annotated[
-            PinEntry,
-            msgspec.Meta(
-                description="Existing pin state for the matched item when present.",
-                examples=[
-                    {
-                        "profile_name": "default",
-                        "list_namespace": "anilist",
-                        "list_media_key": "5114",
-                        "fields": ["status"],
-                    }
-                ],
-            ),
-        ]
-        | None
-    ) = None
-
-
 class PinSearchResponse(msgspec.Struct):
     """Response model for provider search results within the pin manager."""
 
     results: Annotated[
-        list[PinSearchItem],
+        list[PinSearchResult],
         msgspec.Meta(
             description="Provider search results enriched with current pin state.",
             examples=[[{"media": {"namespace": "anilist", "key": "5114"}}]],
@@ -130,15 +101,24 @@ async def list_pins(
     profile: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinListResponse:
-    """Return all pins for a profile.
-
-    Args:
-        profile (str): Profile name.
-        with_media (bool): When True, include provider metadata.
-    """
+    """Return all pins for a profile."""
     service = get_pin_service()
     pins = await service.list_pins(profile, with_media=with_media)
     return PinListResponse(pins=pins)
+
+
+@get(path="/{profile:str}/search")
+async def search_pins(
+    profile: Annotated[str, PathParameter()],
+    q: Annotated[str, QueryParameter(min_length=1)],
+    limit: Annotated[int, QueryParameter(ge=1, le=50)] = 10,
+) -> PinSearchResponse:
+    """Search the target provider for entries that can be pinned."""
+    try:
+        results = await get_pin_service().search_pins(profile, q, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PinSearchResponse(results=results)
 
 
 @get(path="/{profile:str}/{media_key:str}")
@@ -178,7 +158,7 @@ async def upsert_pin(
             normalized_fields.append(value)
 
     normalized_fields = [
-        field.value for field in SyncField if field.value in normalized_fields
+        field.value for field in RecordField if field.value in normalized_fields
     ]
 
     try:
@@ -202,5 +182,12 @@ def delete_pin(
 
 router = Router(
     path="/pins",
-    route_handlers=[get_pin_fields, list_pins, get_pin, upsert_pin, delete_pin],
+    route_handlers=[
+        get_pin_fields,
+        list_pins,
+        search_pins,
+        get_pin,
+        upsert_pin,
+        delete_pin,
+    ],
 )

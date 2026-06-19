@@ -95,12 +95,24 @@ class TargetResolver:
                 target_id=candidate.external_id,
             )
             existing = by_ref.get(match.ref)
-            if existing is None or (match.confidence or 0) > (
-                existing.match.confidence or 0
-            ):
+            if existing is None or self._is_better_match(resolved, existing):
                 by_ref[match.ref] = resolved
 
         return tuple(by_ref.values())
+
+    @staticmethod
+    def _is_better_match(
+        candidate: ResolvedTarget,
+        existing: ResolvedTarget,
+    ) -> bool:
+        """Return whether a candidate should replace an existing ref match."""
+        candidate_confidence = candidate.match.confidence or 0
+        existing_confidence = existing.match.confidence or 0
+        if candidate_confidence != existing_confidence:
+            return candidate_confidence > existing_confidence
+        if bool(candidate.mappings) != bool(existing.mappings):
+            return bool(candidate.mappings)
+        return False
 
     def _candidate_ids(
         self,

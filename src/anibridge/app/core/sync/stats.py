@@ -29,7 +29,6 @@ __all__ = [
     "FieldChange",
     "MappingRange",
     "PlanDiagnostics",
-    "RecordDiff",
     "RecordPlan",
     "RecordSnapshot",
     "SyncItem",
@@ -174,80 +173,59 @@ class SyncStats(msgspec.Struct):
         for item_id in item_ids:
             self._item_outcomes.setdefault(item_id, SyncOutcome.PENDING)
 
-    def count_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
-        """Count tracked items matching optional outcomes."""
-        allowed_outcomes = set(outcomes)
-        return sum(
-            1
-            for item_outcome in self._item_outcomes.values()
-            if not allowed_outcomes or item_outcome in allowed_outcomes
-        )
-
-    def get_items_by_outcome(self, *outcomes: SyncOutcome) -> list[SyncItem]:
+    def items(
+        self,
+        *outcomes: SyncOutcome,
+        trackable: bool = False,
+    ) -> list[SyncItem]:
         """Return tracked items matching optional outcomes."""
-        if not outcomes:
-            return list(self._item_outcomes)
+        allowed = set(outcomes)
         return [
-            item_id
-            for item_id, item_outcome in self._item_outcomes.items()
-            if item_outcome in outcomes
+            item
+            for item, outcome in self._item_outcomes.items()
+            if (not trackable or item.trackable) and (not allowed or outcome in allowed)
         ]
 
-    def count_trackable_items_by_outcome(self, *outcomes: SyncOutcome) -> int:
-        """Count tracked refs that represent user-state records."""
-        allowed_outcomes = set(outcomes)
-        return sum(
-            1
-            for item_id, item_outcome in self._item_outcomes.items()
-            if item_id.trackable
-            and (not allowed_outcomes or item_outcome in allowed_outcomes)
-        )
-
-    def get_trackable_items_by_outcome(self, *outcomes: SyncOutcome) -> list[SyncItem]:
-        """Return trackable refs matching optional outcomes."""
-        if not outcomes:
-            return [item_id for item_id in self._item_outcomes if item_id.trackable]
-        return [
-            item_id
-            for item_id, item_outcome in self._item_outcomes.items()
-            if item_id.trackable and item_outcome in outcomes
-        ]
+    def count(self, *outcomes: SyncOutcome, trackable: bool = False) -> int:
+        """Count tracked items matching optional outcomes."""
+        return len(self.items(*outcomes, trackable=trackable))
 
     @property
     def synced(self) -> int:
         """Number of refs successfully synced."""
-        return self.count_items_by_outcome(SyncOutcome.SYNCED)
+        return self.count(SyncOutcome.SYNCED)
 
     @property
     def deleted(self) -> int:
         """Number of target records deleted."""
-        return self.count_items_by_outcome(SyncOutcome.DELETED)
+        return self.count(SyncOutcome.DELETED)
 
     @property
     def skipped(self) -> int:
         """Number of refs skipped."""
-        return self.count_items_by_outcome(SyncOutcome.SKIPPED)
+        return self.count(SyncOutcome.SKIPPED)
 
     @property
     def not_found(self) -> int:
         """Number of refs without target matches."""
-        return self.count_items_by_outcome(SyncOutcome.NOT_FOUND)
+        return self.count(SyncOutcome.NOT_FOUND)
 
     @property
     def failed(self) -> int:
         """Number of refs that failed."""
-        return self.count_items_by_outcome(SyncOutcome.FAILED)
+        return self.count(SyncOutcome.FAILED)
 
     @property
     def coverage(self) -> float:
         """Percentage of trackable refs with a covered outcome."""
-        total = self.count_trackable_items_by_outcome()
+        total = self.count(trackable=True)
         if not total:
             return 1.0
-        processed = self.count_trackable_items_by_outcome(
+        processed = self.count(
             SyncOutcome.SYNCED,
             SyncOutcome.SKIPPED,
             SyncOutcome.DELETED,
+            trackable=True,
         )
         return processed / total
 
@@ -325,16 +303,6 @@ class PlanDiagnostics(msgspec.Struct, frozen=True):
         }
 
 
-class RecordDiff(msgspec.Struct, frozen=True):
-    """Typed diff between two record snapshots."""
-
-    changes: tuple[FieldChange, ...] = ()
-
-    def __bool__(self) -> bool:
-        """Return whether the diff contains at least one field change."""
-        return bool(self.changes)
-
-
 class RecordSnapshot(msgspec.Struct, frozen=True):
     """Planner/history snapshot of one normalized record."""
 
@@ -364,7 +332,7 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
         self,
         after: RecordSnapshot,
         fields: Iterable[RecordField],
-    ) -> RecordDiff:
+    ) -> tuple[FieldChange, ...]:
         """Compare this snapshot to another snapshot."""
         changes: list[FieldChange] = []
         for field in fields:
@@ -372,7 +340,7 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
             after_value = after.values.get(field.value)
             if before_value != after_value:
                 changes.append(FieldChange(field, before_value, after_value))
-        return RecordDiff(tuple(changes))
+        return tuple(changes)
 
     @classmethod
     def diff_optional(
@@ -380,7 +348,7 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
         before: RecordSnapshot | None,
         after: RecordSnapshot,
         fields: Iterable[RecordField],
-    ) -> RecordDiff:
+    ) -> tuple[FieldChange, ...]:
         """Compare optional before state to a required after state."""
         if before is None:
             before = cls(ref=after.ref, kind=after.kind, key=after.key)

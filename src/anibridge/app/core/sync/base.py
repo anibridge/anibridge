@@ -8,7 +8,12 @@ from typing import cast
 
 import msgspec
 from anibridge.provider.base import (
+    AppendEvent,
+    Capabilities,
     DeleteRecord,
+    Event,
+    EventQuery,
+    EventWrite,
     ExternalId,
     FacetName,
     NodeFlag,
@@ -19,13 +24,16 @@ from anibridge.provider.base import (
     RecordQuery,
     RecordWrite,
     Ref,
+    Role,
     ScanItem,
     ScanQuery,
+    Step,
+    SupportsEventReads,
+    SupportsEventWrites,
     SupportsRecordReads,
     SupportsRecordWrites,
     SupportsScan,
     WriteOp,
-    WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
@@ -77,13 +85,11 @@ class _TargetWork(msgspec.Struct, frozen=True):
     label: SyncLabel
 
     @property
-    def key(self) -> _TargetRecordKey:
-        return _TargetRecordKey(ref_to_key(self.target_ref), self.target_kind)
+    def key(self) -> TargetRecordKey:
+        return (ref_to_key(self.target_ref), self.target_kind)
 
 
-class _TargetRecordKey(msgspec.Struct, frozen=True):
-    ref: RefKey
-    kind: str
+type TargetRecordKey = tuple[RefKey, str]
 
 
 class SyncClient:
@@ -114,6 +120,12 @@ class SyncClient:
 
         self._source_capabilities = source_provider.capabilities()
         self._target_capabilities = target_provider.capabilities()
+        self._validate_events(
+            provider=self.source_provider, capabilities=self._source_capabilities
+        )
+        self._validate_events(
+            provider=self.target_provider, capabilities=self._target_capabilities
+        )
         sync_rule_engine = SyncRuleEngine(
             variables=sync_rules.resolved_vars() if sync_rules else None,
             field_rules=sync_rules.field_rules() if sync_rules else None,
@@ -129,6 +141,7 @@ class SyncClient:
             target_provider=self.target_provider,
         )
         self._sync_fields = self._planner.sync_fields
+        self._event_pairs = self._event_sync_pairs()
         if not self._sync_fields:
             raise TypeError(
                 f"Providers '{self.source_provider.NAMESPACE}' and "
@@ -141,6 +154,47 @@ class SyncClient:
             target_namespace=self.target_provider.NAMESPACE,
             db_factory=lambda: db(),
         )
+
+    @staticmethod
+    def _validate_events(
+        *,
+        provider: Provider,
+        capabilities: Capabilities,
+    ) -> None:
+        """Fail fast when event specs and event protocols disagree."""
+        if not capabilities.events:
+            return
+
+        if Role.SOURCE in capabilities.roles and not isinstance(
+            provider,
+            SupportsEventReads,
+        ):
+            raise TypeError(
+                f"Provider {provider.NAMESPACE!r} advertises source event channels "
+                "but does not implement event reads"
+            )
+
+        writable_events = tuple(
+            spec
+            for spec in capabilities.events
+            if WriteOp.APPEND_EVENT in spec.write_ops
+        )
+        if writable_events and not isinstance(provider, SupportsEventWrites):
+            raise TypeError(
+                f"Provider {provider.NAMESPACE!r} advertises appendable event "
+                "channels but does not implement event writes"
+            )
+
+        readable_events = tuple(
+            spec
+            for spec in capabilities.events
+            if WriteOp.APPEND_EVENT not in spec.write_ops
+        )
+        if readable_events and not isinstance(provider, SupportsEventReads):
+            raise TypeError(
+                f"Provider {provider.NAMESPACE!r} advertises readable event channels "
+                "but does not implement event reads"
+            )
 
     async def clear_cache(self) -> None:
         """Clear sync and provider caches."""
@@ -171,9 +225,9 @@ class SyncClient:
                     flags=frozenset({NodeFlag.TRACKABLE}),
                     facets=facets,
                     native_record_kinds=native_record_kinds,
-                    fields=frozenset(self._sync_fields),
-                    with_records=True,
-                    require_activity=scan.require_activity,
+                    record_fields=frozenset(self._sync_fields),
+                    include_records=True,
+                    require_user_data=scan.require_user_data,
                     cursor=cursor,
                     limit=page_size,
                 )
@@ -212,53 +266,37 @@ class SyncClient:
             items.extend(page.items)
         return tuple(items)
 
-    async def process_item(self, item: ScanItem) -> None:
-        """Process one scanned source item through target resolution and sync."""
-        await self.process_page((item,))
-
     async def process_page(self, items: Sequence[ScanItem]) -> None:
         """Process one source scan page with batched target reads and writes."""
         if not items:
             return
 
         outcomes, work_items = await self._resolve_work_items(items)
-        target_keys = [work.key for work in work_items]
+        record_work_items = [
+            work
+            for work in work_items
+            if not work.mappings
+            and not (work.projected_record.ref.path and self._event_pairs)
+        ]
+        target_keys = [work.key for work in record_work_items]
         target_key_counts = Counter(target_keys)
         target_records = await self._fetch_target_records_batch(
             (work.target_ref, work.target_kind)
-            for work, target_key in zip(work_items, target_keys, strict=True)
+            for work, target_key in zip(record_work_items, target_keys, strict=True)
             if target_key_counts[target_key] == 1
         )
         pinned_fields = self._fetch_pinned_fields_batch(
-            (work.target_ref, work.target_kind) for work in work_items
+            (work.target_ref, work.target_kind) for work in record_work_items
         )
 
         updates: list[tuple[_TargetWork, PreparedUpdate]] = []
-        for work, target_key in zip(work_items, target_keys, strict=True):
+        for work, target_key in zip(record_work_items, target_keys, strict=True):
             try:
-                if target_key_counts[target_key] > 1:
-                    target_record = await self._fetch_target_record(
-                        work.target_ref,
-                        work.target_kind,
-                    )
-                    outcome = await self.sync_record(
-                        item=work.item,
-                        source_record=work.projected_record,
-                        target_record=target_record,
-                        target_ref=work.target_ref,
-                        target_kind=work.target_kind,
-                        pinned_fields=pinned_fields.get(target_key, ()),
-                        mappings=work.mappings,
-                        label=work.label,
-                    )
-                    self._record_best_outcome(
-                        outcomes,
-                        work.sync_items,
-                        outcome,
-                    )
-                    continue
-
-                target_record = target_records.get(work.key)
+                target_record = (
+                    await self._fetch_target_record(work.target_ref, work.target_kind)
+                    if target_key_counts[target_key] > 1
+                    else target_records.get(work.key)
+                )
                 planned = await self._prepare_record_update(
                     item=work.item,
                     source_record=work.projected_record,
@@ -295,20 +333,33 @@ class SyncClient:
                     SyncOutcome.FAILED,
                 )
 
-        if updates:
-            batch_results = await self._apply_updates_batch(
-                [planned for _, planned in updates]
-            )
-            for (work, _), outcome in zip(
-                updates,
-                batch_results,
-                strict=True,
-            ):
-                self._record_best_outcome(
-                    outcomes,
-                    work.sync_items,
-                    outcome,
+        for work, update in updates:
+            try:
+                outcome = await self._apply_update(
+                    update.plan,
+                    source_record=update.source_record,
+                    diff_str=update.diff_str,
+                    label=update.label,
                 )
+            except Exception:
+                outcome = SyncOutcome.FAILED
+            self._record_best_outcome(outcomes, work.sync_items, outcome)
+
+        for work in work_items:
+            try:
+                outcome = await self._sync_events_for_work(work)
+            except Exception:
+                log.error(
+                    "[%s] Failed to sync events for %s %s with target %s",
+                    self.profile_name,
+                    work.label.node_kind,
+                    work.label.source,
+                    work.label.target,
+                )
+                log.exception("[%s] Event sync error details", self.profile_name)
+                outcome = SyncOutcome.FAILED
+            if outcome != SyncOutcome.SKIPPED:
+                self._record_best_outcome(outcomes, work.sync_items, outcome)
 
         for sync_item, outcome in outcomes.items():
             self.sync_stats.track_item(sync_item, outcome)
@@ -411,8 +462,11 @@ class SyncClient:
             )
             return ()
 
+        scoped_matches = tuple(match for match in matches if match.mappings) or tuple(
+            matches
+        )
         work_items: list[_TargetWork] = []
-        for match in matches:
+        for match in scoped_matches:
             target_ref = match.ref
             work_label = self._sync_label(
                 item=item,
@@ -456,43 +510,6 @@ class SyncClient:
             current = outcomes.get(sync_item, SyncOutcome.SKIPPED)
             if _OUTCOME_PRIORITY[outcome] > _OUTCOME_PRIORITY[current]:
                 outcomes[sync_item] = outcome
-
-    async def sync_record(
-        self,
-        *,
-        item: ScanItem,
-        source_record: Record,
-        target_record: Record | None,
-        target_ref: Ref,
-        target_kind: str,
-        pinned_fields: Sequence[RecordField] = (),
-        mappings: Sequence[AnibridgeMapping] = (),
-        label: SyncLabel | None = None,
-    ) -> SyncOutcome:
-        """Synchronize one source record to one target record."""
-        label = label or self._sync_label(
-            item=item,
-            target_ref=target_ref,
-            mappings=mappings,
-        )
-        planned = await self._prepare_record_update(
-            item=item,
-            source_record=source_record,
-            target_record=target_record,
-            target_ref=target_ref,
-            target_kind=target_kind,
-            label=label,
-            pinned_fields=pinned_fields,
-            mappings=mappings,
-        )
-        if isinstance(planned, SyncOutcome):
-            return planned
-        return await self._apply_update(
-            planned.plan,
-            source_record=planned.source_record,
-            diff_str=planned.diff_str,
-            label=planned.label,
-        )
 
     async def _prepare_record_update(
         self,
@@ -652,55 +669,6 @@ class SyncClient:
             )
             raise
 
-    async def _apply_updates_batch(
-        self,
-        updates: Sequence[PreparedUpdate],
-    ) -> tuple[SyncOutcome, ...]:
-        """Apply planned updates independently to avoid ambiguous partial batches."""
-        if not updates:
-            return ()
-
-        if self.dry_run:
-            outcomes: list[SyncOutcome] = []
-            for update in updates:
-                log.success(
-                    "[%s] Dry run; skipping sync of %s %s",
-                    self.profile_name,
-                    update.label.node_kind,
-                    self._source_with_target(update.label),
-                )
-                log.success("\tDRY RUN UPDATE: %s", update.diff_str)
-                await self._history.create_sync_history(
-                    source_node=update.plan.item.node,
-                    source_record=update.source_record,
-                    target_ref=update.plan.target_ref,
-                    snapshots=(update.plan.before, update.plan.after),
-                    outcome=SyncOutcome.SYNCED,
-                    info=update.plan.diagnostics.as_info(),
-                    ephemeral=self.dry_run,
-                )
-                outcomes.append(SyncOutcome.SYNCED)
-            return tuple(outcomes)
-
-        try:
-            outcomes: list[SyncOutcome] = []
-            for update in updates:
-                try:
-                    outcomes.append(
-                        await self._apply_update(
-                            update.plan,
-                            source_record=update.source_record,
-                            diff_str=update.diff_str,
-                            label=update.label,
-                        )
-                    )
-                except Exception:
-                    outcomes.append(SyncOutcome.FAILED)
-            return tuple(outcomes)
-        except Exception:
-            log.exception("[%s] Unexpected sequential write failure", self.profile_name)
-            return tuple(SyncOutcome.FAILED for _ in updates)
-
     async def _target_matches_after(self, plan: RecordPlan) -> bool:
         """Return whether the current target state matches a planned upsert."""
         if plan.target_ref is None or plan.after is None:
@@ -740,7 +708,7 @@ class SyncClient:
         label: SyncLabel,
     ) -> SyncOutcome:
         """Delete a target record when destructive sync permits it."""
-        if WriteOp.DELETE_RECORD not in self._target_capabilities.write_ops:
+        if not self._planner.can_delete_record(target_kind):
             log.warning(
                 "[%s] Skipping deletion for %s %s because target provider "
                 "does not advertise delete_record",
@@ -788,19 +756,251 @@ class SyncClient:
         )
         return SyncOutcome.DELETED
 
-    async def _write_records(self, writes: Sequence[RecordWrite]):
-        """Write records and raise when any write fails."""
-        results = await self._submit_record_writes(writes)
+    async def _sync_events_for_work(self, work: _TargetWork) -> SyncOutcome:
+        """Append missing source events to the resolved target ref."""
+        if not self._event_pairs:
+            return SyncOutcome.SKIPPED
+        if not isinstance(self.source_provider, SupportsEventReads):
+            return SyncOutcome.SKIPPED
+        if not isinstance(self.target_provider, SupportsEventWrites):
+            return SyncOutcome.SKIPPED
+
+        writes: list[AppendEvent] = []
+        for source_kind, target_kind in self._event_pairs.items():
+            source_events = await self._fetch_source_events(
+                work.projected_record.ref,
+                source_kind,
+            )
+            if not source_events:
+                continue
+            projected_events = tuple(
+                (event, target_ref)
+                for event in source_events
+                if self._source_event_in_scope(event, work)
+                for target_ref in self._target_event_refs(event.ref, work)
+            )
+            if not projected_events:
+                continue
+            target_events = await self._fetch_target_events(
+                tuple(target_ref for _event, target_ref in projected_events),
+                target_kind,
+            )
+            existing = {
+                (ref_to_key(event.ref), event.kind, event.at) for event in target_events
+            }
+            for event, target_ref in projected_events:
+                signature = (ref_to_key(target_ref), target_kind, event.at)
+                if signature in existing:
+                    continue
+                writes.append(
+                    AppendEvent(
+                        ref=target_ref,
+                        kind=target_kind,
+                        at=event.at,
+                        dedupe_key=event.dedupe_key,
+                        metadata=event.metadata,
+                    )
+                )
+
+        if not writes:
+            return SyncOutcome.SKIPPED
+        if self.dry_run:
+            log.success(
+                "[%s] Dry run; skipping sync of %s activity events for %s %s",
+                self.profile_name,
+                len(writes),
+                work.label.node_kind,
+                self._source_with_target(work.label),
+            )
+            return SyncOutcome.SYNCED
+
+        await self._write_events(writes)
+        log.success(
+            "[%s] Synced %s activity events for %s %s",
+            self.profile_name,
+            len(writes),
+            work.label.node_kind,
+            self._source_with_target(work.label),
+        )
+        return SyncOutcome.SYNCED
+
+    async def _fetch_source_events(self, ref: Ref, kind: str) -> tuple[Event, ...]:
+        """Fetch source events for one source ref and event channel."""
+        if not isinstance(self.source_provider, SupportsEventReads):
+            return ()
+        events: list[Event] = []
+        cursor: str | None = None
+        while True:
+            page = await self.source_provider.fetch_events(
+                EventQuery(
+                    refs=(ref,),
+                    native_event_kinds=(kind,),
+                    cursor=cursor,
+                )
+            )
+            events.extend(page.items)
+            if page.cursor is None:
+                return tuple(events)
+            cursor = page.cursor
+
+    async def _fetch_target_events(
+        self,
+        refs: Sequence[Ref],
+        kind: str,
+    ) -> tuple[Event, ...]:
+        """Fetch target events when the target can report existing activity."""
+        if not refs or not isinstance(self.target_provider, SupportsEventReads):
+            return ()
+        deduped = tuple({ref_to_key(ref): ref for ref in refs}.values())
+        events: list[Event] = []
+        cursor: str | None = None
+        while True:
+            page = await self.target_provider.fetch_events(
+                EventQuery(
+                    refs=deduped,
+                    native_event_kinds=(kind,),
+                    cursor=cursor,
+                )
+            )
+            events.extend(page.items)
+            if page.cursor is None:
+                return tuple(events)
+            cursor = page.cursor
+
+    def _target_event_refs(self, source_ref: Ref, work: _TargetWork) -> tuple[Ref, ...]:
+        """Project a source event ref onto target event refs."""
+        if not source_ref.path:
+            return (work.target_ref,)
+
+        path = self._relative_event_path(source_ref, work.projected_record.ref)
+        if not path:
+            return (work.target_ref,)
+        target_path = (*work.target_ref.path, *path)
+        if not work.mappings:
+            return (Ref(work.target_ref.key, target_path),)
+
+        source_index = self._path_tail_int(source_ref, work.projected_record.ref)
+        if source_index is None:
+            return ()
+        target_indices = self._mapped_path_indices(
+            source_index,
+            work.mappings,
+        )
+        if not target_indices:
+            log.debug(
+                "[%s] Skipping activity event for %s because no target path "
+                "mapping exists",
+                self.profile_name,
+                self._node_ref_key(self.source_provider.NAMESPACE, source_ref),
+            )
+            return ()
+
+        prefix = target_path[:-1]
+        tail = target_path[-1]
+        return tuple(
+            Ref(work.target_ref.key, (*prefix, Step(tail.axis, index)))
+            for index in target_indices
+        )
+
+    def _source_event_in_scope(self, event: Event, work: _TargetWork) -> bool:
+        """Return whether an event belongs to this mapped work item."""
+        if not work.mappings or not event.ref.path:
+            return True
+        if not self._relative_event_path(event.ref, work.projected_record.ref):
+            return True
+        source_index = self._path_tail_int(event.ref, work.projected_record.ref)
+        return source_index is not None and any(
+            mapping.source_range.contains(source_index) for mapping in work.mappings
+        )
+
+    def _event_sync_pairs(self) -> dict[str, str]:
+        """Return source event channel to target event channel mappings."""
+        target_by_semantic = {
+            spec.kind.semantic: spec
+            for spec in self._target_capabilities.events
+            if spec.kind.semantic is not None
+            and WriteOp.APPEND_EVENT in spec.write_ops
+            and (
+                isinstance(self.target_provider, SupportsEventReads)
+                or spec.idempotent_appends
+            )
+        }
+        return {
+            source.kind.native: target.kind.native
+            for source in self._source_capabilities.events
+            if source.kind.semantic in target_by_semantic
+            for target in [target_by_semantic[source.kind.semantic]]
+        }
+
+    async def _write_events(self, writes: Sequence[EventWrite]):
+        """Write events and raise when any write fails."""
+        if not isinstance(self.target_provider, SupportsEventWrites):
+            raise TypeError(
+                f"Target provider '{self.target_provider.NAMESPACE}' must support "
+                "event writes"
+            )
+        results = await self.target_provider.write_events(writes)
+        if len(results) != len(writes):
+            raise ValueError(
+                f"Target provider '{self.target_provider.NAMESPACE}' returned "
+                f"{len(results)} write results for {len(writes)} writes"
+            )
         for result in results:
             if not result.ok:
-                raise RuntimeError(result.error or result.code or "record write failed")
+                raise RuntimeError(result.error or result.code or "event write failed")
         return results
 
-    async def _submit_record_writes(
-        self,
-        writes: Sequence[RecordWrite],
-    ) -> Sequence[WriteResult]:
-        """Write records and validate only positional result shape."""
+    @staticmethod
+    def _mapped_path_indices(
+        source_index: int,
+        mappings: Sequence[AnibridgeMapping],
+    ) -> tuple[int, ...]:
+        """Project one source path index through exact mapping ranges."""
+        mapping = RecordPlanner._best_mapping_for_index(source_index, mappings)
+        if mapping is None or mapping.target_ratio is not None:
+            return ()
+        target_ranges = mapping.target_ranges
+        if mapping.source_range.length == 1:
+            return tuple(
+                index
+                for target_range in target_ranges
+                for index in range(
+                    target_range.start,
+                    (target_range.end or target_range.start) + 1,
+                )
+            )
+
+        offset = source_index - mapping.source_range.start
+        for target_range in target_ranges:
+            length = target_range.length
+            if length is None:
+                return (target_range.start + offset,)
+            if offset < length:
+                return (target_range.start + offset,)
+            offset -= length
+        return ()
+
+    @staticmethod
+    def _relative_event_path(ref: Ref, root_ref: Ref) -> tuple[Step, ...]:
+        """Return the event path relative to the source record ref when possible."""
+        if ref.path[: len(root_ref.path)] == root_ref.path:
+            return ref.path[len(root_ref.path) :]
+        return ref.path
+
+    @classmethod
+    def _path_tail_int(cls, ref: Ref, root_ref: Ref) -> int | None:
+        """Return the final integer coordinate from an event path."""
+        path = cls._relative_event_path(ref, root_ref)
+        if not path:
+            return None
+        try:
+            return int(path[-1].value)
+        except TypeError, ValueError:
+            return None
+        return None
+
+    async def _write_records(self, writes: Sequence[RecordWrite]):
+        """Write records and raise when any write fails."""
         if not isinstance(self.target_provider, SupportsRecordWrites):
             raise TypeError(
                 f"Target provider '{self.target_provider.NAMESPACE}' must support "
@@ -812,17 +1012,21 @@ class SyncClient:
                 f"Target provider '{self.target_provider.NAMESPACE}' returned "
                 f"{len(results)} write results for {len(writes)} writes"
             )
+        for result in results:
+            if not result.ok:
+                raise RuntimeError(result.error or result.code or "record write failed")
         return results
 
     async def _fetch_target_record(self, target_ref, target_kind: str) -> Record | None:
         """Fetch the existing target record for planning."""
         if not isinstance(self.target_provider, SupportsRecordReads):
             return None
+        fields = self._target_fields_for(target_kind)
         page = await self.target_provider.fetch_records(
             RecordQuery(
                 refs=(target_ref,),
                 native_record_kinds=(target_kind,),
-                fields=frozenset(self._sync_fields),
+                fields=fields,
                 limit=1,
             )
         )
@@ -831,7 +1035,7 @@ class SyncClient:
     async def _fetch_target_records_batch(
         self,
         requests: Iterable[tuple[Ref, str]],
-    ) -> dict[_TargetRecordKey, Record]:
+    ) -> dict[TargetRecordKey, Record]:
         """Fetch existing target records grouped by native record kind."""
         if not isinstance(self.target_provider, SupportsRecordReads):
             return {}
@@ -843,32 +1047,41 @@ class SyncClient:
                 target_ref,
             )
 
-        records: dict[_TargetRecordKey, Record] = {}
+        records: dict[TargetRecordKey, Record] = {}
         for target_kind, refs_by_key in grouped.items():
             refs = tuple(refs_by_key.values())
             if not refs:
                 continue
+            fields = self._target_fields_for(target_kind)
             page = await self.target_provider.fetch_records(
                 RecordQuery(
                     refs=refs,
                     native_record_kinds=(target_kind,),
-                    fields=frozenset(self._sync_fields),
+                    fields=fields,
                     limit=len(refs),
                 )
             )
             for record in page.items:
                 record_key = ref_to_key(record.ref)
-                records[_TargetRecordKey(record_key, record.kind)] = record
-                records.setdefault(_TargetRecordKey(record_key, target_kind), record)
+                records[(record_key, record.kind)] = record
+                records.setdefault((record_key, target_kind), record)
         return records
+
+    def _target_fields_for(self, target_kind: str) -> frozenset[RecordField]:
+        """Return the source fields that can be synced into one target channel."""
+        fields: set[RecordField] = set()
+        for source_kind in self._planner.source_record_kinds():
+            if self._planner.target_record_kind_for(source_kind) == target_kind:
+                fields.update(self._planner.sync_fields_for(source_kind, target_kind))
+        return frozenset(fields)
 
     def _fetch_pinned_fields_batch(
         self,
         requests: Iterable[tuple[Ref, str]],
-    ) -> dict[_TargetRecordKey, list[RecordField]]:
+    ) -> dict[TargetRecordKey, list[RecordField]]:
         """Fetch pinned fields for target records in one page-level query."""
         wanted = [
-            _TargetRecordKey(ref_to_key(target_ref), record_kind)
+            (ref_to_key(target_ref), record_kind)
             for target_ref, record_kind in requests
         ]
         if not wanted:
@@ -884,7 +1097,7 @@ class SyncClient:
                 .all()
             )
 
-        scored_fields: dict[_TargetRecordKey, tuple[int, list[RecordField]]] = {}
+        scored_fields: dict[TargetRecordKey, tuple[int, list[RecordField]]] = {}
         for pin in pins:
             pin_ref = ref_from_payload(pin.target_ref)
             if pin_ref is None:
@@ -897,9 +1110,10 @@ class SyncClient:
                 except ValueError:
                     continue
             for target_key in wanted:
-                if pin_ref_key == target_key.ref:
+                target_ref_key, _target_kind = target_key
+                if pin_ref_key == target_ref_key:
                     ref_score = 2
-                elif pin_ref_key.covers(target_key.ref):
+                elif pin_ref_key.covers(target_ref_key):
                     ref_score = 1
                 else:
                     continue

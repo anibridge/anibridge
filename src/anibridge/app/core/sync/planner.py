@@ -18,6 +18,7 @@ from anibridge.provider.base import (
     Rating,
     Record,
     RecordField,
+    RecordSpec,
     Ref,
     Role,
     ScanItem,
@@ -41,9 +42,9 @@ from anibridge.app.core.sync.rules import SyncRuleEngine, build_rule_context
 from anibridge.app.core.sync.stats import (
     AppliedRule,
     FieldBlock,
+    FieldChange,
     MappingRange,
     PlanDiagnostics,
-    RecordDiff,
     RecordPlan,
     RecordSnapshot,
 )
@@ -100,25 +101,19 @@ class RecordPlanner:
         self.destructive_sync = destructive_sync
 
         self._source_kind_semantics = {
-            descriptor.native: descriptor.semantic
-            for descriptor in source_capabilities.record_kinds
+            spec.kind.native: spec.kind.semantic for spec in source_capabilities.records
+        }
+        self._source_record_specs = {
+            spec.kind.native: spec for spec in source_capabilities.records
+        }
+        self._target_record_specs = {
+            spec.kind.native: spec for spec in target_capabilities.records
         }
         self._target_kinds_by_semantic = {
-            descriptor.semantic: descriptor.native
-            for descriptor in target_capabilities.record_kinds
-            if descriptor.semantic is not None
+            spec.kind.semantic: spec.kind.native
+            for spec in target_capabilities.records
+            if spec.kind.semantic is not None
         }
-        self._target_writable_fields = {
-            field
-            for field, spec in target_capabilities.record_fields.items()
-            if isinstance(spec, FieldSpec) and spec.writable
-        }
-        self._source_statuses = self._status_semantics(
-            source_capabilities.record_fields.get(RecordField.STATUS)
-        )
-        self._target_statuses = self._status_semantics(
-            target_capabilities.record_fields.get(RecordField.STATUS)
-        )
         self.sync_fields = self._sync_fields()
 
     def validate_provider_contracts(
@@ -135,12 +130,13 @@ class RecordPlanner:
             (isinstance(target_provider, SupportsMapping), "mapping resolution"),
             (isinstance(target_provider, SupportsRecordReads), "record reads"),
             (isinstance(target_provider, SupportsRecordWrites), "record writes"),
-            (bool(self.source_capabilities.record_kinds), "source record kinds"),
-            (bool(self.target_capabilities.record_kinds), "target record kinds"),
-            (bool(self.source_capabilities.record_fields), "source record fields"),
-            (bool(self.target_capabilities.record_fields), "target record fields"),
+            (bool(self.source_capabilities.records), "source record channels"),
+            (bool(self.target_capabilities.records), "target record channels"),
             (
-                WriteOp.UPSERT_RECORD in self.target_capabilities.write_ops,
+                any(
+                    WriteOp.UPSERT_RECORD in spec.write_ops
+                    for spec in self.target_capabilities.records
+                ),
                 "upsert_record",
             ),
             (
@@ -163,7 +159,16 @@ class RecordPlanner:
             native
             for native, semantic in self._source_kind_semantics.items()
             if semantic in self._target_kinds_by_semantic
+            and self.sync_fields_for(
+                native,
+                self._target_kinds_by_semantic[semantic],
+            )
         )
+
+    def can_delete_record(self, target_kind: str) -> bool:
+        """Return whether a target record channel supports deletion."""
+        spec = self._target_record_specs.get(target_kind)
+        return spec is not None and WriteOp.DELETE_RECORD in spec.write_ops
 
     def target_record_kind_for(self, source_kind: str) -> str | None:
         """Translate a source-native record kind to a target-native kind."""
@@ -233,8 +238,9 @@ class RecordPlanner:
         pinned = set(pinned_fields)
 
         target_values = target_record.values if target_record else {}
-        current_values = self._rule_values(target_values)
-        computed_values = self._rule_values(source_record.values)
+        sync_fields = self.sync_fields_for(source_record.kind, target_kind)
+        current_values = self._rule_values(target_values, sync_fields)
+        computed_values = self._rule_values(source_record.values, sync_fields)
         source_status = self.status_of(source_record.values.get(RecordField.STATUS))
         final_status = (
             source_status
@@ -248,7 +254,7 @@ class RecordPlanner:
             target_ref=target_ref,
         )
 
-        for field in self.sync_fields:
+        for field in sync_fields:
             if field in pinned:
                 blocked_fields.append(FieldBlock(field, "pinned"))
                 continue
@@ -268,7 +274,8 @@ class RecordPlanner:
             if (
                 field == RecordField.STATUS
                 and rule.value is not None
-                and self.status_of(rule.value) not in self._target_statuses
+                and self.status_of(rule.value)
+                not in self._status_semantics_for_target(target_kind)
             ):
                 blocked_fields.append(FieldBlock(field, "unsupported_status"))
                 continue
@@ -277,10 +284,11 @@ class RecordPlanner:
                 field,
                 rule.value,
                 current_values.get(field),
+                target_kind,
             )
 
             current_value = current_values.get(field)
-            if self._values_equal(field, current_value, new_value):
+            if self._values_equal(field, current_value, new_value, target_kind):
                 continue
             if (
                 not self.destructive_sync
@@ -318,7 +326,7 @@ class RecordPlanner:
             expected_revision=target_record.revision if target_record else None,
             set={
                 field: planned_values[field]
-                for field in self.sync_fields
+                for field in sync_fields
                 if field in changed_fields and field in planned_values
             },
             clear=frozenset(clear_fields),
@@ -346,12 +354,14 @@ class RecordPlanner:
             label=label,
         )
 
-    def target_state_for_status(self, status: Status | None) -> State:
+    def target_state_for_status(self, status: Status | None, target_kind: str) -> State:
         """Return the target-native state for a normalized status."""
         if status is None:
-            return State(native=None, status=None)
+            raise ValueError("Cannot build target state for an empty status")
 
-        spec = self.target_capabilities.record_fields.get(RecordField.STATUS)
+        spec = self._field_spec(
+            self._target_record_specs.get(target_kind), RecordField.STATUS
+        )
         if not isinstance(spec, FieldSpec):
             raise ValueError("Target provider does not advertise writable status")
 
@@ -369,10 +379,10 @@ class RecordPlanner:
             return value.status
         return None
 
-    def format_diff(self, diff: RecordDiff) -> str:
+    def format_diff(self, diff: Sequence[FieldChange]) -> str:
         """Format a diff dictionary for logging."""
         parts: list[str] = []
-        for change in sorted(diff.changes, key=lambda item: item.field.value):
+        for change in sorted(diff, key=lambda item: item.field.value):
             rendered = []
             for value in (change.before, change.after):
                 if isinstance(value, datetime):
@@ -392,17 +402,34 @@ class RecordPlanner:
         return " | ".join(parts)
 
     def _sync_fields(self) -> tuple[RecordField, ...]:
+        fields: set[RecordField] = set()
+        for source_kind in self._source_record_specs:
+            target_kind = self.target_record_kind_for(source_kind)
+            if target_kind is not None:
+                fields.update(self.sync_fields_for(source_kind, target_kind))
+        return tuple(field for field in RecordField if field in fields)
+
+    def sync_fields_for(
+        self,
+        source_kind: str,
+        target_kind: str,
+    ) -> tuple[RecordField, ...]:
+        """Return fields syncable between two native record channels."""
         fields: list[RecordField] = []
+        source_spec = self._source_record_specs.get(source_kind)
+        target_spec = self._target_record_specs.get(target_kind)
         for field in RecordField:
-            source_spec = self.source_capabilities.record_fields.get(field)
             if self.sync_rule_engine.is_disabled(field):
                 continue
-            if not isinstance(source_spec, FieldSpec) or not source_spec.readable:
+            source_field = self._field_spec(source_spec, field)
+            if not isinstance(source_field, FieldSpec) or not source_field.readable:
                 continue
-            if field not in self._target_writable_fields:
+            target_field = self._field_spec(target_spec, field)
+            if not isinstance(target_field, FieldSpec) or not target_field.writable:
                 continue
             if field == RecordField.STATUS and not (
-                self._source_statuses & self._target_statuses
+                self._status_semantics(source_field)
+                & self._status_semantics(target_field)
             ):
                 continue
             fields.append(field)
@@ -411,9 +438,10 @@ class RecordPlanner:
     def _rule_values(
         self,
         values: Mapping[RecordField, Value],
+        fields: Sequence[RecordField],
     ) -> dict[RecordField, Any]:
         rule_values: dict[RecordField, Any] = {}
-        for field in self.sync_fields:
+        for field in fields:
             value = values.get(field)
             rule_values[field] = (
                 self.status_of(value) if field == RecordField.STATUS else value
@@ -425,18 +453,19 @@ class RecordPlanner:
         field: RecordField,
         value: Any,
         current_value: Any = None,
+        target_kind: str = "",
     ) -> Value | None:
         if value is None:
             return None
         if field == RecordField.STATUS:
             if isinstance(value, State):
-                value = self.target_state_for_status(value.status)
+                value = self.target_state_for_status(value.status, target_kind)
             elif isinstance(value, Status):
-                value = self.target_state_for_status(value)
+                value = self.target_state_for_status(value, target_kind)
         if isinstance(value, datetime | date):
-            return self._coerce_temporal(field, value)
+            return self._coerce_temporal(field, value, target_kind)
         if field == RecordField.PROGRESS and isinstance(value, Progress):
-            constraint = self._constraint(field, ProgressConstraint)
+            constraint = self._constraint(field, ProgressConstraint, target_kind)
             if constraint is None:
                 return value
             current = current_value if isinstance(current_value, Progress) else None
@@ -457,16 +486,18 @@ class RecordPlanner:
                 ),
             )
         if field == RecordField.RATING and isinstance(value, Rating):
-            return self._coerce_rating(value)
+            return self._coerce_rating(value, target_kind)
         if field == RecordField.NOTES and isinstance(value, str):
-            limit = self._constraint(field, TextConstraint)
+            limit = self._constraint(field, TextConstraint, target_kind)
             return value[: limit.max_length] if limit and limit.max_length else value
         if (
             field == RecordField.REPEAT_COUNT
             and isinstance(value, int | float)
             and not isinstance(value, bool)
         ):
-            return round(self._coerce_number(field, float(value)))
+            return round(
+                self._coerce_number(field, float(value), target_kind=target_kind)
+            )
         return value
 
     def _coerce_progress_current(
@@ -498,12 +529,13 @@ class RecordPlanner:
         self,
         field: RecordField,
         value: date | datetime,
+        target_kind: str,
     ) -> date | datetime:
         if isinstance(value, datetime) and (
             value.tzinfo is None or value.utcoffset() is None
         ):
             raise ValueError(f"{field.value} must be timezone-aware")
-        constraint = self._constraint(field, TemporalConstraint)
+        constraint = self._constraint(field, TemporalConstraint, target_kind)
         if constraint is not None and constraint.precision == TemporalPrecision.DATE:
             return value.date() if isinstance(value, datetime) else value
         if not isinstance(value, datetime):
@@ -511,8 +543,10 @@ class RecordPlanner:
         value = value.astimezone(UTC)
         return value
 
-    def _coerce_rating(self, value: Rating) -> Rating:
-        constraint = self._constraint(RecordField.RATING, NumericConstraint)
+    def _coerce_rating(self, value: Rating, target_kind: str) -> Rating:
+        constraint = self._constraint(
+            RecordField.RATING, NumericConstraint, target_kind
+        )
         if constraint is None:
             return value
 
@@ -546,8 +580,11 @@ class RecordPlanner:
         field: RecordField,
         value: float,
         constraint: NumericConstraint | None = None,
+        target_kind: str = "",
     ) -> float:
-        constraint = constraint or self._constraint(field, NumericConstraint)
+        constraint = constraint or self._constraint(
+            field, NumericConstraint, target_kind
+        )
         if constraint is None:
             return value
         if constraint.minimum is not None:
@@ -567,23 +604,47 @@ class RecordPlanner:
         self,
         field: RecordField,
         constraint_type: type[_ConstraintT],
+        target_kind: str = "",
     ) -> _ConstraintT | None:
-        spec = self.target_capabilities.record_fields.get(field)
-        if not isinstance(spec, FieldSpec):
+        record_spec = self._target_record_specs.get(target_kind)
+        field_spec = self._field_spec(record_spec, field)
+        if not isinstance(field_spec, FieldSpec):
             return None
-        for constraint in spec.constraints:
+        for constraint in field_spec.constraints:
             if isinstance(constraint, constraint_type):
                 return constraint
         return None
 
-    def _values_equal(self, field: RecordField, current: Any, new: Any) -> bool:
+    @staticmethod
+    def _field_spec(
+        record_spec: RecordSpec | None, field: RecordField
+    ) -> FieldSpec | None:
+        if record_spec is None:
+            return None
+        spec = record_spec.fields.get(field)
+        return spec if isinstance(spec, FieldSpec) else None
+
+    def _status_semantics_for_target(self, target_kind: str) -> frozenset[Status]:
+        return self._status_semantics(
+            self._field_spec(
+                self._target_record_specs.get(target_kind), RecordField.STATUS
+            )
+        )
+
+    def _values_equal(
+        self,
+        field: RecordField,
+        current: Any,
+        new: Any,
+        target_kind: str,
+    ) -> bool:
         if field == RecordField.PROGRESS:
             if self._empty_progress(current) and self._empty_progress(new):
                 return True
             if not isinstance(current, Progress) or not isinstance(new, Progress):
                 return current == new
 
-            constraint = self._constraint(field, ProgressConstraint)
+            constraint = self._constraint(field, ProgressConstraint, target_kind)
             current_tuple = [current.current]
             new_tuple = [new.current]
             if constraint is None or constraint.total:

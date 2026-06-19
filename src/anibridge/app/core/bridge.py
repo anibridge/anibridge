@@ -317,11 +317,11 @@ class BridgeClient:
 
             log.debug(
                 "[%s] Source scan prepared: trigger=%s refs=%s "
-                "require_activity=%s change_feed=%s",
+                "require_user_data=%s change_feed=%s",
                 self.profile_name,
                 scan.trigger.value,
                 len(scan.source_refs) if scan.source_refs else "all",
-                scan.require_activity,
+                scan.require_user_data,
                 scan.from_change_feed,
             )
             if self.profile_config.batch_requests:
@@ -347,14 +347,15 @@ class BridgeClient:
                 sync_stats.not_found,
                 sync_stats.failed,
                 sync_stats.coverage * 100,
-                sync_stats.count_trackable_items_by_outcome(),
+                sync_stats.count(trackable=True),
                 duration.total_seconds(),
             )
 
-            uncovered_items = sync_stats.get_trackable_items_by_outcome(
+            uncovered_items = sync_stats.items(
                 SyncOutcome.NOT_FOUND,
                 SyncOutcome.FAILED,
                 SyncOutcome.PENDING,
+                trackable=True,
             )
             if uncovered_items:
                 log.debug(
@@ -484,7 +485,7 @@ class BridgeClient:
                 return ScanPlan(
                     trigger=request.trigger,
                     source_refs=source_refs,
-                    require_activity=(
+                    require_user_data=(
                         False
                         if request.source_refs is not None
                         else not self.profile_config.full_scan
@@ -503,7 +504,7 @@ class BridgeClient:
             return ScanPlan(
                 trigger=request.trigger,
                 source_refs=source_refs,
-                require_activity=False,
+                require_user_data=False,
                 from_change_feed=changed_refs is not None,
             )
 
@@ -514,20 +515,20 @@ class BridgeClient:
             return ScanPlan(
                 trigger=request.trigger,
                 source_refs=source_refs,
-                require_activity=False,
+                require_user_data=False,
             )
 
         if request.source_refs is not None:
             return ScanPlan(
                 trigger=request.trigger,
                 source_refs=dedupe_refs(request.source_refs),
-                require_activity=False,
+                require_user_data=False,
             )
 
         return ScanPlan(
             trigger=request.trigger,
             source_refs=None,
-            require_activity=not self.profile_config.full_scan,
+            require_user_data=not self.profile_config.full_scan,
         )
 
     async def _poll_source_refs(self) -> tuple[Ref, ...] | None:

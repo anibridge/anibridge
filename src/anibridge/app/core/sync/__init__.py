@@ -43,7 +43,7 @@ class ScanPlan(msgspec.Struct, frozen=True):
 
     trigger: SyncTrigger
     source_refs: tuple[Ref, ...] | None
-    require_activity: bool
+    require_user_data: bool
     from_change_feed: bool = False
 
 

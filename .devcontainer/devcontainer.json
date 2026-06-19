@@ -1,6 +1,6 @@
 {
     "name": "anibridge",
-    "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+    "image": "mcr.microsoft.com/devcontainers/base:resolute",
     "features": {
         "ghcr.io/devcontainers/features/node:2": {
             "version": "25"
@@ -46,8 +46,10 @@
     },
     "postCreateCommand": "CI=1 uv run ab-deps-install",
     "containerEnv": {
-        "PYTHON_JIT": "1",
         "PYTHONMALLOC": "malloc",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHON_JIT": "1",
         "UV_LINK_MODE": "copy"
-    }
+    },
+    "mounts": ["source=gh-auth,target=/home/vscode/.config/gh,type=volume"]
 }

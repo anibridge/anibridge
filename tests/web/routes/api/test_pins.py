@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from anibridge.app.core.sync.refs import RefPayload
+from anibridge.app.core.sync import RefPayload
 from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.web.routes.api import pins as pins_api_module
 from anibridge.app.web.services.pin_service import (

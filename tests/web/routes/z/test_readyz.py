@@ -7,7 +7,6 @@ from litestar.app import Litestar
 from litestar.testing.client.sync_client import TestClient
 
 from anibridge.app.web.routes.z import readyz as readyz_module
-from tests.web.support import SchedulerStub
 
 
 @pytest.fixture
@@ -19,8 +18,9 @@ def readyz_client() -> TestClient:
 def test_readyz_reports_scheduler_failures(
     monkeypatch: pytest.MonkeyPatch,
     readyz_client: TestClient,
+    scheduler_stub_cls,
 ) -> None:
-    scheduler = SchedulerStub(
+    scheduler = scheduler_stub_cls(
         running=True,
         profiles={"one": object(), "two": object()},
         bridge_clients={"one": object()},
@@ -75,8 +75,9 @@ def test_readyz_is_unavailable_without_scheduler(
 def test_readyz_is_ok_when_scheduler_is_running(
     monkeypatch: pytest.MonkeyPatch,
     readyz_client: TestClient,
+    scheduler_stub_cls,
 ) -> None:
-    scheduler = SchedulerStub(
+    scheduler = scheduler_stub_cls(
         running=True,
         profiles={"one": object()},
         bridge_clients={"one": object()},

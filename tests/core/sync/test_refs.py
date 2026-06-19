@@ -2,7 +2,8 @@
 
 from anibridge.provider.base import Ref
 
-from anibridge.app.core.sync.refs import (
+from anibridge.app.core.sync import (
+    RefKey,
     RefPayload,
     RefStepPayload,
     ref_from_payload,
@@ -16,9 +17,9 @@ def test_ref_to_key_includes_path_coordinates() -> None:
     """Ref keys should distinguish path coordinates."""
     ref = Ref.anchor("show").child("season", 2).child("episode", 5)
 
-    assert ref_to_key(ref) == (
-        "show",
-        (("season", 2), ("episode", 5)),
+    assert ref_to_key(ref) == RefKey(
+        key="show",
+        path=(RefStepPayload("season", 2), RefStepPayload("episode", 5)),
     )
 
 

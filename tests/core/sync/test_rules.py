@@ -26,8 +26,8 @@ def test_namespace_normalizes_nested_values_and_missing_access() -> None:
 
     assert namespace.status == Status.ACTIVE
     assert namespace.nested.status == Status.PLANNED
-    assert namespace.items[0] == Status.COMPLETED
-    assert namespace.items[1].status == Status.DROPPED
+    assert namespace["items"][0] == Status.COMPLETED
+    assert namespace["items"][1].status == Status.DROPPED
     assert list(namespace) == ["status", "nested", "items"]
     assert len(namespace) == 3
 

@@ -20,12 +20,7 @@ from anibridge.provider.base import (
 )
 
 from anibridge.app.core.animap import AnimapClient, AnimapEdge
-from anibridge.app.core.sync.stats import RecordSnapshot
-from anibridge.app.core.sync.targeting import (
-    diff_snapshots,
-    external_ids_for_record,
-    resolve_target_refs,
-)
+from anibridge.app.core.sync.targeting import TargetResolver
 
 
 class _FakeAnimapClient:
@@ -102,25 +97,6 @@ class _DuplicateMatchProvider(_MappingTargetProvider):
         )
 
 
-def test_diff_snapshots_returns_changed_fields() -> None:
-    """`diff_snapshots` only includes requested fields with changed values."""
-    before = RecordSnapshot(
-        ref=Ref.anchor("before"),
-        values={"status": "active", "progress": 3, "rating": 70},
-    )
-    after = RecordSnapshot(
-        ref=Ref.anchor("after"),
-        values={"status": "completed", "progress": 3, "rating": 80},
-    )
-
-    diff = diff_snapshots(before, after, {"status", "progress"})
-
-    assert diff == {
-        "status": ("active", "completed"),
-        "ref": (Ref.anchor("before"), Ref.anchor("after")),
-    }
-
-
 def test_external_ids_for_record_deduplicates_source_record_and_node_ids() -> None:
     """Record ids and node IDS facet are merged by mapping descriptor."""
     anilist = ExternalId("anilist", "1")
@@ -135,10 +111,11 @@ def test_external_ids_for_record_deduplicates_source_record_and_node_ids() -> No
     )
     record = Record(
         ref=Ref.anchor("source-1"),
+        kind="progress",
         ids=(anilist, ExternalId("tvdb_show", "20")),
     )
 
-    ids = external_ids_for_record(node, record=record)
+    ids = TargetResolver._record_ids(node=node, record=record)
 
     assert ids == (
         ExternalId("anilist", "1"),
@@ -154,15 +131,15 @@ async def test_resolve_target_refs_uses_mapping_authority() -> None:
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
+        kind="progress",
         ids=(ExternalId("anilist", "123"),),
     )
 
-    targets = await resolve_target_refs(
+    resolver = TargetResolver(
         target_provider=provider,
         animap_client=cast(AnimapClient, _FakeAnimapClient()),
-        node=node,
-        record=record,
     )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert tuple(match.match.ref for match in targets) == (
         Ref.anchor("resolved:anilist:123"),
@@ -175,14 +152,13 @@ async def test_resolve_target_refs_skips_namespace_match_without_authority() -> 
     """Same provider namespace is not enough when no target authority matches."""
     provider = _MappingTargetProvider(authorities=frozenset({"anilist"}))
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
-    record = Record(ref=Ref.anchor("source-native"))
+    record = Record(ref=Ref.anchor("source-native"), kind="progress")
 
-    targets = await resolve_target_refs(
+    resolver = TargetResolver(
         target_provider=provider,
         animap_client=cast(AnimapClient, _FakeAnimapClient()),
-        node=node,
-        record=record,
     )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert targets == ()
     assert provider.resolved_ids == []
@@ -195,15 +171,15 @@ async def test_resolve_target_refs_requires_advertised_authorities() -> None:
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
+        kind="progress",
         ids=(ExternalId("anilist", "123"),),
     )
 
-    targets = await resolve_target_refs(
+    resolver = TargetResolver(
         target_provider=provider,
         animap_client=cast(AnimapClient, _FakeAnimapClient()),
-        node=node,
-        record=record,
     )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert targets == ()
     assert provider.resolved_ids == []
@@ -215,15 +191,15 @@ async def test_resolve_target_refs_requires_mapping_capability() -> None:
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
+        kind="progress",
         ids=(ExternalId("anilist", "123"),),
     )
 
-    targets = await resolve_target_refs(
+    resolver = TargetResolver(
         target_provider=_PlainProvider(logger=getLogger(__name__), config={}),
         animap_client=cast(AnimapClient, _FakeAnimapClient()),
-        node=node,
-        record=record,
     )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert targets == ()
 
@@ -235,6 +211,7 @@ async def test_resolve_target_refs_uses_animap_edges_and_prefers_confidence() ->
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
+        kind="progress",
         ids=(ExternalId("tmdb_show", "10"), ExternalId("anilist", "123")),
     )
     valid_edge = AnimapEdge(
@@ -251,17 +228,16 @@ async def test_resolve_target_refs_uses_animap_edges_and_prefers_confidence() ->
     )
     animap_client = _EdgeAnimapClient(valid_edge, null_destination_edge)
 
-    targets = await resolve_target_refs(
+    resolver = TargetResolver(
         target_provider=provider,
         animap_client=cast(AnimapClient, animap_client),
-        node=node,
-        record=record,
     )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert len(targets) == 1
     assert targets[0].match.external_id == ExternalId("anilist", "456")
-    assert targets[0].source_descriptor == ExternalId("tmdb_show", "10", "s1")
-    assert targets[0].target_descriptor == ExternalId("anilist", "456")
+    assert targets[0].source_id == ExternalId("tmdb_show", "10", "s1")
+    assert targets[0].target_id == ExternalId("anilist", "456")
     assert targets[0].mappings[0].source_key == "1-12"
     assert targets[0].mappings
     assert provider.resolved_ids == [
@@ -278,6 +254,7 @@ async def test_resolve_target_refs_deduplicates_identical_mapping_edges() -> Non
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
+        kind="progress",
         ids=(ExternalId("tvdb_show", "281949", "s2"),),
     )
     edge = AnimapEdge(
@@ -287,12 +264,11 @@ async def test_resolve_target_refs_deduplicates_identical_mapping_edges() -> Non
         destination_range="1-10",
     )
 
-    targets = await resolve_target_refs(
+    resolver = TargetResolver(
         target_provider=provider,
         animap_client=cast(AnimapClient, _EdgeAnimapClient(edge, edge)),
-        node=node,
-        record=record,
     )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert len(targets) == 1
     assert [mapping.as_pair() for mapping in targets[0].mappings] == [("1-10", "1-10")]

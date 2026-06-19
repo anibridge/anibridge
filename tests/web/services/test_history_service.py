@@ -15,7 +15,7 @@ from anibridge.provider.base import (
 )
 
 import anibridge.app.web.services.history_service as history_service_module
-from anibridge.app.core.sync.request import SyncRequest
+from anibridge.app.core.sync import SyncRequest
 from anibridge.app.exceptions import HistoryItemNotFoundError, HistoryPermissionError
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome

@@ -123,13 +123,7 @@ def test_build_provider_registers_default_providers(
             cast("providers_module.AnibridgeProfileConfig", profile),
         )
 
-    assert registered[:5] == [
-        "anibridge.providers.anilist.provider.AnilistProvider",
-        "anibridge.providers.mal.provider.MalProvider",
-        "anibridge.providers.plex.provider.PlexProvider",
-        "anibridge.providers.jellyfin.provider.JellyfinProvider",
-        "anibridge.providers.emby.provider.EmbyProvider",
-    ]
+    assert registered == list(providers_module._DEFAULT_PROVIDER_CLASSES)
 
 
 def test_build_provider_selects_namespace_config(

@@ -4,15 +4,14 @@ from collections.abc import Coroutine
 
 import pytest
 
-from anibridge.app.core.sync.request import SyncTrigger
+from anibridge.app.core.sync import SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.web.routes.api import sync as sync_api_module
-from tests.web.support import SchedulerStub
 
 
 @pytest.fixture
-def scheduler() -> SchedulerStub:
-    return SchedulerStub()
+def scheduler(scheduler_stub_cls):
+    return scheduler_stub_cls()
 
 
 @pytest.fixture
@@ -40,7 +39,7 @@ def scheduled_tasks(
 )
 async def test_sync_routes_schedule_background_tasks(
     patch_app_state,
-    scheduler: SchedulerStub,
+    scheduler,
     scheduled_tasks,
     operation: str,
     expected_task_name: str,
@@ -63,7 +62,7 @@ async def test_sync_routes_schedule_background_tasks(
 @pytest.mark.asyncio
 async def test_reinitialize_profile_calls_scheduler(
     patch_app_state,
-    scheduler: SchedulerStub,
+    scheduler,
 ) -> None:
     """Reinitialize endpoint should target the requested profile."""
     patch_app_state(sync_api_module, scheduler=scheduler)

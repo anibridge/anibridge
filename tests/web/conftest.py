@@ -1,10 +1,12 @@
-"""Shared test doubles for web-layer test suites."""
+"""Shared web-layer test doubles."""
 
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from anibridge.app.core.sync.request import SyncRequest
+import pytest
+
+from anibridge.app.core.sync import SyncRequest
 
 
 class SchedulerStub:
@@ -86,3 +88,8 @@ class SchedulerStub:
         source: str,
     ) -> None:
         self.profile_sync_calls.append((profile, request, source))
+
+
+@pytest.fixture
+def scheduler_stub_cls() -> type[SchedulerStub]:
+    return SchedulerStub

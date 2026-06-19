@@ -7,13 +7,13 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from anibridge.app.core.sync.request import SyncRequest, SyncTrigger
 from anibridge.provider.base import Ref
 
 import anibridge.app.core.sched.client as sched_module
 from anibridge.app.config.settings import AnibridgeConfig
 from anibridge.app.core.bridge import BridgeClient
 from anibridge.app.core.sched.client import SchedulerClient
+from anibridge.app.core.sync import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import ProfileNotFoundError
 
 

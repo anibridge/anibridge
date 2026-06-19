@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import pytest
-from anibridge.app.core.sync.request import SourceScan, SyncRequest, SyncTrigger
 from anibridge.provider.base import (
     Account,
     BackupArtifact,
@@ -30,6 +29,7 @@ from anibridge.provider.base import (
 import anibridge.app.core.bridge as bridge_module
 from anibridge.app.config.settings import AnibridgeConfig, AnibridgeProfileConfig
 from anibridge.app.core.bridge import BridgeClient
+from anibridge.app.core.sync import ScanPlan, SyncRequest, SyncTrigger
 from anibridge.app.core.sync.stats import SyncItem, SyncStats
 from anibridge.app.logging import get_logger
 from anibridge.app.models.db.sync_history import SyncOutcome
@@ -136,11 +136,11 @@ class _FakeSyncClient:
         self.sync_stats = SyncStats()
         type(self).instances.append(self)
 
-    async def scan_source(self, *, scan: SourceScan):
+    async def scan_source(self, *, scan: ScanPlan):
         self.scan = scan
         return self.scan_items
 
-    async def scan_source_pages(self, *, scan: SourceScan, page_size: int):
+    async def scan_source_pages(self, *, scan: ScanPlan, page_size: int):
         self.scan = scan
         self.page_size = page_size
         for page in self.pages:
@@ -373,36 +373,33 @@ async def test_bridge_source_scan_poll_and_webhook_translation(
     ]
     bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory, source=source)
 
-    manual = await bridge._source_scan_for_request(SyncRequest())
-    assert manual == SourceScan(
+    manual = await bridge._scan_plan_for(SyncRequest())
+    assert manual == ScanPlan(
         trigger=SyncTrigger.MANUAL,
         source_refs=None,
-        require_activity=True,
+        require_user_data=True,
     )
 
-    targeted = await bridge._source_scan_for_request(
+    targeted = await bridge._scan_plan_for(
         SyncRequest(trigger=SyncTrigger.MANUAL, source_refs=(Ref.anchor("x"),))
     )
     assert targeted is not None
     assert targeted.source_refs == (Ref.anchor("x"),)
-    assert targeted.require_activity is False
+    assert targeted.require_user_data is False
 
-    poll = await bridge._source_scan_for_request(
+    poll = await bridge._scan_plan_for(
         SyncRequest(trigger=SyncTrigger.POLL, source_refs=(Ref.anchor("a"),))
     )
     assert poll is not None
     assert poll.source_refs == (Ref.anchor("a"), Ref.anchor("b"))
     assert poll.from_change_feed is True
 
-    webhook = await bridge._source_scan_for_request(
+    webhook = await bridge._scan_plan_for(
         SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("w"),))
     )
     assert webhook is not None
     assert webhook.source_refs == (Ref.anchor("w"),)
-    assert (
-        await bridge._source_scan_for_request(SyncRequest(trigger=SyncTrigger.WEBHOOK))
-        is None
-    )
+    assert await bridge._scan_plan_for(SyncRequest(trigger=SyncTrigger.WEBHOOK)) is None
 
     matched, refs = await bridge.parse_webhook(cast(Any, _RequestStub()))
     assert matched is True
@@ -424,9 +421,9 @@ async def test_bridge_poll_and_webhook_fallbacks(
         source=_PlainProvider(logger=get_logger(__name__), config={}),
         full_scan=True,
     )
-    poll = await bridge._source_scan_for_request(SyncRequest(trigger=SyncTrigger.POLL))
+    poll = await bridge._scan_plan_for(SyncRequest(trigger=SyncTrigger.POLL))
     assert poll is not None
-    assert poll.require_activity is False
+    assert poll.require_user_data is False
     assert await bridge.parse_webhook(cast(Any, object())) == (False, None)
 
     source = _BridgeProvider(namespace="source", role=Role.SOURCE)
@@ -485,10 +482,7 @@ async def test_bridge_error_and_fallback_branches(
 
     source = _BridgeProvider(namespace="source", role=Role.SOURCE)
     bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory, source=source)
-    assert (
-        await bridge._source_scan_for_request(SyncRequest(trigger=SyncTrigger.POLL))
-        is None
-    )
+    assert await bridge._scan_plan_for(SyncRequest(trigger=SyncTrigger.POLL)) is None
 
     source.change_pages = [Page(items=(), cursor="same")]
     bridge._set_change_cursor("same")
@@ -498,7 +492,7 @@ async def test_bridge_error_and_fallback_branches(
     monkeypatch.setattr(bridge_module, "release_memory", lambda: None)
     original_scan = _FakeSyncClient.scan_source
 
-    async def _scan_boom(self: _FakeSyncClient, *, scan: SourceScan):
+    async def _scan_boom(self: _FakeSyncClient, *, scan: ScanPlan):
         await original_scan(self, scan=scan)
         self.sync_stats.track_item(
             SyncItem(

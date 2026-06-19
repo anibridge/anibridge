@@ -57,6 +57,7 @@ def test_item_identifier_from_record_parts_uses_tracker_format() -> None:
         ),
         record=Record(
             ref=Ref.anchor("12345"),
+            kind="progress",
             values={RecordField.PROGRESS: Progress(current=4, total=26)},
         ),
     )
@@ -92,7 +93,7 @@ def test_sync_item_identity_ignores_record_channel_and_display_label() -> None:
 
     assert first == second
     assert stats.synced == 1
-    assert stats.count_items_by_outcome() == 1
+    assert stats.count() == 1
 
 
 def test_record_snapshot_stores_history_display_values() -> None:
@@ -147,8 +148,8 @@ def test_sync_stats_tracking_and_coverage() -> None:
 
     assert stats.synced == 1
     assert stats.failed == 1
-    assert stats.count_items_by_outcome(SyncOutcome.PENDING) == 1
-    assert stats.get_items_by_outcome(SyncOutcome.FAILED) == [failed]
+    assert stats.count(SyncOutcome.PENDING) == 1
+    assert stats.items(SyncOutcome.FAILED) == [failed]
     assert stats.coverage == 1 / 3
 
 

@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 import pytest
 
 from anibridge.app.web.routes.api import status as status_api_module
-from tests.web.support import SchedulerStub
 
 
 @pytest.mark.asyncio
@@ -19,10 +18,13 @@ async def test_status_route_returns_empty_without_scheduler(patch_app_state) -> 
 
 
 @pytest.mark.asyncio
-async def test_status_route_serializes_scheduler_payload(patch_app_state) -> None:
+async def test_status_route_serializes_scheduler_payload(
+    patch_app_state,
+    scheduler_stub_cls,
+) -> None:
     patch_app_state(
         status_api_module,
-        scheduler=SchedulerStub(
+        scheduler=scheduler_stub_cls(
             status_payload={
                 "primary": {
                     "config": {

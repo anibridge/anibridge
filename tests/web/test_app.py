@@ -14,7 +14,6 @@ from litestar.testing.client.sync_client import TestClient
 from anibridge.app.config.settings import AnibridgeConfig, WebConfig
 from anibridge.app.exceptions import AnibridgeError, ProfileNotFoundError
 from anibridge.app.web import app as app_module
-from tests.web.support import SchedulerStub
 
 _ExceptionHandler = Callable[[object, Exception], Response[dict[str, str]]]
 
@@ -96,9 +95,10 @@ async def test_lifespan_manages_scheduler_startup_and_shutdown(
     state: _DummyState,
     history_service: _DummyHistoryService,
     log_handler: _DummyHandler,
+    scheduler_stub_cls,
 ) -> None:
     history_service.count = 2
-    scheduler = SchedulerStub(running=False)
+    scheduler = scheduler_stub_cls(running=False)
 
     app = app_module.Litestar(route_handlers=[])
     app.state.scheduler = scheduler

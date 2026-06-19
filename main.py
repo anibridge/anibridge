@@ -35,11 +35,8 @@ async def run() -> int:
         configure_logging(level=config.log_level, log_dir=config.data_path / "logs")
 
         loop = asyncio.get_running_loop()
-        old_executor = loop._default_executor  # ty:ignore[unresolved-attribute]
         executor = ThreadPoolExecutor(max_workers=config.threads)
         loop.set_default_executor(executor)
-        if old_executor is not None:
-            old_executor.shutdown(wait=False)
 
         log.info("\n" + ANIBDRIGE_HEADER)
 

@@ -125,6 +125,9 @@ testpaths = ["tests"]
 addopts = "--cov=src"
 filterwarnings = []
 
+[tool.uv]
+python-preference = "only-managed"
+
 [tool.uv.build-backend]
 module-name = "anibridge"
 namespace = true

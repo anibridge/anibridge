@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 import aiohttp
 import msgspec
-from anibridge.providers.list.anilist.client import global_anilist_limiter
+from anibridge.providers.anilist.client import global_anilist_limiter
 from anibridge.utils.cache import LRUDict, cache, ttl_cache
 
 from anibridge.app import __version__

@@ -436,7 +436,10 @@ def meta_setup() -> None:
         if (dest / ".git").exists():
             print_info(f"Updating {name}...")
             _run(["git", "fetch", "--all", "--prune"], cwd=dest)
-            _run(["git", "pull", "--ff-only"], cwd=dest)
+            try:
+                _run(["git", "pull", "--ff-only"], cwd=dest)
+            except subprocess.CalledProcessError:
+                print_error(f"Failed to update {name}.")
         else:
             print_info(f"Cloning {name}...")
             _run(["git", "clone", url, str(dest)], cwd=packages_dir)

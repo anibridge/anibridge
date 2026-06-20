@@ -102,7 +102,14 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "alembic" },
+    { name = "anibridge-anilist-provider" },
+    { name = "anibridge-emby-provider" },
+    { name = "anibridge-jellyfin-provider" },
+    { name = "anibridge-mal-provider" },
+    { name = "anibridge-plex-provider" },
     { name = "anibridge-provider-base" },
+    { name = "anibridge-simkl-provider" },
+    { name = "anibridge-trakt-provider" },
     { name = "anibridge-utils" },
     { name = "bcrypt" },
     { name = "colorama" },
@@ -135,8 +142,15 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "alembic", specifier = ">=1.18.4" },
-    { name = "anibridge-provider-base", specifier = ">=0.1.0a2" },
-    { name = "anibridge-utils", specifier = ">=0.2.1,<1.0.0" },
+    { name = "anibridge-anilist-provider", git = "https://github.com/anibridge/anibridge-anilist-provider.git?tag=main" },
+    { name = "anibridge-emby-provider", git = "https://github.com/anibridge/anibridge-emby-provider.git?tag=main" },
+    { name = "anibridge-jellyfin-provider", git = "https://github.com/anibridge/anibridge-jellyfin-provider.git?tag=main" },
+    { name = "anibridge-mal-provider", git = "https://github.com/anibridge/anibridge-mal-provider.git?tag=main" },
+    { name = "anibridge-plex-provider", git = "https://github.com/anibridge/anibridge-plex-provider.git?tag=main" },
+    { name = "anibridge-provider-base", git = "https://github.com/anibridge/anibridge-provider-base.git?branch=main" },
+    { name = "anibridge-simkl-provider", git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main" },
+    { name = "anibridge-trakt-provider", git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main" },
+    { name = "anibridge-utils", git = "https://github.com/anibridge/anibridge-utils.git?tag=main" },
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "croniter", specifier = ">=6.2.2" },
@@ -165,26 +179,107 @@ dev = [
 ]
 
 [[package]]
+name = "anibridge-anilist-provider"
+version = "0.2.2"
+source = { git = "https://github.com/anibridge/anibridge-anilist-provider.git?tag=main#dc4854ae8598d47536ab7c2c8d61625d9e3bae27" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-list-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
+]
+
+[[package]]
+name = "anibridge-emby-provider"
+version = "0.2.3"
+source = { git = "https://github.com/anibridge/anibridge-emby-provider.git?tag=main#d17622254606175a11d20caad2d4b12407e90f97" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-provider-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
+]
+
+[[package]]
+name = "anibridge-jellyfin-provider"
+version = "0.2.3"
+source = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git?tag=main#8817e704b1486613e4c2ae8f178fb729c5815b2f" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-provider-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
+]
+
+[[package]]
+name = "anibridge-list-base"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anibridge-utils" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/17/63/2ae9cf4623286ff3953a17d6a54a3b7e7b2365947efc55ef912c61f6ff85/anibridge_list_base-0.2.0.tar.gz", hash = "sha256:cca873043c27c2e76727c2fcacd8ecdbf1a408288a3fda19b8c5e385c85cfb52", size = 6705, upload-time = "2026-04-02T16:48:42.629Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/04/89189fda1e95a108ecb9ea5ee57e4c447496c68b3b2942d9bf57b05ed1af/anibridge_list_base-0.2.0-py3-none-any.whl", hash = "sha256:f3090b312757c7b76f9b5340e643ec5df6e8eda490228532e4150ffc9071d973", size = 8021, upload-time = "2026-04-02T16:48:43.256Z" },
+]
+
+[[package]]
+name = "anibridge-mal-provider"
+version = "0.2.2"
+source = { git = "https://github.com/anibridge/anibridge-mal-provider.git?tag=main#661b4132278b21d31a88cfa803c8db9104ad1245" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-provider-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
+]
+
+[[package]]
+name = "anibridge-plex-provider"
+version = "0.2.2"
+source = { git = "https://github.com/anibridge/anibridge-plex-provider.git?tag=main#4dfc306944d97036372a1b6de6ecab38e11d2ff7" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-provider-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
+]
+
+[[package]]
 name = "anibridge-provider-base"
 version = "0.1.0a2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1f/0d/5eb7bb48ece17dd3886f6a5d86ed6da75662e75d3cffd24f808dda302c39/anibridge_provider_base-0.1.0a2.tar.gz", hash = "sha256:83677238402fd05710203c59a25c73f6b8281142f47cb2460b3bf5cdad00b873", size = 15186, upload-time = "2026-06-19T23:53:00.245Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/8f/855aa064102e95efe731828ff3e0365673373378c6b9883c0bbc7f51e9fd/anibridge_provider_base-0.1.0a2-py3-none-any.whl", hash = "sha256:7655de33066fe9c799d3fd9716919ba5f32651c6cadc93f4002593843ab1ff55", size = 16090, upload-time = "2026-06-19T23:52:59.323Z" },
+source = { git = "https://github.com/anibridge/anibridge-provider-base.git?branch=main#322138eadb78c488e213d19049acc495ee62637e" }
+
+[[package]]
+name = "anibridge-simkl-provider"
+version = "0.1.0"
+source = { git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main#6adb98b844f830bc997b2ec4b9502cac707ef27b" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-provider-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
+]
+
+[[package]]
+name = "anibridge-trakt-provider"
+version = "0.2.0"
+source = { git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main#72f476f265e5f7a7e2579c17606a8cc49fd7c3c6" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anibridge-provider-base" },
+    { name = "anibridge-utils" },
+    { name = "msgspec" },
 ]
 
 [[package]]
 name = "anibridge-utils"
 version = "0.2.2"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/anibridge/anibridge-utils.git?tag=main#5ecf1ace4564e3885f93ce564aef667339909dcd" }
 dependencies = [
     { name = "cachetools" },
     { name = "diskcache" },
     { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/52/27c086c282e5978946ac3a352a05e204c595a1a1ea96156518d6f15c52bb/anibridge_utils-0.2.2.tar.gz", hash = "sha256:52e8828352dee3fe6eb0ba44b1cce1eaa2307a34d730fcc549ebf661b6b56d09", size = 15337, upload-time = "2026-05-07T07:54:46.614Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/1a/59d6fa8fdb3cac5f99e2420495a3f2500c9bd05f825fb05a85c923206268/anibridge_utils-0.2.2-py3-none-any.whl", hash = "sha256:92c0c5103c55784edc65803f6952a28aa47d268c37991bfb64726f4dcce92b82", size = 18431, upload-time = "2026-05-07T07:54:47.536Z" },
 ]
 
 [[package]]

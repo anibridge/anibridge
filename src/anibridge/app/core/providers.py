@@ -22,9 +22,15 @@ __all__ = [
 log = get_logger(__name__)
 
 _LOADED_CLASSES: set[str] = set()
-_DEFAULT_PROVIDER_CLASSES: tuple[
-    str, ...
-] = ()  # TODO: populate when providers are migrated
+_DEFAULT_PROVIDER_CLASSES: tuple[str, ...] = (
+    "anibridge.providers.anilist.provider.AnilistProvider",
+    "anibridge.providers.emby.provider.EmbyProvider",
+    "anibridge.providers.jellyfin.provider.JellyfinProvider",
+    "anibridge.providers.mal.provider.MalProvider",
+    "anibridge.providers.plex.provider.PlexProvider",
+    "anibridge.providers.simkl.provider.SimklProvider",
+    "anibridge.providers.trakt.provider.TraktProvider",
+)
 
 provider_registry: ProviderRegistry[Provider] = ProviderRegistry()
 

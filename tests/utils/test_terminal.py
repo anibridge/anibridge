@@ -92,11 +92,11 @@ def test_supports_color_windows_registry_enabled(
         HKEY_CURRENT_USER = object()
 
         @staticmethod
-        def OpenKey(*_args, **_kwargs):
+        def OpenKey(*_args, **_kwargs):  # noqa: N802
             return object()
 
         @staticmethod
-        def QueryValueEx(_key, _value_name):
+        def QueryValueEx(_key, _value_name):  # noqa: N802
             return (1, None)
 
     monkeypatch.setitem(sys.modules, "winreg", DummyWinReg)
@@ -118,11 +118,11 @@ def test_supports_color_windows_registry_missing(
         HKEY_CURRENT_USER = object()
 
         @staticmethod
-        def OpenKey(*_args, **_kwargs):
+        def OpenKey(*_args, **_kwargs):  # noqa: N802
             raise FileNotFoundError
 
         @staticmethod
-        def QueryValueEx(_key, _value_name):
+        def QueryValueEx(_key, _value_name):  # noqa: N802
             return (0, None)
 
     monkeypatch.setitem(sys.modules, "winreg", MissingWinReg)

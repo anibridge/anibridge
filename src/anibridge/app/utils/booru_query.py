@@ -181,12 +181,12 @@ def _make_parser() -> pp.ParserElement:
     bare = bare_qstring | bare_word
 
     # Define syntax grammar
-    LPAR, RPAR = map(pp.Suppress, "()")
+    lpar, rpar = map(pp.Suppress, "()")
     expr: pp.Forward = pp.Forward()
     not_kw = pp.Keyword("not", caseless=True) | pp.Literal("-")
     tilde = pp.Literal("~")
     pipe = pp.Literal("|")
-    atom = key_term | bare | pp.Group(LPAR + expr + RPAR)
+    atom = key_term | bare | pp.Group(lpar + expr + rpar)
 
     def _prefix_action(_s, _loc, toks):
         """Handle prefix operators.
@@ -487,7 +487,7 @@ def evaluate(
             ordered = anilist_resolver(n.text)
             for idx, aid in enumerate(ordered):
                 prev = order_hint.get(aid, idx)
-                order_hint[aid] = prev if prev <= idx else idx
+                order_hint[aid] = min(prev, idx)
             return set(ordered)
         return set()
 

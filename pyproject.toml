@@ -80,7 +80,6 @@ Issues = "https://github.com/anibridge/anibridge/issues"
 Source = "https://github.com/anibridge/anibridge"
 
 [tool.ruff]
-extend-exclude = ["alembic", "packages"]
 indent-width = 4
 line-length = 88
 
@@ -94,26 +93,26 @@ select = [
     "A",
     "ASYNC",
     "B",
+    "C4",
     "D",
     "E",
     "F",
-    "FAST",
+    "FURB",
+    "G",
     "I",
+    "N",
     "PERF",
+    "PLC",
+    "PLE",
     "RUF",
     "SIM",
     "UP",
     "W",
 ]
 
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = [
-    "litestar.params.Body",
-    "litestar.params.Dependency",
-    "litestar.params.Parameter",
-]
-
 [tool.ruff.lint.per-file-ignores]
+"alembic/**/*.py" = ["ALL"]
+"packages/**/*.py" = ["I001"]
 "tests/**/*.py" = ["D"]
 
 [tool.ruff.lint.pydocstyle]

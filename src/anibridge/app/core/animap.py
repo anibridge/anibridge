@@ -83,15 +83,15 @@ class AnimapClient:
     ) -> tuple[AnimapEdge, ...]:
         """Resolve mapping edges for the provided source descriptors."""
         if not descriptors:
-            return tuple()
+            return ()
 
-        descriptor_list = list({descriptor for descriptor in descriptors})
+        descriptor_list = list(set(descriptors))
         source_ids: list[int] = []
         with db() as ctx:
             source_ids.extend(self._select_entry_ids(ctx.session, descriptor_list))
 
             if not source_ids:
-                return tuple()
+                return ()
 
             edges: list[AnimapEdge] = []
             for chunk in batched(source_ids, self._SQLITE_SAFE_VARIABLES, strict=False):

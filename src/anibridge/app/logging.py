@@ -10,6 +10,8 @@ from typing import ClassVar, cast
 import colorama
 from colorama import Fore, Style
 
+from anibridge.app.utils.terminal import supports_color
+
 __all__ = [
     "APP_LOGGER_NAME",
     "SUCCESS",
@@ -166,8 +168,6 @@ def _log_format(level: int) -> str:
 
 def _build_console_formatter(level: int) -> logging.Formatter:
     try:
-        from anibridge.app.utils.terminal import supports_color
-
         if supports_color():
             if sys.platform == "win32":
                 colorama.just_fix_windows_console()

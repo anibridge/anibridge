@@ -1,4 +1,5 @@
 """AniBridge Initialization Module."""
+# ruff: noqa: PLC0415
 
 from typing import TYPE_CHECKING
 

@@ -36,7 +36,6 @@ class FakeMappingsClient:
     async def load_mappings(self) -> dict[str, Any]:
         """Return the predefined mappings."""
         self.load_calls += 1
-        from hashlib import md5
 
         self._content_hash = md5(
             json.dumps(self.mappings, sort_keys=True).encode("utf-8")

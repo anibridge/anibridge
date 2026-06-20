@@ -11,7 +11,9 @@ class FakeLogger:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def debug(self, message: str, **kwargs: object) -> None:
+    def debug(self, message: str, *args: object, **kwargs: object) -> None:
+        if args:
+            message = message % args
         self.calls.append((message, kwargs))
 
 

@@ -268,7 +268,7 @@ _ANILIST_FIELDS: tuple[QueryFieldSpec, ...] = (
         type=QueryFieldType.ENUM,
         operators=_ENUM_OPS,
         values=tuple(
-            status.value for status in MediaStatus if status not in {MediaStatus.HIATUS}
+            status.value for status in MediaStatus if status != MediaStatus.HIATUS
         ),
         anilist_field="status",
         anilist_value_type="enum",

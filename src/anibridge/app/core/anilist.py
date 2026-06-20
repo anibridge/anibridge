@@ -28,6 +28,7 @@ class AnilistClient:
     """
 
     API_URL: ClassVar[str] = "https://graphql.anilist.co"
+    BATCH_SIZE: ClassVar[int] = 50
 
     def __init__(self, anilist_token: str | None) -> None:
         """Initialize the AniList client."""
@@ -263,14 +264,10 @@ class AnilistClient:
         batch API requests for entries not found in cache. Processes requests
         in batches of 10 to avoid overwhelming the API.
         """
-        BATCH_SIZE = 50
-
         if not anilist_ids:
             return []
 
         result: list[Media] = []
-        missing_ids = []
-
         cached_ids = [id_ for id_ in anilist_ids if id_ in self.offline_anilist_entries]
         if cached_ids:
             log.debug(
@@ -286,8 +283,8 @@ class AnilistClient:
         if not missing_ids:
             return result
 
-        for i in range(0, len(missing_ids), BATCH_SIZE):
-            batch_ids = missing_ids[i : i + BATCH_SIZE]
+        for i in range(0, len(missing_ids), self.BATCH_SIZE):
+            batch_ids = missing_ids[i : i + self.BATCH_SIZE]
             log.debug(
                 "Pulling AniList data from API in batched mode $${anilist_ids: %s}$$",
                 batch_ids,

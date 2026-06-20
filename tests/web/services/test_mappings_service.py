@@ -24,7 +24,11 @@ from anibridge.app.web.services.mappings_query_spec import (
     QueryFieldSpec,
     QueryFieldType,
 )
-from anibridge.app.web.services.mappings_service import MappingItem, MappingsService
+from anibridge.app.web.services.mappings_service import (
+    MappingItem,
+    MappingsService,
+    get_mappings_service,
+)
 
 
 @contextmanager
@@ -1127,7 +1131,5 @@ async def test_get_mapping_not_found_and_singleton() -> None:
 
     with _fresh_tables(), pytest.raises(MappingNotFoundError):
         await service.get_mapping("tmdb:404")
-
-    from anibridge.app.web.services.mappings_service import get_mappings_service
 
     assert get_mappings_service() is get_mappings_service()

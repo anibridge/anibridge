@@ -38,8 +38,7 @@ async def run() -> int:
         executor = ThreadPoolExecutor(max_workers=config.threads)
         loop.set_default_executor(executor)
 
-        log.info("\n" + ANIBDRIGE_HEADER)
-
+        log.info("\n%s", ANIBDRIGE_HEADER)
         if config.web.enabled:
             app = create_app()
             uv_config = uvicorn.Config(
@@ -92,7 +91,7 @@ async def run() -> int:
         log.info("Application cancelled")
         return 0
     except Exception as e:
-        log.error("Unexpected application error: %s", e, exc_info=True)
+        log.exception("Unexpected application error: %s", e)
         return 1
     finally:
         if app_scheduler:
@@ -104,7 +103,7 @@ async def run() -> int:
                 log.info("Shutdown cancelled")
                 ret = 1
             except Exception as e:
-                log.error("Error during shutdown: %s", e, exc_info=True)
+                log.exception("Error during shutdown: %s", e)
                 ret = 1
 
         if server and server_task and not server_task.done():
@@ -117,7 +116,7 @@ async def run() -> int:
         try:
             os.execv(sys.executable, [sys.executable, *sys.argv])
         except Exception as e:
-            log.error("Failed to restart process: %s", e, exc_info=True)
+            log.exception("Failed to restart process: %s", e)
             ret = 1
 
     return ret
@@ -196,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         log.info("Application interrupted")
         return 0
     except Exception as e:
-        log.error("Fatal error: %s", e, exc_info=True)
+        log.exception("Fatal error: %s", e)
         return 1
 
 

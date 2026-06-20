@@ -4,6 +4,8 @@ from collections.abc import Iterator
 
 import pytest
 
+import anibridge.app.core.sync.base as base_module
+
 
 @pytest.fixture
 def sync_db(
@@ -12,8 +14,6 @@ def sync_db(
 ) -> Iterator[object]:
     """Patch sync base DB access with an in-memory SQLite database."""
     db_instance = sqlite_db_factory()
-
-    import anibridge.app.core.sync.base as base_module
 
     monkeypatch.setattr(base_module, "db", lambda: db_instance)
     yield db_instance

@@ -76,8 +76,7 @@ def upgrade() -> None:
         )
 
     op.execute(
-        f'CREATE TABLE "{SYNC_HISTORY_BACKUP_TABLE}" '
-        'AS SELECT * FROM "sync_history"'
+        f'CREATE TABLE "{SYNC_HISTORY_BACKUP_TABLE}" AS SELECT * FROM "sync_history"'
     )
     op.drop_table("sync_history")
 
@@ -211,8 +210,7 @@ def downgrade() -> None:
 
     if inspector.has_table(SYNC_HISTORY_BACKUP_TABLE):
         op.execute(
-            f'INSERT INTO "sync_history" '
-            f'SELECT * FROM "{SYNC_HISTORY_BACKUP_TABLE}"'
+            f'INSERT INTO "sync_history" SELECT * FROM "{SYNC_HISTORY_BACKUP_TABLE}"'
         )
         op.drop_table(SYNC_HISTORY_BACKUP_TABLE)
 
@@ -325,10 +323,7 @@ def downgrade() -> None:
     )
 
     if inspector.has_table(PIN_BACKUP_TABLE):
-        op.execute(
-            f'INSERT INTO "pin" '
-            f'SELECT * FROM "{PIN_BACKUP_TABLE}"'
-        )
+        op.execute(f'INSERT INTO "pin" SELECT * FROM "{PIN_BACKUP_TABLE}"')
         op.drop_table(PIN_BACKUP_TABLE)
 
     with op.batch_alter_table("pin") as batch_op:

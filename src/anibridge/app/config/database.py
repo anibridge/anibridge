@@ -1,4 +1,5 @@
 """Database Configuration for AniBridge."""
+# ruff: noqa: PLC0415
 
 from contextvars import ContextVar, Token
 from pathlib import Path

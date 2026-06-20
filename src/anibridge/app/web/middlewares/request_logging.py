@@ -16,4 +16,4 @@ class RequestLoggingMiddleware(LoggingMiddleware):
             return
 
         value_strings = [f"{key}={value}" for key, value in values.items()]
-        self.logger.debug(f"{message}: {', '.join(value_strings)}")
+        self.logger.debug("%s: %s", message, ", ".join(value_strings))

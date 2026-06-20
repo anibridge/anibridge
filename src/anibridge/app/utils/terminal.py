@@ -33,7 +33,7 @@ def supports_color() -> bool:
             return False
 
         try:
-            import winreg
+            import winreg  # noqa: PLC0415
         except ImportError:
             return False
 

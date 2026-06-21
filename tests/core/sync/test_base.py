@@ -437,6 +437,49 @@ async def test_process_page_writes_records_events_and_tracks_outcomes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_page_writes_mapped_record_without_event_pair() -> None:
+    target = _TargetProvider()
+    client = _client(target=target)
+    client._event_pairs = {}
+
+    async def resolve_mapped(*, node: Node, record: Record):
+        return (
+            ResolvedTarget(
+                match=Match(ExternalId("target", "target"), Ref.anchor("target")),
+                mappings=(AnibridgeMapping.parse("1-12", "1-12"),),
+                source_id=ExternalId("tmdb_show", "245842", "s2"),
+                target_id=ExternalId("target", "target"),
+            ),
+        )
+
+    client._target_resolver.resolve = resolve_mapped  # ty:ignore[invalid-assignment]
+    item = ScanItem(
+        node=Node(ref=Ref.anchor("source"), kind="show", title="Source"),
+        records=(
+            Record(
+                ref=Ref.at("source", ("season", 2)),
+                kind=_RECORD_KIND,
+                ids=(ExternalId("tmdb_show", "245842", "s2"),),
+                values={
+                    RecordField.STATUS: State(status=Status.COMPLETED),
+                    RecordField.PROGRESS: Progress(current=11, total=12),
+                },
+            ),
+        ),
+    )
+
+    await client.process_page((item,))
+
+    assert isinstance(target.record_writes[0], UpsertRecord)
+    assert target.record_writes[0].ref == Ref.anchor("target")
+    assert target.record_writes[0].set[RecordField.PROGRESS] == Progress(
+        current=11,
+        total=12,
+    )
+    assert client.sync_stats.synced == 1
+
+
+@pytest.mark.asyncio
 async def test_resolve_work_items_records_not_found_history() -> None:
     target = _TargetProvider(resolve_matches=False)
     client = _client(target=target)

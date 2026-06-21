@@ -275,8 +275,7 @@ class SyncClient:
         record_work_items = [
             work
             for work in work_items
-            if not work.mappings
-            and not (work.projected_record.ref.path and self._event_pairs)
+            if not (work.projected_record.ref.path and self._event_pairs)
         ]
         target_keys = [work.key for work in record_work_items]
         target_key_counts = Counter(target_keys)

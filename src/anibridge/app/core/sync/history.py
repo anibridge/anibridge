@@ -74,7 +74,7 @@ class SyncHistoryManager:
         outcome: SyncOutcome,
         external_id: ExternalId | None = None,
         error_message: str | None = None,
-        info: Mapping[str, Any] | None = None,
+        info: Mapping[str, str] | None = None,
         ephemeral: bool = False,
     ) -> None:
         """Persist a sync history record."""
@@ -83,23 +83,19 @@ class SyncHistoryManager:
         after_state = to_builtins(after_snapshot) if after_snapshot else None
         source_ref = source_record.ref if source_record else source_node.ref
 
-        history_info: dict[str, Any] = {
-            str(key): to_builtins(value)
-            for key, value in {
-                "source_title": source_node.title,
-                "source_record_kind": source_record.kind if source_record else None,
-                "source_record_key": source_record.key if source_record else None,
-                "target_record_kind": (
-                    after_snapshot.kind
-                    if after_snapshot
-                    else before_snapshot.kind
-                    if before_snapshot
-                    else None
-                ),
-                **(info or {}),
-            }.items()
-            if key and value is not None and value != ""
-        }
+        history_info: dict[str, str] = {}
+        if source_node.title:
+            history_info["source_title"] = source_node.title
+        if source_record is not None:
+            history_info["source_record_kind"] = source_record.kind
+            if source_record.key:
+                history_info["source_record_key"] = source_record.key
+        if after_snapshot is not None:
+            history_info["target_record_kind"] = after_snapshot.kind
+        elif before_snapshot is not None:
+            history_info["target_record_kind"] = before_snapshot.kind
+        if info:
+            history_info.update(info)
 
         with self._db_factory() as ctx:
             if outcome == SyncOutcome.SYNCED:
@@ -208,7 +204,7 @@ class SyncHistoryManager:
         outcome: SyncOutcome,
         before_state: dict[str, Any] | None,
         after_state: dict[str, Any] | None,
-        history_info: dict[str, Any],
+        history_info: dict[str, str],
         error_message: str | None,
     ) -> bool:
         """Update an existing failure row when one already represents this ref."""

@@ -421,7 +421,7 @@ class SyncClient:
                         target_ref=None,
                         snapshots=(None, None),
                         outcome=SyncOutcome.NOT_FOUND,
-                        info={"trackable_count": len(sync_items)},
+                        info={"trackable_count": str(len(sync_items))},
                         ephemeral=self.dry_run,
                     )
                     for sync_item in sync_items:
@@ -637,7 +637,7 @@ class SyncClient:
                     outcome=SyncOutcome.SYNCED,
                     info={
                         **plan.diagnostics.as_info(),
-                        "write_reconciled_after_error": True,
+                        "write_reconciled_after_error": "true",
                         "write_error_type": type(exc).__name__,
                         "write_error": str(exc),
                     },

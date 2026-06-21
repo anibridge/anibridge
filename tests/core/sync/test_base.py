@@ -501,6 +501,7 @@ async def test_resolve_work_items_records_not_found_history() -> None:
     assert tuple(outcomes.values()) == (SyncOutcome.NOT_FOUND,)
     history = cast(_History, client._history)
     assert history.created[0]["outcome"] == SyncOutcome.NOT_FOUND
+    assert history.created[0]["info"]["trackable_count"] == "1"
     assert client.sync_stats.count(SyncOutcome.PENDING) == 1
 
 
@@ -691,7 +692,7 @@ async def test_apply_update_reconciles_write_error_and_records_failure() -> None
         == SyncOutcome.SYNCED
     )
     history = cast(_History, client._history)
-    assert history.created[-1]["info"]["write_reconciled_after_error"] is True
+    assert history.created[-1]["info"]["write_reconciled_after_error"] == "true"
 
     target.records.clear()
     with pytest.raises(RuntimeError, match="after-write failure"):

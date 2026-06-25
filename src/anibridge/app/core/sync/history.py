@@ -82,18 +82,19 @@ class SyncHistoryManager:
         before_state = to_builtins(before_snapshot) if before_snapshot else None
         after_state = to_builtins(after_snapshot) if after_snapshot else None
         source_ref = source_record.ref if source_record else source_node.ref
+        source_record_surface = source_record.surface if source_record else None
+        if after_snapshot is not None:
+            target_record_surface = after_snapshot.surface
+        elif before_snapshot is not None:
+            target_record_surface = before_snapshot.surface
+        else:
+            target_record_surface = None
 
         history_info: dict[str, str] = {}
         if source_node.title:
             history_info["source_title"] = source_node.title
-        if source_record is not None:
-            history_info["source_record_kind"] = source_record.kind
-            if source_record.key:
-                history_info["source_record_key"] = source_record.key
-        if after_snapshot is not None:
-            history_info["target_record_kind"] = after_snapshot.kind
-        elif before_snapshot is not None:
-            history_info["target_record_kind"] = before_snapshot.kind
+        if source_record is not None and source_record.key:
+            history_info["source_record_key"] = source_record.key
         if info:
             history_info.update(info)
 
@@ -115,6 +116,8 @@ class SyncHistoryManager:
                     outcome=outcome,
                     before_state=before_state,
                     after_state=after_state,
+                    source_record_surface=source_record_surface,
+                    target_record_surface=target_record_surface,
                     history_info=history_info,
                     error_message=error_message,
                 )
@@ -128,6 +131,8 @@ class SyncHistoryManager:
                 source_ref=ref_to_json(source_ref),
                 target_namespace=self.target_namespace,
                 target_ref=ref_to_json(target_ref) if target_ref else None,
+                source_record_surface=source_record_surface,
+                target_record_surface=target_record_surface,
                 animap_provider=external_id.authority if external_id else None,
                 animap_id=external_id.value if external_id else None,
                 animap_scope=external_id.scope if external_id else None,
@@ -204,6 +209,8 @@ class SyncHistoryManager:
         outcome: SyncOutcome,
         before_state: dict[str, Any] | None,
         after_state: dict[str, Any] | None,
+        source_record_surface: str | None,
+        target_record_surface: str | None,
         history_info: dict[str, str],
         error_message: str | None,
     ) -> bool:
@@ -226,6 +233,8 @@ class SyncHistoryManager:
 
         existing.before_state = before_state
         existing.after_state = after_state
+        existing.source_record_surface = source_record_surface
+        existing.target_record_surface = target_record_surface
         existing.info = history_info
         existing.error_message = error_message
         existing.timestamp = datetime.now(UTC)

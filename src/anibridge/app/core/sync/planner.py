@@ -3,7 +3,6 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
-from itertools import pairwise
 from math import floor
 from typing import Any, TypeVar
 
@@ -19,6 +18,7 @@ from anibridge.provider.base import (
     Record,
     RecordField,
     RecordSpec,
+    RecordUnit,
     Ref,
     Role,
     ScanItem,
@@ -38,6 +38,7 @@ from anibridge.provider.base import (
 from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.core.sync.history import to_builtins
+from anibridge.app.core.sync.projection import MappingProjector
 from anibridge.app.core.sync.rules import SyncRuleEngine, build_rule_context
 from anibridge.app.core.sync.stats import (
     AppliedRule,
@@ -64,6 +65,11 @@ _STATUS_ORDER: Mapping[Status | None, int] = {
     Status.COMPLETED: 5,
     Status.REPEATING: 6,
 }
+_TEMPORAL_RECORD_FIELDS = (
+    RecordField.STARTED_AT,
+    RecordField.FINISHED_AT,
+    RecordField.LAST_ACTIVITY_AT,
+)
 
 
 class SyncLabel(msgspec.Struct, frozen=True):
@@ -100,19 +106,11 @@ class RecordPlanner:
         self.sync_rule_engine = sync_rule_engine
         self.destructive_sync = destructive_sync
 
-        self._source_kind_semantics = {
-            spec.kind.native: spec.kind.semantic for spec in source_capabilities.records
-        }
         self._source_record_specs = {
-            spec.kind.native: spec for spec in source_capabilities.records
+            spec.surface: spec for spec in source_capabilities.records
         }
         self._target_record_specs = {
-            spec.kind.native: spec for spec in target_capabilities.records
-        }
-        self._target_kinds_by_semantic = {
-            spec.kind.semantic: spec.kind.native
-            for spec in target_capabilities.records
-            if spec.kind.semantic is not None
+            spec.surface: spec for spec in target_capabilities.records
         }
         self.sync_fields = self._sync_fields()
 
@@ -130,8 +128,8 @@ class RecordPlanner:
             (isinstance(target_provider, SupportsMapping), "mapping resolution"),
             (isinstance(target_provider, SupportsRecordReads), "record reads"),
             (isinstance(target_provider, SupportsRecordWrites), "record writes"),
-            (bool(self.source_capabilities.records), "source record channels"),
-            (bool(self.target_capabilities.records), "target record channels"),
+            (bool(self.source_capabilities.records), "source record surfaces"),
+            (bool(self.target_capabilities.records), "target record surfaces"),
             (
                 any(
                     WriteOp.UPSERT_RECORD in spec.write_ops
@@ -153,36 +151,41 @@ class RecordPlanner:
                 + f"target={target_provider.NAMESPACE!r})"
             )
 
-    def source_record_kinds(self) -> tuple[str, ...]:
-        """Return source-native record kinds that the target can represent."""
+    def source_record_surfaces(self) -> tuple[str, ...]:
+        """Return source record surfaces that the target can represent."""
         return tuple(
-            native
-            for native, semantic in self._source_kind_semantics.items()
-            if semantic in self._target_kinds_by_semantic
-            and self.sync_fields_for(
-                native,
-                self._target_kinds_by_semantic[semantic],
-            )
+            source_kind
+            for source_kind in self._source_record_specs
+            if self.target_record_surface_for(source_kind) is not None
         )
 
     def can_delete_record(self, target_kind: str) -> bool:
-        """Return whether a target record channel supports deletion."""
+        """Return whether a target record surface supports deletion."""
         spec = self._target_record_specs.get(target_kind)
         return spec is not None and WriteOp.DELETE_RECORD in spec.write_ops
 
-    def target_record_kind_for(self, source_kind: str) -> str | None:
-        """Translate a source-native record kind to a target-native kind."""
-        semantic = self._source_kind_semantics.get(source_kind)
-        if semantic is None:
+    def target_record_surface_for(self, source_kind: str) -> str | None:
+        """Return the best target surface for one source record surface."""
+        source_spec = self._source_record_specs.get(source_kind)
+        if source_spec is None:
             return None
-        return self._target_kinds_by_semantic.get(semantic)
+        candidates: list[tuple[int, int, str]] = []
+        for index, target_spec in enumerate(self.target_capabilities.records):
+            if WriteOp.UPSERT_RECORD not in target_spec.write_ops:
+                continue
+            fields = self.sync_fields_for(source_kind, target_spec.surface)
+            if fields:
+                candidates.append((len(fields), -index, target_spec.surface))
+        if not candidates:
+            return None
+        return max(candidates)[2]
 
     def syncable_source_records(self, item: ScanItem) -> tuple[Record, ...]:
         """Return scanned records that should drive sync."""
         return tuple(
             record
             for record in item.records
-            if self.target_record_kind_for(record.kind)
+            if self.target_record_surface_for(record.surface)
             and (record.values or self.destructive_sync)
         )
 
@@ -192,25 +195,33 @@ class RecordPlanner:
         *,
         mappings: Sequence[AnibridgeMapping],
     ) -> Record:
-        """Project source progress into the resolved target's mapped unit space."""
-        progress = source_record.values.get(RecordField.PROGRESS)
-        if not mappings or not isinstance(progress, Progress):
+        """Project source record values into the resolved target's mapped unit space."""
+        if not mappings:
             return source_record
 
         values = dict(source_record.values)
-        projected = self._project_progress(progress, mappings)
-        values[RecordField.PROGRESS] = projected
+        projector = MappingProjector(mappings)
+        progress = source_record.values.get(RecordField.PROGRESS)
+        if isinstance(progress, Progress):
+            projected = Progress(
+                current=projector.target_progress(progress.current),
+                total=projector.target_total(progress.total),
+                unit=progress.unit,
+            )
+            values[RecordField.PROGRESS] = projected
 
-        status = self.status_of(values.get(RecordField.STATUS))
-        if (
-            status in {Status.ACTIVE, Status.COMPLETED, Status.REPEATING}
-            and projected.total
-        ):
-            current = projected.current or 0
-            if current >= projected.total:
-                values[RecordField.STATUS] = State(status=Status.COMPLETED)
-            elif status in {Status.COMPLETED, Status.REPEATING}:
-                values[RecordField.STATUS] = State(status=Status.ACTIVE)
+            status = self.status_of(values.get(RecordField.STATUS))
+            if (
+                status in {Status.ACTIVE, Status.COMPLETED, Status.REPEATING}
+                and projected.total
+            ):
+                current = projected.current or 0
+                if current >= projected.total:
+                    values[RecordField.STATUS] = State(status=Status.COMPLETED)
+                elif status in {Status.COMPLETED, Status.REPEATING}:
+                    values[RecordField.STATUS] = State(status=Status.ACTIVE)
+
+        self._project_temporal_fields(values, source_record.units, projector)
 
         return replace(source_record, values=values)
 
@@ -238,7 +249,7 @@ class RecordPlanner:
         pinned = set(pinned_fields)
 
         target_values = target_record.values if target_record else {}
-        sync_fields = self.sync_fields_for(source_record.kind, target_kind)
+        sync_fields = self.sync_fields_for(source_record.surface, target_kind)
         current_values = self._rule_values(target_values, sync_fields)
         computed_values = self._rule_values(source_record.values, sync_fields)
         source_status = self.status_of(source_record.values.get(RecordField.STATUS))
@@ -310,7 +321,7 @@ class RecordPlanner:
 
         after_record = Record(
             ref=target_ref,
-            kind=target_kind,
+            surface=target_kind,
             key=target_record.key if target_record else None,
             values=planned_values,
         )
@@ -321,7 +332,7 @@ class RecordPlanner:
 
         write = UpsertRecord(
             ref=target_ref,
-            kind=target_kind,
+            surface=target_kind,
             key=target_record.key if target_record else None,
             expected_revision=target_record.revision if target_record else None,
             set={
@@ -404,7 +415,7 @@ class RecordPlanner:
     def _sync_fields(self) -> tuple[RecordField, ...]:
         fields: set[RecordField] = set()
         for source_kind in self._source_record_specs:
-            target_kind = self.target_record_kind_for(source_kind)
+            target_kind = self.target_record_surface_for(source_kind)
             if target_kind is not None:
                 fields.update(self.sync_fields_for(source_kind, target_kind))
         return tuple(field for field in RecordField if field in fields)
@@ -414,7 +425,7 @@ class RecordPlanner:
         source_kind: str,
         target_kind: str,
     ) -> tuple[RecordField, ...]:
-        """Return fields syncable between two native record channels."""
+        """Return fields syncable between two record surfaces."""
         fields: list[RecordField] = []
         source_spec = self._source_record_specs.get(source_kind)
         target_spec = self._target_record_specs.get(target_kind)
@@ -680,92 +691,33 @@ class RecordPlanner:
             return "requires_active_status"
         return None
 
-    def _project_progress(
+    def _project_temporal_fields(
         self,
-        progress: Progress,
-        mappings: Sequence[AnibridgeMapping],
-    ) -> Progress:
-        total: float | None = 0.0
-        for mapping in mappings:
-            for target_range in mapping.target_ranges:
-                if target_range.length is None:
-                    total = None
-                    break
-                total += target_range.length
-            if total is None:
-                break
+        values: dict[RecordField, Value],
+        units: Sequence[RecordUnit],
+        projector: MappingProjector,
+    ) -> None:
+        """Replace aggregate temporal fields with mapped-unit temporal values."""
+        if not units:
+            return
 
-        current = 0.0
-        source_current = max(float(progress.current or 0), 0.0)
-        watched = floor(source_current)
-        if watched:
-            current += self._project_whole_progress(watched, mappings)
-
-        fractional = source_current - watched
-        if fractional:
-            # Fractional progress belongs to the next source unit, so weight it by
-            # that unit's active mapping instead of the last completed range.
-            mapping = self._best_mapping_for_index(watched + 1, mappings)
-            if mapping is not None:
-                current += mapping.source_weight * fractional
-
-        if total is not None:
-            current = min(current, total)
-        projected_total = (
-            int(total) if total is not None and total.is_integer() else total
+        scoped_units = tuple(
+            unit for unit in units if projector.contains_source(unit.index)
         )
-        return Progress(
-            current=int(current) if current.is_integer() else current,
-            total=projected_total if total is not None else progress.total,
-            unit=progress.unit,
-        )
-
-    def _project_whole_progress(
-        self,
-        watched: int,
-        mappings: Sequence[AnibridgeMapping],
-    ) -> float:
-        """Project complete source units without iterating one unit at a time."""
-        boundaries = {1, watched + 1}
-        for mapping in mappings:
-            start = max(mapping.source_range.start, 1)
-            if start > watched:
+        for field in _TEMPORAL_RECORD_FIELDS:
+            temporal_values = tuple(
+                value
+                for unit in scoped_units
+                if isinstance(value := unit.values.get(field), date)
+            )
+            if not temporal_values:
+                values.pop(field, None)
                 continue
-            end = mapping.source_range.end
-            bounded_end = watched if end is None else min(end, watched)
-            if bounded_end < start:
-                continue
-            boundaries.add(start)
-            boundaries.add(bounded_end + 1)
-
-        current = 0.0
-        ordered = sorted(boundaries)
-        for start, next_start in pairwise(ordered):
-            if start > watched:
-                break
-            end = min(next_start - 1, watched)
-            if end < start:
-                continue
-            mapping = self._best_mapping_for_index(start, mappings)
-            if mapping is not None:
-                current += (end - start + 1) * mapping.source_weight
-        return current
-
-    @staticmethod
-    def _best_mapping_for_index(
-        index: int,
-        mappings: Sequence[AnibridgeMapping],
-    ) -> AnibridgeMapping | None:
-        """Return the most specific mapping covering one source index."""
-        return min(
-            (
-                candidate
-                for candidate in mappings
-                if candidate.source_range.contains(index)
-            ),
-            key=lambda candidate: candidate.source_range.length or float("inf"),
-            default=None,
-        )
+            values[field] = (
+                min(temporal_values)
+                if field == RecordField.STARTED_AT
+                else max(temporal_values)
+            )
 
     @staticmethod
     def _status_semantics(spec: FieldSpec | None) -> frozenset[Status]:

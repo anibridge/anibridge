@@ -77,7 +77,7 @@ def test_build_rule_context_exposes_provider_contract_objects() -> None:
     )
     source = Record(
         ref=node.ref,
-        kind="progress",
+        surface="user_state",
         values={RecordField.STATUS: State(status=Status.ACTIVE)},
     )
     target_ref = Ref.anchor("target-1")

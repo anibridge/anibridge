@@ -307,7 +307,7 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
     """Planner/history snapshot of one normalized record."""
 
     ref: Ref
-    kind: str = ""
+    surface: str = ""
     key: str | None = None
     ids: tuple[str, ...] = ()
     values: Mapping[str, object] = msgspec.field(default_factory=dict)
@@ -322,7 +322,7 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
                 values[field.value] = snapshot_value
         return cls(
             ref=record.ref,
-            kind=record.kind,
+            surface=record.surface,
             key=record.key,
             ids=tuple(item.descriptor for item in record.ids),
             values=values,
@@ -351,7 +351,7 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
     ) -> tuple[FieldChange, ...]:
         """Compare optional before state to a required after state."""
         if before is None:
-            before = cls(ref=after.ref, kind=after.kind, key=after.key)
+            before = cls(ref=after.ref, surface=after.surface, key=after.key)
         return before.diff(after, fields)
 
     @staticmethod

@@ -118,15 +118,17 @@ def _seed_history_row(
             "source_ref": _ref_payload("src1"),
             "target_namespace": "target",
             "target_ref": _ref_payload("tgt1"),
+            "source_record_surface": "source_state",
+            "target_record_surface": "target_state",
             "outcome": SyncOutcome.SYNCED,
             "before_state": {
                 "ref": _ref_payload("tgt1"),
-                "kind": "progress",
+                "surface": "target_state",
                 "values": {"progress": {"current": 0, "total": 12}},
             },
             "after_state": {
                 "ref": _ref_payload("tgt1"),
-                "kind": "progress",
+                "surface": "target_state",
                 "values": {"progress": {"current": 1, "total": 12}},
             },
             "info": {"source": "test-seed"},
@@ -172,6 +174,8 @@ async def test_history_service_get_page_enriches_metadata_and_pins(history_env):
     assert item.target_media.poster_url == "https://img.test/tgt1.jpg"
     assert item.before_state is not None
     assert item.after_state is not None
+    assert item.source_record_surface == "source_state"
+    assert item.target_record_surface == "target_state"
     assert item.pinned_fields == ["status"]
     assert item.info == {"source": "test-seed"}
 

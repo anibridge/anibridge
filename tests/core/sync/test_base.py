@@ -21,7 +21,6 @@ from anibridge.provider.base import (
     Provider,
     Record,
     RecordField,
-    RecordKind,
     RecordQuery,
     RecordSpec,
     RecordWrite,
@@ -48,12 +47,13 @@ from anibridge.app.core.animap import AnimapClient
 from anibridge.app.core.sync import ScanPlan, SyncTrigger, ref_to_json, ref_to_key
 from anibridge.app.core.sync.base import SyncClient, _TargetWork
 from anibridge.app.core.sync.planner import PreparedUpdate, SyncLabel
+from anibridge.app.core.sync.projection import MappingProjector
 from anibridge.app.core.sync.stats import RecordPlan, RecordSnapshot, SyncItem
 from anibridge.app.core.sync.targeting import ResolvedTarget
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncOutcome
 
-_RECORD_KIND = "progress"
+_RECORD_KIND = "user_state"
 _SOURCE_EVENT = "played"
 _TARGET_EVENT = "scrobbled"
 
@@ -82,7 +82,7 @@ def _record_spec(*, readable: bool, writable: bool, delete: bool = False) -> Rec
     if delete:
         write_ops.add(WriteOp.DELETE_RECORD)
     return RecordSpec(
-        kind=Descriptor(_RECORD_KIND, RecordKind.PROGRESS),
+        surface=_RECORD_KIND,
         fields=_record_fields(readable=readable, writable=writable),
         write_ops=frozenset(write_ops),
     )
@@ -209,7 +209,7 @@ class _TargetProvider(
         self.record_queries.append(query)
         records = []
         for ref in query.refs:
-            for kind in query.native_record_kinds:
+            for kind in query.record_surfaces:
                 record = self.records.get((ref_to_key(ref), kind))
                 if record is not None:
                     records.append(record)
@@ -270,9 +270,9 @@ def _work(
     return _TargetWork(
         item=ScanItem(node=Node(ref=source_ref, kind="item")),
         sync_items=sync_items,
-        projected_record=Record(ref=source_ref, kind="state"),
+        projected_record=Record(ref=source_ref, surface="state"),
         target_ref=target_ref,
-        target_kind="state",
+        target_surface="state",
         mappings=mappings,
         label=SyncLabel(node_kind="item", source="source", target="target"),
     )
@@ -306,6 +306,31 @@ def test_target_event_refs_map_generic_final_path_index() -> None:
     refs = client._target_event_refs(Ref.at("source", ("part", 3)), work)
 
     assert refs == (Ref.at("target", ("bucket", "a"), ("part", 11)),)
+
+
+def test_target_event_refs_support_ratio_mappings() -> None:
+    """Event projection should collapse or fan out according to mapping ratios."""
+    client = _client()
+    many_to_one = _work(
+        source_ref=Ref.anchor("source"),
+        target_ref=Ref.anchor("target"),
+        mappings=(AnibridgeMapping.parse("1-4", "10-11|2"),),
+    )
+    one_to_many = _work(
+        source_ref=Ref.anchor("source"),
+        target_ref=Ref.anchor("target"),
+        mappings=(AnibridgeMapping.parse("1-2", "20-25|-3"),),
+    )
+
+    assert client._target_event_refs(Ref.at("source", ("part", 1)), many_to_one) == ()
+    assert client._target_event_refs(Ref.at("source", ("part", 2)), many_to_one) == (
+        Ref.at("target", ("part", 10)),
+    )
+    assert client._target_event_refs(Ref.at("source", ("part", 1)), one_to_many) == (
+        Ref.at("target", ("part", 20)),
+        Ref.at("target", ("part", 21)),
+        Ref.at("target", ("part", 22)),
+    )
 
 
 def test_source_event_in_scope_keeps_exact_record_ref() -> None:
@@ -408,7 +433,7 @@ async def test_process_page_writes_records_events_and_tracks_outcomes() -> None:
         records=(
             Record(
                 ref=Ref.anchor("source"),
-                kind=_RECORD_KIND,
+                surface=_RECORD_KIND,
                 ids=(ExternalId("target", "target"),),
                 values={
                     RecordField.STATUS: State(status=Status.ACTIVE),
@@ -458,7 +483,7 @@ async def test_process_page_writes_mapped_record_without_event_pair() -> None:
         records=(
             Record(
                 ref=Ref.at("source", ("season", 2)),
-                kind=_RECORD_KIND,
+                surface=_RECORD_KIND,
                 ids=(ExternalId("tmdb_show", "245842", "s2"),),
                 values={
                     RecordField.STATUS: State(status=Status.COMPLETED),
@@ -480,6 +505,61 @@ async def test_process_page_writes_mapped_record_without_event_pair() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_page_merges_many_to_one_mapped_records() -> None:
+    target = _TargetProvider()
+    client = _client(target=target)
+    client._event_pairs = {}
+
+    async def resolve_mapped(*, node: Node, record: Record):
+        del node
+        if record.ref.path and record.ref.path[0].value == 1:
+            return (
+                ResolvedTarget(
+                    match=Match(ExternalId("target", "target"), Ref.anchor("target")),
+                    mappings=(AnibridgeMapping.parse("1-58", "1-58"),),
+                    source_id=ExternalId("tvdb_show", "252322", "s1"),
+                    target_id=ExternalId("target", "target"),
+                ),
+            )
+        return (
+            ResolvedTarget(
+                match=Match(ExternalId("target", "target"), Ref.anchor("target")),
+                mappings=(AnibridgeMapping.parse("1-78", "59-136"),),
+                source_id=ExternalId("tmdb_show", "46298", "s2"),
+                target_id=ExternalId("target", "target"),
+            ),
+        )
+
+    client._target_resolver.resolve = resolve_mapped  # ty:ignore[invalid-assignment]
+    item = ScanItem(
+        node=Node(ref=Ref.anchor("source"), kind="show", title="Source"),
+        records=(
+            Record(
+                ref=Ref.at("source", ("season", 1)),
+                surface=_RECORD_KIND,
+                values={RecordField.PROGRESS: Progress(current=58, total=58)},
+            ),
+            Record(
+                ref=Ref.at("source", ("season", 2)),
+                surface=_RECORD_KIND,
+                values={RecordField.PROGRESS: Progress(current=78, total=78)},
+            ),
+        ),
+    )
+
+    await client.process_page((item,))
+
+    assert len(target.record_writes) == 1
+    assert isinstance(target.record_writes[0], UpsertRecord)
+    assert target.record_writes[0].ref == Ref.anchor("target")
+    assert target.record_writes[0].set[RecordField.PROGRESS] == Progress(
+        current=136,
+        total=136,
+    )
+    assert client.sync_stats.synced == 2
+
+
+@pytest.mark.asyncio
 async def test_resolve_work_items_records_not_found_history() -> None:
     target = _TargetProvider(resolve_matches=False)
     client = _client(target=target)
@@ -488,7 +568,7 @@ async def test_resolve_work_items_records_not_found_history() -> None:
         records=(
             Record(
                 ref=Ref.anchor("source"),
-                kind=_RECORD_KIND,
+                surface=_RECORD_KIND,
                 ids=(ExternalId("target", "missing"),),
                 values={RecordField.PROGRESS: Progress(current=1)},
             ),
@@ -512,13 +592,13 @@ async def test_prepare_record_update_delete_and_dry_run_apply() -> None:
     item = ScanItem(node=Node(ref=Ref.anchor("source"), kind="item"))
     target_record = Record(
         ref=Ref.anchor("target"),
-        kind=_RECORD_KIND,
+        surface=_RECORD_KIND,
         values={RecordField.PROGRESS: Progress(current=1)},
     )
 
     deleted = await client._prepare_record_update(
         item=item,
-        source_record=Record(ref=Ref.anchor("source"), kind=_RECORD_KIND),
+        source_record=Record(ref=Ref.anchor("source"), surface=_RECORD_KIND),
         target_record=target_record,
         target_ref=Ref.anchor("target"),
         target_kind=_RECORD_KIND,
@@ -532,7 +612,7 @@ async def test_prepare_record_update_delete_and_dry_run_apply() -> None:
     plan = RecordSnapshot.from_record(
         Record(
             ref=Ref.anchor("target"),
-            kind=_RECORD_KIND,
+            surface=_RECORD_KIND,
             values={RecordField.PROGRESS: Progress(current=2)},
         )
     )
@@ -544,7 +624,7 @@ async def test_prepare_record_update_delete_and_dry_run_apply() -> None:
             after=plan,
             write=UpsertRecord(
                 ref=Ref.anchor("target"),
-                kind=_RECORD_KIND,
+                surface=_RECORD_KIND,
                 set={RecordField.PROGRESS: Progress(current=2)},
             ),
             target_ref=Ref.anchor("target"),
@@ -594,7 +674,7 @@ async def test_fetch_target_records_batch_and_write_record_errors() -> None:
     target = _TargetProvider()
     target.records[(ref_to_key(Ref.anchor("target")), _RECORD_KIND)] = Record(
         ref=Ref.anchor("target"),
-        kind=_RECORD_KIND,
+        surface=_RECORD_KIND,
         values={RecordField.PROGRESS: Progress(current=1)},
     )
     client = _client(target=target)
@@ -623,7 +703,7 @@ async def test_fetch_target_records_batch_and_write_record_errors() -> None:
 
     with pytest.raises(RuntimeError, match="nope"):
         await _client(target=FailingTarget())._write_records(
-            [UpsertRecord(ref=Ref.anchor("target"), kind=_RECORD_KIND)]
+            [UpsertRecord(ref=Ref.anchor("target"), surface=_RECORD_KIND)]
         )
 
 
@@ -663,7 +743,7 @@ async def test_apply_update_reconciles_write_error_and_records_failure() -> None
     item = ScanItem(node=Node(ref=Ref.anchor("source"), kind="item"))
     after_record = Record(
         ref=Ref.anchor("target"),
-        kind=_RECORD_KIND,
+        surface=_RECORD_KIND,
         values={RecordField.PROGRESS: Progress(current=2)},
     )
     target = RaisingTarget()
@@ -676,7 +756,7 @@ async def test_apply_update_reconciles_write_error_and_records_failure() -> None
         after=RecordSnapshot.from_record(after_record),
         write=UpsertRecord(
             ref=after_record.ref,
-            kind=_RECORD_KIND,
+            surface=_RECORD_KIND,
             set={RecordField.PROGRESS: Progress(current=2)},
         ),
         target_ref=after_record.ref,
@@ -708,8 +788,8 @@ async def test_apply_update_reconciles_write_error_and_records_failure() -> None
 @pytest.mark.asyncio
 async def test_delete_record_skips_without_capability_and_writes_delete() -> None:
     item = ScanItem(node=Node(ref=Ref.anchor("source"), kind="item"))
-    source_record = Record(ref=Ref.anchor("source"), kind=_RECORD_KIND)
-    target_record = Record(ref=Ref.anchor("target"), kind=_RECORD_KIND, key="entry")
+    source_record = Record(ref=Ref.anchor("source"), surface=_RECORD_KIND)
+    target_record = Record(ref=Ref.anchor("target"), surface=_RECORD_KIND, key="entry")
     label = SyncLabel("item", "source", "target")
 
     skipped = await _client(destructive=True)._delete_record(
@@ -880,7 +960,7 @@ async def test_process_page_records_prepare_apply_and_event_failures() -> None:
 
     client = _client()
     after = RecordSnapshot.from_record(
-        Record(ref=Ref.anchor("target"), kind=_RECORD_KIND, values={})
+        Record(ref=Ref.anchor("target"), surface=_RECORD_KIND, values={})
     )
     update = PreparedUpdate(
         plan=RecordPlan(
@@ -888,7 +968,7 @@ async def test_process_page_records_prepare_apply_and_event_failures() -> None:
             source_record=work.projected_record,
             before=None,
             after=after,
-            write=UpsertRecord(ref=Ref.anchor("target"), kind=_RECORD_KIND),
+            write=UpsertRecord(ref=Ref.anchor("target"), surface=_RECORD_KIND),
             target_ref=Ref.anchor("target"),
         ),
         source_record=work.projected_record,
@@ -941,7 +1021,7 @@ async def test_base_helper_edge_branches() -> None:
             item=item,
             source_record=Record(
                 ref=Ref.anchor("source"),
-                kind="unknown",
+                surface="unknown",
                 values={RecordField.PROGRESS: Progress(current=1)},
             ),
             sync_items=(_sync_item(),),
@@ -962,11 +1042,11 @@ async def test_base_helper_edge_branches() -> None:
     )
     assert client._target_event_refs(Ref.at("source", ("part", "x")), mapped_work) == ()
     assert client._target_event_refs(Ref.at("source", ("part", 5)), mapped_work) == ()
-    assert SyncClient._mapped_path_indices(
-        1, (AnibridgeMapping.parse("1", "10-11"),)
+    assert MappingProjector((AnibridgeMapping.parse("1", "10-11"),)).target_indices(
+        1
     ) == (10, 11)
     assert (
-        SyncClient._mapped_path_indices(2, (AnibridgeMapping.parse("1-2", "10|2"),))
+        MappingProjector((AnibridgeMapping.parse("1-2", "10|2"),)).target_indices(1)
         == ()
     )
     assert SyncClient._path_tail_int(Ref.anchor("source"), Ref.anchor("source")) is None

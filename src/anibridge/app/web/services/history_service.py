@@ -57,6 +57,8 @@ class HistoryItem(msgspec.Struct):
     source_ref: RefPayload | None = None
     target_namespace: str | None = None
     target_ref: RefPayload | None = None
+    source_record_surface: str | None = None
+    target_record_surface: str | None = None
     animap_provider: str | None = None
     animap_id: str | None = None
     animap_scope: str | None = None
@@ -234,6 +236,8 @@ class HistoryService:
                     source_ref=source_ref,
                     target_namespace=row.target_namespace,
                     target_ref=target_ref,
+                    source_record_surface=row.source_record_surface,
+                    target_record_surface=row.target_record_surface,
                     animap_provider=row.animap_provider,
                     animap_id=row.animap_id,
                     animap_scope=row.animap_scope,

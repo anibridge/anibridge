@@ -26,7 +26,7 @@ def _node(key: str = "src1") -> Node:
 def _record(key: str = "src1") -> Record:
     return Record(
         ref=Ref.anchor(key),
-        kind="progress",
+        surface="user_state",
         values={RecordField.PROGRESS: Progress(current=1, total=12)},
     )
 
@@ -77,7 +77,11 @@ async def test_create_sync_history_updates_existing_failure_record(
         rows = ctx.session.query(SyncHistory).all()
         assert len(rows) == 1
         assert rows[0].error_message == "new"
+        assert rows[0].source_record_surface == "user_state"
+        assert rows[0].target_record_surface == "user_state"
         assert rows[0].info["source"] == "retry"
+        assert "source_record_surface" not in rows[0].info
+        assert "target_record_surface" not in rows[0].info
 
 
 @pytest.mark.asyncio

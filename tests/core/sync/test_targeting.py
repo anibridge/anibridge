@@ -111,7 +111,7 @@ def test_external_ids_for_record_deduplicates_source_record_and_node_ids() -> No
     )
     record = Record(
         ref=Ref.anchor("source-1"),
-        kind="progress",
+        surface="user_state",
         ids=(anilist, ExternalId("tvdb_show", "20")),
     )
 
@@ -131,7 +131,7 @@ async def test_resolve_target_refs_uses_mapping_authority() -> None:
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
-        kind="progress",
+        surface="user_state",
         ids=(ExternalId("anilist", "123"),),
     )
 
@@ -152,7 +152,7 @@ async def test_resolve_target_refs_skips_namespace_match_without_authority() -> 
     """Same provider namespace is not enough when no target authority matches."""
     provider = _MappingTargetProvider(authorities=frozenset({"anilist"}))
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
-    record = Record(ref=Ref.anchor("source-native"), kind="progress")
+    record = Record(ref=Ref.anchor("source-native"), surface="user_state")
 
     resolver = TargetResolver(
         target_provider=provider,
@@ -171,7 +171,7 @@ async def test_resolve_target_refs_requires_advertised_authorities() -> None:
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
-        kind="progress",
+        surface="user_state",
         ids=(ExternalId("anilist", "123"),),
     )
 
@@ -191,7 +191,7 @@ async def test_resolve_target_refs_requires_mapping_capability() -> None:
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
-        kind="progress",
+        surface="user_state",
         ids=(ExternalId("anilist", "123"),),
     )
 
@@ -211,7 +211,7 @@ async def test_resolve_target_refs_uses_animap_edges_and_prefers_confidence() ->
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
-        kind="progress",
+        surface="user_state",
         ids=(ExternalId("tmdb_show", "10"), ExternalId("anilist", "123")),
     )
     valid_edge = AnimapEdge(
@@ -254,7 +254,7 @@ async def test_resolve_target_refs_deduplicates_identical_mapping_edges() -> Non
     node = Node(ref=Ref.anchor("source-native"), kind="anime")
     record = Record(
         ref=Ref.anchor("source-native"),
-        kind="progress",
+        surface="user_state",
         ids=(ExternalId("tvdb_show", "281949", "s2"),),
     )
     edge = AnimapEdge(

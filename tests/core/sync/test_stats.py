@@ -27,7 +27,7 @@ def test_item_identifier_from_record_includes_ref_and_kind() -> None:
     identifier = SyncItem.from_record(
         namespace="source",
         node=Node(ref=Ref.anchor("node1"), kind="anime", title="Node One"),
-        record=Record(ref=Ref.anchor("record1"), kind="progress"),
+        record=Record(ref=Ref.anchor("record1"), surface="user_state"),
     )
 
     assert identifier.namespace == "source"
@@ -57,7 +57,7 @@ def test_item_identifier_from_record_parts_uses_tracker_format() -> None:
         ),
         record=Record(
             ref=Ref.anchor("12345"),
-            kind="progress",
+            surface="user_state",
             values={RecordField.PROGRESS: Progress(current=4, total=26)},
         ),
     )
@@ -101,7 +101,7 @@ def test_record_snapshot_stores_history_display_values() -> None:
     snapshot = RecordSnapshot.from_record(
         Record(
             ref=Ref.anchor("a"),
-            kind="progress",
+            surface="user_state",
             key="record-key",
             values={
                 RecordField.STATUS: State(native="watching", status=Status.ACTIVE),

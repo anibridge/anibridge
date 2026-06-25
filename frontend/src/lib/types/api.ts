@@ -296,6 +296,8 @@ export interface HistoryItem {
     source_ref?: RefPayload | null;
     target_namespace?: string | null;
     target_ref?: RefPayload | null;
+    source_record_surface?: string | null;
+    target_record_surface?: string | null;
     animap_provider?: string | null;
     animap_id?: string | null;
     animap_scope?: string | null;

@@ -88,6 +88,8 @@ def upgrade() -> None:
         sa.Column("source_ref", sa.JSON(), nullable=False),
         sa.Column("target_namespace", sa.String(), nullable=False),
         sa.Column("target_ref", sa.JSON(none_as_null=True), nullable=True),
+        sa.Column("source_record_surface", sa.String(), nullable=True),
+        sa.Column("target_record_surface", sa.String(), nullable=True),
         sa.Column("animap_provider", sa.String(), nullable=True),
         sa.Column("animap_id", sa.String(), nullable=True),
         sa.Column("animap_scope", sa.String(), nullable=True),
@@ -115,6 +117,16 @@ def upgrade() -> None:
         batch_op.create_index(
             batch_op.f("ix_sync_history_target_namespace"),
             ["target_namespace"],
+            unique=False,
+        )
+        batch_op.create_index(
+            batch_op.f("ix_sync_history_source_record_surface"),
+            ["source_record_surface"],
+            unique=False,
+        )
+        batch_op.create_index(
+            batch_op.f("ix_sync_history_target_record_surface"),
+            ["target_record_surface"],
             unique=False,
         )
         batch_op.create_index(
@@ -210,7 +222,48 @@ def downgrade() -> None:
 
     if inspector.has_table(SYNC_HISTORY_BACKUP_TABLE):
         op.execute(
-            f'INSERT INTO "sync_history" SELECT * FROM "{SYNC_HISTORY_BACKUP_TABLE}"'
+            f'''
+            INSERT INTO "sync_history" (
+                id,
+                profile_name,
+                library_namespace,
+                library_section_key,
+                library_media_key,
+                list_namespace,
+                list_media_key,
+                media_kind,
+                animap_provider,
+                animap_id,
+                animap_scope,
+                outcome,
+                before_state,
+                after_state,
+                info,
+                error_message,
+                ephemeral,
+                timestamp
+            )
+            SELECT
+                id,
+                profile_name,
+                library_namespace,
+                library_section_key,
+                library_media_key,
+                list_namespace,
+                list_media_key,
+                media_kind,
+                animap_provider,
+                animap_id,
+                animap_scope,
+                outcome,
+                before_state,
+                after_state,
+                info,
+                error_message,
+                ephemeral,
+                timestamp
+            FROM "{SYNC_HISTORY_BACKUP_TABLE}"
+            '''
         )
         op.drop_table(SYNC_HISTORY_BACKUP_TABLE)
 

@@ -261,7 +261,7 @@ def _record_context(record: Record | None) -> _Namespace:
     return _Namespace(
         {
             "ref": _ref_context(record.ref),
-            "kind": record.kind,
+            "surface": record.surface,
             "key": record.key,
             "url": record.url,
             "updated_at": record.updated_at,

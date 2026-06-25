@@ -41,6 +41,13 @@ class SyncHistory(Base):
         JSON(none_as_null=True), default=None, nullable=True
     )
 
+    source_record_surface: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )
+    target_record_surface: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )
+
     animap_provider: Mapped[str | None] = mapped_column(
         String, nullable=True, index=True
     )

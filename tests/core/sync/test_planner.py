@@ -22,8 +22,8 @@ from anibridge.provider.base import (
     Rating,
     Record,
     RecordField,
-    RecordKind,
     RecordSpec,
+    RecordUnit,
     Ref,
     Role,
     ScanItem,
@@ -44,12 +44,13 @@ from anibridge.provider.base import (
 from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.core.sync.planner import PreparedUpdate, RecordPlanner, SyncLabel
+from anibridge.app.core.sync.projection import MappingProjector
 from anibridge.app.core.sync.rules import SyncRuleEngine
 from anibridge.app.core.sync.stats import FieldChange
 from anibridge.app.models.db.sync_history import SyncOutcome
 from anibridge.app.utils.terminal import ARROW
 
-_KIND = "progress"
+_KIND = "user_state"
 
 
 def _status_values(
@@ -120,7 +121,7 @@ def _capabilities(
         ),
         records=(
             RecordSpec(
-                kind=Descriptor(_KIND, RecordKind.PROGRESS),
+                surface=_KIND,
                 fields=_fields(
                     readable=readable,
                     writable=writable,
@@ -207,7 +208,7 @@ def test_validate_provider_contracts_reports_missing_capabilities() -> None:
     )
 
 
-def test_record_kind_projection_sync_fields_and_deletion() -> None:
+def test_record_channel_projection_sync_fields_and_deletion() -> None:
     planner = _planner(
         target=_capabilities(
             role=Role.TARGET, readable=True, writable=True, delete=True
@@ -216,32 +217,85 @@ def test_record_kind_projection_sync_fields_and_deletion() -> None:
     item = ScanItem(
         node=Node(ref=Ref.anchor("node"), kind="item"),
         records=(
-            Record(ref=Ref.anchor("empty"), kind=_KIND),
+            Record(ref=Ref.anchor("empty"), surface=_KIND),
             Record(
                 ref=Ref.anchor("unknown"),
-                kind="unknown",
+                surface="unknown",
                 values={RecordField.PROGRESS: Progress(current=1)},
             ),
             Record(
-                ref=Ref.anchor("progress"),
-                kind=_KIND,
+                ref=Ref.anchor("state"),
+                surface=_KIND,
                 values={RecordField.PROGRESS: Progress(current=1)},
             ),
         ),
     )
 
-    assert planner.source_record_kinds() == (_KIND,)
-    assert planner.target_record_kind_for(_KIND) == _KIND
-    assert planner.target_record_kind_for("unknown") is None
+    assert planner.source_record_surfaces() == (_KIND,)
+    assert planner.target_record_surface_for(_KIND) == _KIND
+    assert planner.target_record_surface_for("unknown") is None
     assert planner.can_delete_record(_KIND) is True
     assert planner.can_delete_record("unknown") is False
     assert [record.ref.key for record in planner.syncable_source_records(item)] == [
-        "progress"
+        "state"
     ]
     assert [
         record.ref.key
         for record in _planner(destructive=True).syncable_source_records(item)
-    ] == ["empty", "progress"]
+    ] == ["empty", "state"]
+
+
+def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
+    source_kind = "media_list"
+    target_kind = "anime_list"
+    source = Capabilities(
+        roles=frozenset({Role.SOURCE}),
+        records=(
+            RecordSpec(
+                surface=source_kind,
+                fields={
+                    RecordField.STATUS: FieldSpec(
+                        RecordField.STATUS,
+                        readable=True,
+                        values=_status_values(),
+                    ),
+                    RecordField.PROGRESS: FieldSpec(
+                        RecordField.PROGRESS,
+                        readable=True,
+                    ),
+                },
+            ),
+        ),
+    )
+    target = Capabilities(
+        roles=frozenset({Role.TARGET}),
+        external_authorities=frozenset({"target"}),
+        records=(
+            RecordSpec(
+                surface=target_kind,
+                fields={
+                    RecordField.STATUS: FieldSpec(
+                        RecordField.STATUS,
+                        writable=True,
+                        values=_status_values(),
+                    ),
+                    RecordField.PROGRESS: FieldSpec(
+                        RecordField.PROGRESS,
+                        writable=True,
+                    ),
+                },
+                write_ops=frozenset({WriteOp.UPSERT_RECORD}),
+            ),
+        ),
+    )
+    planner = _planner(source=source, target=target)
+
+    assert planner.source_record_surfaces() == (source_kind,)
+    assert planner.target_record_surface_for(source_kind) == target_kind
+    assert planner.sync_fields_for(source_kind, target_kind) == (
+        RecordField.STATUS,
+        RecordField.PROGRESS,
+    )
 
 
 def test_sync_fields_require_readable_source_writable_target_and_status_overlap() -> (
@@ -266,7 +320,7 @@ def test_project_source_record_maps_progress_and_status() -> None:
     planner = _planner()
     source_record = Record(
         ref=Ref.anchor("source"),
-        kind=_KIND,
+        surface=_KIND,
         values={
             RecordField.STATUS: State(status=Status.ACTIVE),
             RecordField.PROGRESS: Progress(current=12, total=12, unit="unit"),
@@ -286,7 +340,7 @@ def test_project_source_record_maps_progress_and_status() -> None:
 
     completed = Record(
         ref=Ref.anchor("source"),
-        kind=_KIND,
+        surface=_KIND,
         values={
             RecordField.STATUS: State(status=Status.COMPLETED),
             RecordField.PROGRESS: Progress(current=1, total=12),
@@ -296,11 +350,89 @@ def test_project_source_record_maps_progress_and_status() -> None:
     assert projected.values[RecordField.STATUS] == State(status=Status.ACTIVE)
 
 
+def test_project_source_record_maps_progress_to_target_coordinate() -> None:
+    planner = _planner()
+    source_record = Record(
+        ref=Ref.anchor("source"),
+        surface=_KIND,
+        values={RecordField.PROGRESS: Progress(current=78, total=78, unit="episode")},
+    )
+
+    projected = planner.project_source_record(
+        source_record,
+        mappings=(AnibridgeMapping.parse("1-78", "59-136"),),
+    )
+
+    assert projected.values[RecordField.PROGRESS] == Progress(
+        current=136,
+        total=136,
+        unit="episode",
+    )
+
+
+def test_project_source_record_maps_temporal_fields_from_units() -> None:
+    planner = _planner()
+    first = datetime(2026, 1, 1, tzinfo=UTC)
+    second = datetime(2026, 1, 2, tzinfo=UTC)
+    third = datetime(2026, 1, 3, tzinfo=UTC)
+    source_record = Record(
+        ref=Ref.at("source", ("season", 2)),
+        surface=_KIND,
+        values={
+            RecordField.STATUS: State(status=Status.COMPLETED),
+            RecordField.PROGRESS: Progress(current=3, total=3, unit="episode"),
+            RecordField.STARTED_AT: first,
+            RecordField.LAST_ACTIVITY_AT: third,
+            RecordField.FINISHED_AT: third,
+        },
+        units=(
+            RecordUnit(
+                index=1,
+                values={
+                    RecordField.STARTED_AT: first,
+                    RecordField.LAST_ACTIVITY_AT: first,
+                    RecordField.FINISHED_AT: first,
+                },
+            ),
+            RecordUnit(
+                index=2,
+                values={
+                    RecordField.STARTED_AT: second,
+                    RecordField.LAST_ACTIVITY_AT: second,
+                    RecordField.FINISHED_AT: second,
+                },
+            ),
+            RecordUnit(
+                index=3,
+                values={
+                    RecordField.STARTED_AT: third,
+                    RecordField.LAST_ACTIVITY_AT: third,
+                    RecordField.FINISHED_AT: third,
+                },
+            ),
+        ),
+    )
+
+    projected = planner.project_source_record(
+        source_record,
+        mappings=(AnibridgeMapping.parse("2-3", "1-2"),),
+    )
+
+    assert projected.values[RecordField.PROGRESS] == Progress(
+        current=2,
+        total=2,
+        unit="episode",
+    )
+    assert projected.values[RecordField.STARTED_AT] == second
+    assert projected.values[RecordField.LAST_ACTIVITY_AT] == third
+    assert projected.values[RecordField.FINISHED_AT] == third
+
+
 def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
     planner = _planner(destructive=True)
     target = Record(
         ref=Ref.anchor("target"),
-        kind=_KIND,
+        surface=_KIND,
         key="entry",
         revision="rev",
         values={
@@ -315,7 +447,7 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
         _item(),
         source_record=Record(
             ref=Ref.anchor("source"),
-            kind=_KIND,
+            surface=_KIND,
             values={
                 RecordField.STATUS: State(status=Status.ACTIVE),
                 RecordField.PROGRESS: Progress(current=2, total=10, unit="unit"),
@@ -370,13 +502,13 @@ def test_prepare_upsert_applies_rules_and_status_support() -> None:
         _item(),
         source_record=Record(
             ref=Ref.anchor("source"),
-            kind=_KIND,
+            surface=_KIND,
             values={
                 RecordField.STATUS: State(status=Status.ACTIVE),
                 RecordField.NOTES: "new",
             },
         ),
-        target_record=Record(ref=Ref.anchor("target"), kind=_KIND, values={}),
+        target_record=Record(ref=Ref.anchor("target"), surface=_KIND, values={}),
         target_ref=Ref.anchor("target"),
         target_kind=_KIND,
         pinned_fields=(),
@@ -405,10 +537,10 @@ def test_prepare_upsert_applies_rules_and_status_support() -> None:
         _item(),
         source_record=Record(
             ref=Ref.anchor("source"),
-            kind=_KIND,
+            surface=_KIND,
             values={RecordField.STATUS: State(status=Status.COMPLETED)},
         ),
-        target_record=Record(ref=Ref.anchor("target"), kind=_KIND, values={}),
+        target_record=Record(ref=Ref.anchor("target"), surface=_KIND, values={}),
         target_ref=Ref.anchor("target"),
         target_kind=_KIND,
         pinned_fields=(),
@@ -517,10 +649,10 @@ def test_progress_equality_status_gates_mapping_edges_and_diff_formatting() -> N
     assert constrained._status_gate(RecordField.NOTES, Status.PLANNED) is None
 
     mapping = AnibridgeMapping.parse("3-4", "10-11")
-    assert constrained._project_progress(
-        Progress(current=2.5, total=12), (mapping,)
-    ) == Progress(current=0.5, total=2)
-    assert constrained._best_mapping_for_index(2, (mapping,)) is None
+    projector = MappingProjector((mapping,))
+    assert projector.target_progress(2.5) == 9.5
+    assert projector.target_total() == 11
+    assert projector.mapping_for_source(2) is None
 
     diff = constrained.format_diff(
         [
@@ -573,7 +705,7 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
     )
     target = Record(
         ref=Ref.anchor("target"),
-        kind=_KIND,
+        surface=_KIND,
         values={RecordField.PROGRESS: Progress(current=8)},
     )
     mappings = tuple(
@@ -591,7 +723,7 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
     fractional = planner.project_source_record(
         Record(
             ref=Ref.anchor("source"),
-            kind=_KIND,
+            surface=_KIND,
             values={RecordField.PROGRESS: Progress(current=20, total=30)},
         ),
         mappings=mappings,
@@ -613,7 +745,7 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
     boundary = planner.project_source_record(
         Record(
             ref=Ref.anchor("source"),
-            kind=_KIND,
+            surface=_KIND,
             values={RecordField.PROGRESS: Progress(current=21, total=30)},
         ),
         mappings=mappings,

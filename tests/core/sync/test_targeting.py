@@ -97,9 +97,13 @@ class _DuplicateMatchProvider(_MappingTargetProvider):
         )
 
 
-def test_external_ids_for_record_deduplicates_source_record_and_node_ids() -> None:
+@pytest.mark.asyncio
+async def test_resolve_target_refs_deduplicates_record_and_node_ids() -> None:
     """Record ids and node IDS facet are merged by mapping descriptor."""
     anilist = ExternalId("anilist", "1")
+    provider = _MappingTargetProvider(
+        authorities=frozenset({"anilist", "tmdb_show", "tvdb_show"})
+    )
     node = Node(
         ref=Ref.anchor("source-1"),
         kind="anime",
@@ -115,13 +119,17 @@ def test_external_ids_for_record_deduplicates_source_record_and_node_ids() -> No
         ids=(anilist, ExternalId("tvdb_show", "20")),
     )
 
-    ids = TargetResolver._record_ids(node=node, record=record)
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, _FakeAnimapClient()),
+    )
+    await resolver.resolve(node=node, record=record)
 
-    assert ids == (
+    assert provider.resolved_ids == [
         ExternalId("anilist", "1"),
         ExternalId("tvdb_show", "20"),
         ExternalId("tmdb_show", "10"),
-    )
+    ]
 
 
 @pytest.mark.asyncio

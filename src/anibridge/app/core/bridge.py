@@ -347,7 +347,7 @@ class BridgeClient:
                 sync_stats.not_found,
                 sync_stats.failed,
                 sync_stats.coverage * 100,
-                sync_stats.count(trackable=True),
+                sync_stats.count(),
                 duration.total_seconds(),
             )
 
@@ -355,7 +355,6 @@ class BridgeClient:
                 SyncOutcome.NOT_FOUND,
                 SyncOutcome.FAILED,
                 SyncOutcome.PENDING,
-                trackable=True,
             )
             if uncovered_items:
                 log.debug(

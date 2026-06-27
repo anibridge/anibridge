@@ -62,6 +62,7 @@ class SyncHistory(Base):
     after_state: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, default=dict, nullable=True
     )
+    # Human-readable debug metadata only. Runtime behavior does not depend on it.
     info: Mapped[dict[str, str] | None] = mapped_column(
         JSON, default=dict, nullable=True
     )

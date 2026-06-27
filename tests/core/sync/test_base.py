@@ -1,6 +1,6 @@
 """Tests for sync client event ref helpers."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 import pytest
@@ -48,7 +48,12 @@ from anibridge.app.core.sync import ScanPlan, SyncTrigger, ref_to_json, ref_to_k
 from anibridge.app.core.sync.base import SyncClient, _TargetWork
 from anibridge.app.core.sync.planner import PreparedUpdate, SyncLabel
 from anibridge.app.core.sync.projection import MappingProjector
-from anibridge.app.core.sync.stats import RecordPlan, RecordSnapshot, SyncItem
+from anibridge.app.core.sync.stats import (
+    MappingRange,
+    RecordPlan,
+    RecordSnapshot,
+    SyncItem,
+)
 from anibridge.app.core.sync.targeting import ResolvedTarget
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncOutcome
@@ -56,6 +61,19 @@ from anibridge.app.models.db.sync_history import SyncOutcome
 _RECORD_KIND = "user_state"
 _SOURCE_EVENT = "played"
 _TARGET_EVENT = "scrobbled"
+
+
+def test_date_key_orders_dates_and_datetimes() -> None:
+    assert SyncClient._date_key(date(2026, 1, 1)) == (2026, 1, 1, 0, 0, 0, 0)
+    assert SyncClient._date_key(datetime(2026, 1, 1, 12, 30, 15, 123)) == (
+        2026,
+        1,
+        1,
+        12,
+        30,
+        15,
+        123,
+    )
 
 
 def _record_fields(*, readable: bool, writable: bool) -> dict[RecordField, FieldSpec]:
@@ -174,9 +192,21 @@ class _TargetProvider(
     NAMESPACE = "target"
     DISPLAY_NAME = "Target"
 
-    def __init__(self, *, delete: bool = False, resolve_matches: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        delete: bool = False,
+        resolve_matches: bool = True,
+        event_specs: tuple[EventSpec, ...] | None = None,
+    ) -> None:
         self.delete = delete
         self.resolve_matches = resolve_matches
+        self.event_specs = event_specs or (
+            EventSpec(
+                Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                write_ops=frozenset({WriteOp.APPEND_EVENT}),
+            ),
+        )
         self.records: dict[tuple[object, str], Record] = {}
         self.record_queries: list[RecordQuery] = []
         self.record_writes: list[RecordWrite] = []
@@ -189,12 +219,7 @@ class _TargetProvider(
         return _capabilities(
             role=Role.TARGET,
             delete=self.delete,
-            events=(
-                EventSpec(
-                    Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                    write_ops=frozenset({WriteOp.APPEND_EVENT}),
-                ),
-            ),
+            events=self.event_specs,
         )
 
     async def clear_cache(self) -> None:
@@ -260,6 +285,19 @@ def _sync_item(ref: Ref | None = None) -> SyncItem:
     return SyncItem(namespace="source", ref=ref, repr="source")
 
 
+def _diagnostic_mappings(
+    mappings: tuple[AnibridgeMapping, ...],
+) -> tuple[MappingRange, ...]:
+    return tuple(
+        MappingRange(
+            source_mapping_descriptor="source:source",
+            target_mapping_descriptor="target:target",
+            mapping=mapping,
+        )
+        for mapping in mappings
+    )
+
+
 def _work(
     *,
     source_ref: Ref,
@@ -273,7 +311,7 @@ def _work(
         projected_record=Record(ref=source_ref, surface="state"),
         target_ref=target_ref,
         target_surface="state",
-        mappings=mappings,
+        mappings=_diagnostic_mappings(mappings),
         label=SyncLabel(node_kind="item", source="source", target="target"),
     )
 
@@ -462,10 +500,58 @@ async def test_process_page_writes_records_events_and_tracks_outcomes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_page_writes_mapped_record_without_event_pair() -> None:
+async def test_process_page_writes_all_matching_target_event_channels() -> None:
+    source = _SourceProvider()
+    target = _TargetProvider(
+        event_specs=(
+            EventSpec(
+                Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                write_ops=frozenset({WriteOp.APPEND_EVENT}),
+            ),
+            EventSpec(
+                Descriptor("scrobbled_alt", EventKind.SCROBBLE),
+                write_ops=frozenset({WriteOp.APPEND_EVENT}),
+            ),
+        )
+    )
+    event_at = datetime(2026, 1, 1, tzinfo=UTC)
+    source.events[(Ref.anchor("source"), _SOURCE_EVENT, None)] = Page(
+        items=(
+            Event(
+                ref=Ref.anchor("source"),
+                kind=_SOURCE_EVENT,
+                at=event_at,
+                dedupe_key="event-1",
+            ),
+        )
+    )
+    client = _client(source=source, target=target)
+    item = ScanItem(
+        node=Node(ref=Ref.anchor("source"), kind="item", title="Source"),
+        records=(
+            Record(
+                ref=Ref.anchor("source"),
+                surface=_RECORD_KIND,
+                ids=(ExternalId("target", "target"),),
+                values={RecordField.PROGRESS: Progress(current=1)},
+            ),
+        ),
+    )
+
+    await client.process_page((item,))
+
+    assert [
+        (write.ref, write.kind, write.dedupe_key) for write in target.event_writes
+    ] == [
+        (Ref.anchor("target"), _TARGET_EVENT, "event-1"),
+        (Ref.anchor("target"), "scrobbled_alt", "event-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_page_writes_mapped_record_with_event_channels() -> None:
     target = _TargetProvider()
     client = _client(target=target)
-    client._event_pairs = {}
 
     async def resolve_mapped(*, node: Node, record: Record):
         return (
@@ -508,7 +594,6 @@ async def test_process_page_writes_mapped_record_without_event_pair() -> None:
 async def test_process_page_merges_many_to_one_mapped_records() -> None:
     target = _TargetProvider()
     client = _client(target=target)
-    client._event_pairs = {}
 
     async def resolve_mapped(*, node: Node, record: Record):
         del node
@@ -667,6 +752,49 @@ async def test_event_sync_skips_existing_and_validates_write_results() -> None:
         await _client(target=BadTarget())._write_events(
             [AppendEvent(ref=Ref.anchor("target"), kind=_TARGET_EVENT, at=event_at)]
         )
+
+
+@pytest.mark.asyncio
+async def test_event_sync_uses_dedupe_key_before_timestamp() -> None:
+    source = _SourceProvider()
+    target = _TargetProvider()
+    event_at = datetime(2026, 1, 1, tzinfo=UTC)
+    source.events[(Ref.anchor("source"), _SOURCE_EVENT, None)] = Page(
+        items=(
+            Event(
+                ref=Ref.anchor("source"),
+                kind=_SOURCE_EVENT,
+                at=event_at,
+                dedupe_key="new-event",
+            ),
+        )
+    )
+    target.events[(Ref.anchor("target"), _TARGET_EVENT, None)] = Page(
+        items=(
+            Event(
+                ref=Ref.anchor("target"),
+                kind=_TARGET_EVENT,
+                at=event_at,
+                dedupe_key="old-event",
+            ),
+        )
+    )
+    client = _client(source=source, target=target)
+
+    assert (
+        await client._sync_events_for_work(
+            _work(source_ref=Ref.anchor("source"), target_ref=Ref.anchor("target"))
+        )
+        == SyncOutcome.SYNCED
+    )
+    assert target.event_writes == [
+        AppendEvent(
+            ref=Ref.anchor("target"),
+            kind=_TARGET_EVENT,
+            at=event_at,
+            dedupe_key="new-event",
+        )
+    ]
 
 
 @pytest.mark.asyncio

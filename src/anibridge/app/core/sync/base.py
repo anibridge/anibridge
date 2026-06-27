@@ -36,7 +36,6 @@ from anibridge.provider.base import (
     SupportsRecordReads,
     SupportsRecordWrites,
     SupportsScan,
-    Value,
     WriteOp,
 )
 from anibridge.utils.mappings import AnibridgeMapping
@@ -54,6 +53,7 @@ from anibridge.app.core.sync.planner import (
 from anibridge.app.core.sync.projection import MappingProjector
 from anibridge.app.core.sync.rules import SyncRuleEngine
 from anibridge.app.core.sync.stats import (
+    MappingRange,
     RecordPlan,
     RecordSnapshot,
     SyncItem,
@@ -96,7 +96,7 @@ class _TargetWork(msgspec.Struct, frozen=True):
     projected_record: Record
     target_ref: Ref
     target_surface: str
-    mappings: Sequence[AnibridgeMapping]
+    mappings: Sequence[MappingRange]
     label: SyncLabel
 
     @property
@@ -287,31 +287,26 @@ class SyncClient:
             return
 
         outcomes, work_items = await self._resolve_work_items(items)
-        record_work_items = self._merge_record_work_items(
-            work
-            for work in work_items
-            if not (work.projected_record.ref.path and self._event_pairs)
-        )
-        target_keys = [work.key for work in record_work_items]
-        target_key_counts = Counter(target_keys)
+        record_work_items = self._merge_record_work_items(work_items)
+        target_key_counts = Counter(work.key for work in record_work_items)
         target_records = await self._fetch_target_records_batch(
             (work.target_ref, work.target_surface)
-            for work, target_key in zip(record_work_items, target_keys, strict=True)
-            if target_key_counts[target_key] == 1
+            for work in record_work_items
+            if target_key_counts[work.key] == 1
         )
         pinned_fields = self._fetch_pinned_fields_batch(
             (work.target_ref, work.target_surface) for work in record_work_items
         )
 
         updates: list[tuple[_TargetWork, PreparedUpdate]] = []
-        for work, target_key in zip(record_work_items, target_keys, strict=True):
+        for work in record_work_items:
             try:
                 target_record = (
                     await self._fetch_target_record(
                         work.target_ref,
                         work.target_surface,
                     )
-                    if target_key_counts[target_key] > 1
+                    if target_key_counts[work.key] > 1
                     else target_records.get(work.key)
                 )
                 planned = await self._prepare_record_update(
@@ -320,7 +315,7 @@ class SyncClient:
                     target_record=target_record,
                     target_ref=work.target_ref,
                     target_kind=work.target_surface,
-                    pinned_fields=pinned_fields.get(target_key, ()),
+                    pinned_fields=pinned_fields.get(work.key, ()),
                     mappings=work.mappings,
                     label=work.label,
                 )
@@ -395,96 +390,87 @@ class SyncClient:
                 order.append(group_key)
             grouped[group_key].append(work)
 
-        return [self._merge_record_work_group(grouped[key]) for key in order]
+        merged_work: list[_TargetWork] = []
+        for group_key in order:
+            works = grouped[group_key]
+            if len(works) == 1:
+                merged_work.append(works[0])
+                continue
 
-    def _merge_record_work_group(self, works: Sequence[_TargetWork]) -> _TargetWork:
-        """Return one record work item for a source item and target record."""
-        if len(works) == 1:
-            return works[0]
+            first = works[0]
+            values = dict(first.projected_record.values)
+            mappings: list[MappingRange] = []
+            sync_items: list[SyncItem] = []
+            labels: list[SyncLabel] = []
+            for work in works:
+                mappings.extend(work.mappings)
+                sync_items.extend(work.sync_items)
+                labels.append(work.label)
 
-        first = works[0]
-        values = dict(first.projected_record.values)
-        mappings: list[AnibridgeMapping] = []
-        sync_items: list[SyncItem] = []
-        for work in works:
-            mappings.extend(work.mappings)
-            sync_items.extend(work.sync_items)
-            values = self._merge_projected_values(values, work.projected_record.values)
+                for field, value in work.projected_record.values.items():
+                    existing = values.get(field)
+                    if field == RecordField.PROGRESS:
+                        if not isinstance(value, Progress):
+                            continue
+                        if not isinstance(existing, Progress):
+                            values[field] = value
+                            continue
+                        totals = tuple(
+                            item.total
+                            for item in (existing, value)
+                            if item.total is not None
+                        )
+                        values[field] = Progress(
+                            current=max(existing.current or 0, value.current or 0),
+                            total=max(totals) if totals else None,
+                            unit=existing.unit or value.unit,
+                        )
+                    elif isinstance(value, date) and field == RecordField.STARTED_AT:
+                        if not isinstance(existing, date) or self._date_key(
+                            value
+                        ) < self._date_key(existing):
+                            values[field] = value
+                    elif isinstance(value, date) and field in (
+                        RecordField.FINISHED_AT,
+                        RecordField.LAST_ACTIVITY_AT,
+                    ):
+                        if not isinstance(existing, date) or self._date_key(
+                            value
+                        ) > self._date_key(existing):
+                            values[field] = value
+                    elif field == RecordField.STATUS:
+                        status = RecordPlanner.status_of(value)
+                        existing_status = RecordPlanner.status_of(existing)
+                        if existing is None or _STATUS_ORDER.get(
+                            status.value if status is not None else None,
+                            0,
+                        ) > _STATUS_ORDER.get(
+                            (
+                                existing_status.value
+                                if existing_status is not None
+                                else None
+                            ),
+                            0,
+                        ):
+                            values[field] = value
+                    elif existing is None:
+                        values[field] = value
 
-        return _TargetWork(
-            item=first.item,
-            sync_items=tuple(dict.fromkeys(sync_items)),
-            projected_record=replace(
-                first.projected_record,
-                values=values,
-            ),
-            target_ref=first.target_ref,
-            target_surface=first.target_surface,
-            mappings=tuple(dict.fromkeys(mappings)),
-            label=self._merged_label(tuple(work.label for work in works)),
-        )
+            merged_work.append(
+                _TargetWork(
+                    item=first.item,
+                    sync_items=tuple(dict.fromkeys(sync_items)),
+                    projected_record=replace(first.projected_record, values=values),
+                    target_ref=first.target_ref,
+                    target_surface=first.target_surface,
+                    mappings=tuple(dict.fromkeys(mappings)),
+                    label=self._merged_label(labels),
+                )
+            )
+        return merged_work
 
     @staticmethod
-    def _merge_projected_values(
-        left: Mapping[RecordField, Value],
-        right: Mapping[RecordField, Value],
-    ) -> dict[RecordField, Value]:
-        """Merge mapped target-space values from records sharing a target."""
-        merged = dict(left)
-        for field, value in right.items():
-            existing = merged.get(field)
-            if field == RecordField.PROGRESS:
-                if not isinstance(value, Progress):
-                    continue
-                if not isinstance(existing, Progress):
-                    merged[field] = value
-                    continue
-                current = max(existing.current or 0, value.current or 0)
-                total_values = tuple(
-                    item.total for item in (existing, value) if item.total is not None
-                )
-                merged[field] = Progress(
-                    current=current,
-                    total=max(total_values) if total_values else None,
-                    unit=existing.unit or value.unit,
-                )
-            elif field == RecordField.STARTED_AT:
-                merged[field] = SyncClient._merge_temporal_value(
-                    existing,
-                    value,
-                    latest=False,
-                )
-            elif field in (RecordField.FINISHED_AT, RecordField.LAST_ACTIVITY_AT):
-                merged[field] = SyncClient._merge_temporal_value(
-                    existing,
-                    value,
-                    latest=True,
-                )
-            elif field == RecordField.STATUS:
-                merged[field] = SyncClient._merge_status_value(existing, value)
-            elif existing is None:
-                merged[field] = value
-        return merged
-
-    @staticmethod
-    def _merge_temporal_value(
-        existing: Value | None,
-        value: Value,
-        *,
-        latest: bool,
-    ) -> Value:
-        """Merge temporal values while keeping type narrowing explicit."""
-        if not isinstance(value, date):
-            return existing if existing is not None else value
-        if not isinstance(existing, date):
-            return value
-        return (max if latest else min)(
-            (existing, value),
-            key=SyncClient._temporal_sort_key,
-        )
-
-    @staticmethod
-    def _temporal_sort_key(value: date) -> tuple[int, int, int, int, int, int, int]:
+    def _date_key(value: date | datetime) -> tuple[int, int, int, int, int, int, int]:
         """Return a comparable key for date and datetime values."""
         if isinstance(value, datetime):
             return (
@@ -497,19 +483,6 @@ class SyncClient:
                 value.microsecond,
             )
         return (value.year, value.month, value.day, 0, 0, 0, 0)
-
-    @staticmethod
-    def _merge_status_value(existing: Value | None, value: Value) -> Value:
-        """Merge status values while preserving the value contract type."""
-        if existing is None:
-            return value
-        return max((existing, value), key=SyncClient._status_rank)
-
-    @staticmethod
-    def _status_rank(value: object) -> int:
-        """Return the sync ordering for a record status value."""
-        status = RecordPlanner.status_of(value)
-        return _STATUS_ORDER.get(status.value if status is not None else None, 0)
 
     @staticmethod
     def _merged_label(labels: Sequence[SyncLabel]) -> SyncLabel:
@@ -646,7 +619,7 @@ class SyncClient:
                     ),
                     target_ref=target_ref,
                     target_surface=target_surface,
-                    mappings=match.mappings,
+                    mappings=self._mappings_for_match(match),
                     label=work_label,
                 )
             )
@@ -682,7 +655,7 @@ class SyncClient:
         target_kind: str,
         label: SyncLabel,
         pinned_fields: Sequence[RecordField] = (),
-        mappings: Sequence[AnibridgeMapping] = (),
+        mappings: Sequence[MappingRange] = (),
     ) -> PreparedUpdate | SyncOutcome:
         """Plan one source-to-target record mutation without applying updates."""
         before_snapshot = (
@@ -927,7 +900,7 @@ class SyncClient:
             return SyncOutcome.SKIPPED
 
         writes: list[AppendEvent] = []
-        for source_kind, target_kind in self._event_pairs.items():
+        for source_kind, target_kind in self._event_pairs:
             source_events = await self._fetch_source_events(
                 work.projected_record.ref,
                 source_kind,
@@ -946,18 +919,28 @@ class SyncClient:
                 tuple(target_ref for _event, target_ref in projected_events),
                 target_kind,
             )
-            existing = {
-                (ref_to_key(event.ref), event.kind, event.at) for event in target_events
+            existing_dedupe_keys = {
+                (ref_to_key(event.ref), event.kind, event.dedupe_key)
+                for event in target_events
+                if event.dedupe_key is not None
+            }
+            existing_unkeyed_times = {
+                (ref_to_key(event.ref), event.kind, event.at)
+                for event in target_events
+                if event.dedupe_key is None
             }
             for event, target_ref in projected_events:
-                signature = (ref_to_key(target_ref), target_kind, event.at)
-                if signature in existing:
-                    continue
                 dedupe_key = self._event_dedupe_key(
                     event,
                     target_ref,
                     scoped=len(projected_events) > 1,
                 )
+                target_key = ref_to_key(target_ref)
+                if dedupe_key is not None:
+                    if (target_key, target_kind, dedupe_key) in existing_dedupe_keys:
+                        continue
+                elif (target_key, target_kind, event.at) in existing_unkeyed_times:
+                    continue
                 writes.append(
                     AppendEvent(
                         ref=target_ref,
@@ -1048,7 +1031,9 @@ class SyncClient:
         source_index = self._path_tail_int(source_ref, work.projected_record.ref)
         if source_index is None:
             return ()
-        target_indices = MappingProjector(work.mappings).target_indices(source_index)
+        target_indices = MappingProjector(
+            self._raw_mappings(work.mappings)
+        ).target_indices(source_index)
         if not target_indices:
             log.debug(
                 "[%s] Skipping activity event for %s because no target path "
@@ -1073,7 +1058,8 @@ class SyncClient:
             return True
         source_index = self._path_tail_int(event.ref, work.projected_record.ref)
         return source_index is not None and any(
-            mapping.source_range.contains(source_index) for mapping in work.mappings
+            mapping.mapping.source_range.contains(source_index)
+            for mapping in work.mappings
         )
 
     @staticmethod
@@ -1093,10 +1079,10 @@ class SyncClient:
         suffix = f"{target_key.key}/{path}" if path else target_key.key
         return f"{event.dedupe_key}@{suffix}"
 
-    def _event_sync_pairs(self) -> dict[str, str]:
+    def _event_sync_pairs(self) -> tuple[tuple[str, str], ...]:
         """Return source event channel to target event channel mappings."""
-        target_by_semantic = {
-            spec.kind.semantic: spec
+        target_events = tuple(
+            spec
             for spec in self._target_capabilities.events
             if spec.kind.semantic is not None
             and WriteOp.APPEND_EVENT in spec.write_ops
@@ -1104,13 +1090,16 @@ class SyncClient:
                 isinstance(self.target_provider, SupportsEventReads)
                 or spec.idempotent_appends
             )
-        }
-        return {
-            source.kind.native: target.kind.native
-            for source in self._source_capabilities.events
-            if source.kind.semantic in target_by_semantic
-            for target in [target_by_semantic[source.kind.semantic]]
-        }
+        )
+        return tuple(
+            dict.fromkeys(
+                (source.kind.native, target.kind.native)
+                for source in self._source_capabilities.events
+                if source.kind.semantic is not None
+                for target in target_events
+                if source.kind.semantic == target.kind.semantic
+            )
+        )
 
     async def _write_events(self, writes: Sequence[EventWrite]):
         """Write events and raise when any write fails."""
@@ -1147,7 +1136,6 @@ class SyncClient:
             return int(path[-1].value)
         except TypeError, ValueError:
             return None
-        return None
 
     async def _write_records(self, writes: Sequence[RecordWrite]):
         """Write records and raise when any write fails."""
@@ -1303,6 +1291,25 @@ class SyncClient:
             else None
         )
         return SyncLabel(node_kind=item.node.kind, source=source, target=target)
+
+    @staticmethod
+    def _mappings_for_match(match: ResolvedTarget) -> tuple[MappingRange, ...]:
+        """Return descriptor-qualified mappings for history diagnostics."""
+        if match.source_id is None or match.target_id is None:
+            return ()
+        return tuple(
+            MappingRange(
+                source_mapping_descriptor=match.source_id.descriptor,
+                target_mapping_descriptor=match.target_id.descriptor,
+                mapping=mapping,
+            )
+            for mapping in match.mappings
+        )
+
+    @staticmethod
+    def _raw_mappings(mappings: Sequence[MappingRange]) -> tuple[AnibridgeMapping, ...]:
+        """Return raw mapping values from descriptor-qualified mappings."""
+        return tuple(item.mapping for item in mappings)
 
     @staticmethod
     def _source_with_target(context: SyncLabel) -> str:

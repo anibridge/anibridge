@@ -20,8 +20,10 @@ from anibridge.provider.base import (
     Structure,
     Value,
 )
+from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.models.db.sync_history import SyncOutcome
+from anibridge.app.utils.terminal import ARROW
 
 __all__ = [
     "AppliedRule",
@@ -43,7 +45,6 @@ class SyncItem(msgspec.Struct, frozen=True):
     namespace: str
     ref: Ref
     repr: str
-    trackable: bool = True
 
     @classmethod
     def from_record_parts(
@@ -54,95 +55,47 @@ class SyncItem(msgspec.Struct, frozen=True):
         record: Record,
     ) -> tuple[SyncItem, ...]:
         """Create coverage identifiers for a scanned record."""
-        parts = cls.coverage_parts(node, record)
-        if not parts:
-            return (cls.from_record(namespace=namespace, node=node, record=record),)
-        return tuple(
-            cls.from_ref(
-                namespace=namespace,
-                node=node,
-                record=record,
-                ref=Ref(record.ref.key, part.position),
-                part=part,
-            )
-            for part in parts
-        )
-
-    @classmethod
-    def from_record(
-        cls,
-        *,
-        namespace: str,
-        node: Node,
-        record: Record,
-    ) -> SyncItem:
-        """Create a coverage identifier for the record's own ref."""
-        return cls.from_ref(
-            namespace=namespace,
-            node=node,
-            record=record,
-            ref=record.ref,
-        )
-
-    @classmethod
-    def from_ref(
-        cls,
-        *,
-        namespace: str,
-        node: Node,
-        record: Record,
-        ref: Ref,
-        part: Part | None = None,
-    ) -> SyncItem:
-        """Create an identifier from a concrete coverage ref."""
-        label = cls.label(namespace, node, record, ref, part)
-        return cls(
-            namespace=namespace,
-            ref=ref,
-            repr=label,
-        )
-
-    @staticmethod
-    def label(
-        namespace: str,
-        node: Node,
-        record: Record,
-        ref: Ref,
-        part: Part | None,
-    ) -> str:
-        """Generate a label for a provider ref coordinate."""
-        # Quote and truncate label
-        label = node.title or record.ref.key
-        label = label.replace("\\", "\\\\").replace('"', '\\"')
-        label = label[:35] + "…" if len(label) > 35 else label
-
-        segments = [
-            (node.kind, ref.key),
-            *((step.axis, step.value) for step in ref.path),
-        ]
-        path = "/".join(f"{axis}={value}" for axis, value in segments)
-        return f'<{namespace}:{path} "{label}">'
-
-    @staticmethod
-    def coverage_parts(node: Node, record: Record) -> tuple[Part, ...]:
-        """Return concrete parts represented by an aggregate source record."""
+        parts: tuple[Part, ...] = ()
         progress = record.values.get(RecordField.PROGRESS)
-        if not isinstance(progress, Progress):
-            return ()
         structure = node.facets.get(FacetName.STRUCTURE)
-        if not isinstance(structure, Structure) or not structure.parts:
-            return ()
-        if not record.ref.path:
-            return structure.parts
-
-        parent = record.ref.path
-        return tuple(
-            part
-            for part in structure.parts
-            # Keep parts whose position is a descendant of the record path.
-            if len(parent) < len(child := part.position)
-            and child[: len(parent)] == parent
+        if isinstance(progress, Progress) and isinstance(structure, Structure):
+            if record.ref.path:
+                parent = record.ref.path
+                parts = tuple(
+                    part
+                    for part in structure.parts
+                    if len(parent) < len(child := part.position)
+                    and child[: len(parent)] == parent
+                )
+            else:
+                parts = structure.parts
+        refs = (
+            ((record.ref, None),)
+            if not parts
+            else tuple((Ref(record.ref.key, part.position), part) for part in parts)
         )
+        items: list[SyncItem] = []
+        for ref, part in refs:
+            label = node.title or record.ref.key
+            if part is not None and part.title:
+                label = f"{label} - {part.title}"
+            label = label.replace("\\", "\\\\").replace('"', '\\"')
+            label = label[:35] + "…" if len(label) > 35 else label
+            path = "/".join(
+                f"{axis}={value}"
+                for axis, value in (
+                    (node.kind, ref.key),
+                    *((step.axis, step.value) for step in ref.path),
+                )
+            )
+            items.append(
+                cls(
+                    namespace=namespace,
+                    ref=ref,
+                    repr=f'<{namespace}:{path} "{label}">',
+                )
+            )
+        return tuple(items)
 
     def __hash__(self) -> int:
         """Hash by provider namespace and normalized ref."""
@@ -173,22 +126,18 @@ class SyncStats(msgspec.Struct):
         for item_id in item_ids:
             self._item_outcomes.setdefault(item_id, SyncOutcome.PENDING)
 
-    def items(
-        self,
-        *outcomes: SyncOutcome,
-        trackable: bool = False,
-    ) -> list[SyncItem]:
+    def items(self, *outcomes: SyncOutcome) -> list[SyncItem]:
         """Return tracked items matching optional outcomes."""
         allowed = set(outcomes)
         return [
             item
             for item, outcome in self._item_outcomes.items()
-            if (not trackable or item.trackable) and (not allowed or outcome in allowed)
+            if not allowed or outcome in allowed
         ]
 
-    def count(self, *outcomes: SyncOutcome, trackable: bool = False) -> int:
+    def count(self, *outcomes: SyncOutcome) -> int:
         """Count tracked items matching optional outcomes."""
-        return len(self.items(*outcomes, trackable=trackable))
+        return len(self.items(*outcomes))
 
     @property
     def synced(self) -> int:
@@ -217,15 +166,14 @@ class SyncStats(msgspec.Struct):
 
     @property
     def coverage(self) -> float:
-        """Percentage of trackable refs with a covered outcome."""
-        total = self.count(trackable=True)
+        """Percentage of refs with a covered outcome."""
+        total = self.count()
         if not total:
             return 1.0
         processed = self.count(
             SyncOutcome.SYNCED,
             SyncOutcome.SKIPPED,
             SyncOutcome.DELETED,
-            trackable=True,
         )
         return processed / total
 
@@ -269,8 +217,19 @@ class AppliedRule(msgspec.Struct, frozen=True):
 class MappingRange(msgspec.Struct, frozen=True):
     """Mapped source and target progress range."""
 
-    source: str
-    target: str
+    source_mapping_descriptor: str
+    target_mapping_descriptor: str
+    mapping: AnibridgeMapping
+
+    @property
+    def source(self) -> str:
+        """Return the serialized source range."""
+        return self.mapping.source_key
+
+    @property
+    def target(self) -> str:
+        """Return the serialized target range."""
+        return self.mapping.target_value
 
 
 class PlanDiagnostics(msgspec.Struct, frozen=True):
@@ -278,7 +237,7 @@ class PlanDiagnostics(msgspec.Struct, frozen=True):
 
     blocked_fields: tuple[FieldBlock, ...] = ()
     applied_rules: tuple[AppliedRule, ...] = ()
-    mapping_ranges: tuple[MappingRange, ...] = ()
+    mappings: tuple[MappingRange, ...] = ()
 
     def as_info(self) -> dict[str, str]:
         """Return the JSON-friendly history metadata shape."""
@@ -298,7 +257,9 @@ class PlanDiagnostics(msgspec.Struct, frozen=True):
                 )
             ),
             "mapping_ranges": ", ".join(
-                f"{item.source}->{item.target}" for item in self.mapping_ranges
+                f"{item.source_mapping_descriptor}@{item.source} {ARROW} "
+                f"{item.target_mapping_descriptor}@{item.target}"
+                for item in self.mappings
             ),
         }
 

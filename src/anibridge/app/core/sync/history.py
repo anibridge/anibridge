@@ -109,19 +109,29 @@ class SyncHistoryManager:
                 return
 
             if outcome in (SyncOutcome.NOT_FOUND, SyncOutcome.FAILED):
-                updated = self._update_existing_failure_record(
-                    session=ctx.session,
-                    source_ref=source_ref,
-                    target_ref=target_ref,
-                    outcome=outcome,
-                    before_state=before_state,
-                    after_state=after_state,
-                    source_record_surface=source_record_surface,
-                    target_record_surface=target_record_surface,
-                    history_info=history_info,
-                    error_message=error_message,
+                query = ctx.session.query(SyncHistory).filter(
+                    SyncHistory.profile_name == self.profile_name,
+                    SyncHistory.source_namespace == self.source_namespace,
+                    SyncHistory.source_ref == ref_to_json(source_ref),
+                    SyncHistory.target_namespace == self.target_namespace,
+                    SyncHistory.outcome == outcome,
                 )
-                if updated:
+                if target_ref is None:
+                    query = query.filter(SyncHistory.target_ref.is_(None))
+                else:
+                    query = query.filter(
+                        SyncHistory.target_ref == ref_to_json(target_ref)
+                    )
+
+                existing = query.order_by(SyncHistory.timestamp.desc()).first()
+                if existing is not None:
+                    existing.before_state = before_state
+                    existing.after_state = after_state
+                    existing.source_record_surface = source_record_surface
+                    existing.target_record_surface = target_record_surface
+                    existing.info = history_info
+                    existing.error_message = error_message
+                    existing.timestamp = datetime.now(UTC)
                     ctx.session.commit()
                     return
 
@@ -199,43 +209,3 @@ class SyncHistoryManager:
             >= FAILURE_HISTORY_CLEANUP_BATCH_SIZE
         ):
             self.flush_failure_history_cleanup()
-
-    def _update_existing_failure_record(
-        self,
-        *,
-        session: Any,
-        source_ref: Ref,
-        target_ref: Ref | None,
-        outcome: SyncOutcome,
-        before_state: dict[str, Any] | None,
-        after_state: dict[str, Any] | None,
-        source_record_surface: str | None,
-        target_record_surface: str | None,
-        history_info: dict[str, str],
-        error_message: str | None,
-    ) -> bool:
-        """Update an existing failure row when one already represents this ref."""
-        query = session.query(SyncHistory).filter(
-            SyncHistory.profile_name == self.profile_name,
-            SyncHistory.source_namespace == self.source_namespace,
-            SyncHistory.source_ref == ref_to_json(source_ref),
-            SyncHistory.target_namespace == self.target_namespace,
-            SyncHistory.outcome == outcome,
-        )
-        if target_ref is None:
-            query = query.filter(SyncHistory.target_ref.is_(None))
-        else:
-            query = query.filter(SyncHistory.target_ref == ref_to_json(target_ref))
-
-        existing = query.order_by(SyncHistory.timestamp.desc()).first()
-        if existing is None:
-            return False
-
-        existing.before_state = before_state
-        existing.after_state = after_state
-        existing.source_record_surface = source_record_surface
-        existing.target_record_surface = target_record_surface
-        existing.info = history_info
-        existing.error_message = error_message
-        existing.timestamp = datetime.now(UTC)
-        return True

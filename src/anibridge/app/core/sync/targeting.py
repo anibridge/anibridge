@@ -33,27 +33,6 @@ class ResolvedTarget(msgspec.Struct, frozen=True):
         return self.match.ref
 
 
-class _TargetCandidate(msgspec.Struct, frozen=True):
-    external_id: ExternalId
-    mappings: tuple[AnibridgeMapping, ...] = ()
-    source_id: ExternalId | None = None
-
-    def with_mapping(
-        self,
-        *,
-        mapping: AnibridgeMapping,
-        source_id: ExternalId,
-    ) -> _TargetCandidate:
-        """Return a new candidate with the given mapping added."""
-        if mapping in self.mappings:
-            return self
-        return _TargetCandidate(
-            external_id=self.external_id,
-            mappings=(*self.mappings, mapping),
-            source_id=self.source_id or source_id,
-        )
-
-
 class TargetResolver:
     """Resolve source records to target provider refs."""
 
@@ -75,13 +54,48 @@ class TargetResolver:
         if not self.capabilities.external_authorities:
             return ()
 
-        candidates = self._candidate_ids(node=node, record=record)
+        ids: dict[str, ExternalId] = {}
+        for external_id in record.ids:
+            ids.setdefault(external_id.descriptor, external_id)
+        facet = node.facets.get(FacetName.IDS)
+        if record.ref.is_anchor and isinstance(facet, Identifiers):
+            for external_id in facet.ids:
+                ids.setdefault(external_id.descriptor, external_id)
+
+        candidates = {
+            item.descriptor: item
+            for item in ids.values()
+            if item.authority in self.capabilities.external_authorities
+        }
+        candidate_mappings: dict[str, list[AnibridgeMapping]] = {}
+        candidate_sources: dict[str, ExternalId] = {}
+
+        descriptors = tuple(
+            (item.authority, item.value, item.scope) for item in ids.values()
+        )
+        for edge in self.animap_client.resolve_edges(
+            descriptors,
+            target_providers=self.capabilities.external_authorities,
+        ):
+            if edge.destination_range is None:
+                continue
+
+            mapping = AnibridgeMapping.parse(edge.source_range, edge.destination_range)
+            if mapping.target_weight == 0:
+                continue
+
+            target_id = ExternalId(*edge.destination)
+            source_id = ExternalId(*edge.source)
+            candidates.setdefault(target_id.descriptor, target_id)
+            candidate_sources.setdefault(target_id.descriptor, source_id)
+            mappings = candidate_mappings.setdefault(target_id.descriptor, [])
+            if mapping not in mappings:
+                mappings.append(mapping)
+
         if not candidates:
             return ()
 
-        matches = await self.target_provider.resolve(
-            tuple(candidate.external_id for candidate in candidates.values())
-        )
+        matches = await self.target_provider.resolve(tuple(candidates.values()))
         by_ref: dict[Ref, ResolvedTarget] = {}
         for match in matches:
             candidate = candidates.get(match.external_id.descriptor)
@@ -90,87 +104,22 @@ class TargetResolver:
 
             resolved = ResolvedTarget(
                 match=match,
-                mappings=candidate.mappings,
-                source_id=candidate.source_id,
-                target_id=candidate.external_id,
+                mappings=tuple(candidate_mappings.get(candidate.descriptor, ())),
+                source_id=candidate_sources.get(candidate.descriptor),
+                target_id=candidate,
             )
             existing = by_ref.get(match.ref)
-            if existing is None or self._is_better_match(resolved, existing):
+            if existing is None:
+                by_ref[match.ref] = resolved
+                continue
+
+            confidence = resolved.match.confidence or 0
+            existing_confidence = existing.match.confidence or 0
+            if confidence > existing_confidence or (
+                confidence == existing_confidence
+                and bool(resolved.mappings)
+                and not existing.mappings
+            ):
                 by_ref[match.ref] = resolved
 
         return tuple(by_ref.values())
-
-    @staticmethod
-    def _is_better_match(
-        candidate: ResolvedTarget,
-        existing: ResolvedTarget,
-    ) -> bool:
-        """Return whether a candidate should replace an existing ref match."""
-        candidate_confidence = candidate.match.confidence or 0
-        existing_confidence = existing.match.confidence or 0
-        if candidate_confidence != existing_confidence:
-            return candidate_confidence > existing_confidence
-        if bool(candidate.mappings) != bool(existing.mappings):
-            return bool(candidate.mappings)
-        return False
-
-    def _candidate_ids(
-        self,
-        *,
-        node: Node,
-        record: Record,
-    ) -> dict[str, _TargetCandidate]:
-        """Return all potential target candidates for a given record."""
-        ids = self._record_ids(node=node, record=record)
-        candidates = {
-            item.descriptor: _TargetCandidate(item)
-            for item in ids
-            if item.authority in self.capabilities.external_authorities
-        }
-
-        descriptors = tuple((item.authority, item.value, item.scope) for item in ids)
-        edges = self.animap_client.resolve_edges(
-            descriptors,
-            target_providers=self.capabilities.external_authorities,
-        )
-        for edge in edges:
-            if edge.destination_range is None:
-                continue
-
-            mapping = AnibridgeMapping.parse(edge.source_range, edge.destination_range)
-            if mapping.target_weight == 0:
-                continue
-
-            target_id = ExternalId(
-                authority=edge.destination[0],
-                value=edge.destination[1],
-                scope=edge.destination[2],
-            )
-            source_id = ExternalId(
-                authority=edge.source[0],
-                value=edge.source[1],
-                scope=edge.source[2],
-            )
-            candidate = candidates.get(
-                target_id.descriptor,
-                _TargetCandidate(target_id, source_id=source_id),
-            )
-            candidates[target_id.descriptor] = candidate.with_mapping(
-                mapping=mapping,
-                source_id=source_id,
-            )
-
-        return candidates
-
-    @staticmethod
-    def _record_ids(*, node: Node, record: Record) -> tuple[ExternalId, ...]:
-        """Return all external IDs associated with a record, including anchor facets."""
-        ids: list[ExternalId] = list(record.ids)
-        facet = node.facets.get(FacetName.IDS)
-        if record.ref.is_anchor and isinstance(facet, Identifiers):
-            ids.extend(facet.ids)
-
-        deduped: dict[str, ExternalId] = {}
-        for external_id in ids:
-            deduped.setdefault(external_id.descriptor, external_id)
-        return tuple(deduped.values())

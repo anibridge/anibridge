@@ -46,7 +46,7 @@ from anibridge.utils.mappings import AnibridgeMapping
 from anibridge.app.core.sync.planner import PreparedUpdate, RecordPlanner, SyncLabel
 from anibridge.app.core.sync.projection import MappingProjector
 from anibridge.app.core.sync.rules import SyncRuleEngine
-from anibridge.app.core.sync.stats import FieldChange
+from anibridge.app.core.sync.stats import FieldChange, MappingRange
 from anibridge.app.models.db.sync_history import SyncOutcome
 from anibridge.app.utils.terminal import ARROW
 
@@ -183,6 +183,21 @@ def _item() -> ScanItem:
     return ScanItem(node=Node(ref=Ref.anchor("node"), title="Title", kind="item"))
 
 
+def _diagnostic_mappings(
+    *mappings: AnibridgeMapping,
+    source_descriptor: str = "source:source",
+    target_descriptor: str = "target:target",
+) -> tuple[MappingRange, ...]:
+    return tuple(
+        MappingRange(
+            source_mapping_descriptor=source_descriptor,
+            target_mapping_descriptor=target_descriptor,
+            mapping=mapping,
+        )
+        for mapping in mappings
+    )
+
+
 def _label() -> SyncLabel:
     return SyncLabel(node_kind="item", source="Title", target="target")
 
@@ -296,6 +311,49 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
         RecordField.STATUS,
         RecordField.PROGRESS,
     )
+
+
+def test_sync_fields_only_use_selected_writable_target_surfaces() -> None:
+    source = Capabilities(
+        roles=frozenset({Role.SOURCE}),
+        records=(
+            RecordSpec(
+                surface=_KIND,
+                fields={
+                    RecordField.PROGRESS: FieldSpec(
+                        RecordField.PROGRESS,
+                        readable=True,
+                    ),
+                    RecordField.NOTES: FieldSpec(RecordField.NOTES, readable=True),
+                },
+            ),
+        ),
+    )
+    target = Capabilities(
+        roles=frozenset({Role.TARGET}),
+        external_authorities=frozenset({"target"}),
+        records=(
+            RecordSpec(
+                surface="archive",
+                fields={RecordField.NOTES: FieldSpec(RecordField.NOTES, writable=True)},
+            ),
+            RecordSpec(
+                surface=_KIND,
+                fields={
+                    RecordField.PROGRESS: FieldSpec(
+                        RecordField.PROGRESS,
+                        writable=True,
+                    )
+                },
+                write_ops=frozenset({WriteOp.UPSERT_RECORD}),
+            ),
+        ),
+    )
+    planner = _planner(source=source, target=target)
+
+    assert planner.target_record_surface_for(_KIND) == _KIND
+    assert planner.sync_fields == (RecordField.PROGRESS,)
+    assert planner.sync_fields_for(_KIND, "archive") == (RecordField.NOTES,)
 
 
 def test_sync_fields_require_readable_source_writable_target_and_status_overlap() -> (
@@ -458,7 +516,12 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
         target_kind=_KIND,
         pinned_fields=(RecordField.REPEAT_COUNT,),
         label=_label(),
-        mappings=(AnibridgeMapping.parse("1-2", "1-2"),),
+        mappings=_diagnostic_mappings(
+            AnibridgeMapping.parse("1-2", "1-2"),
+            AnibridgeMapping.parse("3-4", "10-11"),
+            source_descriptor="tmdb_show:1:s1",
+            target_descriptor="anilist:2",
+        ),
     )
 
     assert isinstance(planned, PreparedUpdate)
@@ -472,7 +535,10 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
     assert any(
         block.reason == "pinned" for block in planned.plan.diagnostics.blocked_fields
     )
-    assert planned.plan.diagnostics.mapping_ranges[0].source == "1-2"
+    assert planned.plan.diagnostics.as_info()["mapping_ranges"] == (
+        f"tmdb_show:1:s1@1-2 {ARROW} anilist:2@1-2, "
+        f"tmdb_show:1:s1@3-4 {ARROW} anilist:2@10-11"
+    )
     assert "progress" in planned.diff_str
 
     assert (
@@ -636,8 +702,12 @@ def test_progress_equality_status_gates_mapping_edges_and_diff_formatting() -> N
         Progress(current=1, total=24, unit="target"),
         _KIND,
     )
-    assert constrained._empty_progress(None)
-    assert constrained._empty_progress(Progress(current=0))
+    assert constrained._values_equal(
+        RecordField.PROGRESS,
+        None,
+        Progress(current=0),
+        _KIND,
+    )
     assert (
         constrained._status_gate(RecordField.REPEAT_COUNT, Status.ACTIVE)
         == "requires_completed"
@@ -652,7 +722,6 @@ def test_progress_equality_status_gates_mapping_edges_and_diff_formatting() -> N
     projector = MappingProjector((mapping,))
     assert projector.target_progress(2.5) == 9.5
     assert projector.target_total() == 11
-    assert projector.mapping_for_source(2) is None
 
     diff = constrained.format_diff(
         [
@@ -737,7 +806,6 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
             target_kind=_KIND,
             pinned_fields=(),
             label=_label(),
-            mappings=mappings,
         )
         == SyncOutcome.SKIPPED
     )
@@ -758,7 +826,7 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
         target_kind=_KIND,
         pinned_fields=(),
         label=_label(),
-        mappings=mappings,
+        mappings=_diagnostic_mappings(*mappings),
     )
 
     assert isinstance(planned, PreparedUpdate)

@@ -22,13 +22,13 @@ from anibridge.app.core.sync.stats import RecordSnapshot, SyncItem, SyncStats
 from anibridge.app.models.db.sync_history import SyncOutcome
 
 
-def test_item_identifier_from_record_includes_ref_and_kind() -> None:
+def test_item_identifier_from_record_parts_falls_back_to_record_ref() -> None:
     """Record identifiers should render the anchor as the first path segment."""
-    identifier = SyncItem.from_record(
+    identifier = SyncItem.from_record_parts(
         namespace="source",
         node=Node(ref=Ref.anchor("node1"), kind="anime", title="Node One"),
         record=Record(ref=Ref.anchor("record1"), surface="user_state"),
-    )
+    )[0]
 
     assert identifier.namespace == "source"
     assert identifier.ref == Ref.anchor("record1")
@@ -71,6 +71,9 @@ def test_item_identifier_from_record_parts_uses_tracker_format() -> None:
                 '"Cowboy \\"Bebop\\" - Gateway Shuffle">'
             ),
         ),
+    )
+    assert repr(identifiers[0]) == (
+        '<plex:show=12345/season=1/episode=4 "Cowboy \\"Bebop\\" - Gateway Shuffle">'
     )
 
 

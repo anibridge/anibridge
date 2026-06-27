@@ -114,18 +114,24 @@ async def test_lifespan_manages_scheduler_startup_and_shutdown(
 
 @pytest.mark.asyncio
 async def test_lifespan_handles_missing_scheduler_and_public_anilist_errors(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     state: _DummyState,
 ) -> None:
     async def _boom(self: _DummyState) -> None:
         raise RuntimeError("boom")
 
+    caplog.set_level(logging.INFO, logger=app_module.APP_LOGGER_NAME)
     monkeypatch.setattr(_DummyState, "ensure_public_anilist", _boom)
 
     async with app_module.lifespan(app_module.Litestar(route_handlers=[])):
         pass
 
     assert state.shutdown_called is True
+    assert (
+        "No scheduler passed; external lifecycle management expected"
+        not in caplog.messages
+    )
 
 
 def test_create_app_serves_spa_and_domain_errors(

@@ -112,7 +112,26 @@ class RecordPlanner:
         self._target_record_specs = {
             spec.surface: spec for spec in target_capabilities.records
         }
-        self.sync_fields = self._sync_fields()
+        self._surface_fields: dict[tuple[str, str], tuple[RecordField, ...]] = {}
+
+        self._target_surface_for_source: dict[str, str] = {}
+        for source_kind, source_spec in self._source_record_specs.items():
+            candidates: list[tuple[int, int, str]] = []
+            for index, target_spec in enumerate(target_capabilities.records):
+                fields = self._sync_fields_for_specs(source_spec, target_spec)
+                self._surface_fields[(source_kind, target_spec.surface)] = fields
+                if fields and WriteOp.UPSERT_RECORD in target_spec.write_ops:
+                    candidates.append((len(fields), -index, target_spec.surface))
+            if candidates:
+                self._target_surface_for_source[source_kind] = max(candidates)[2]
+        self.sync_fields = tuple(
+            field
+            for field in RecordField
+            if any(
+                field in self._surface_fields[(source_kind, target_kind)]
+                for source_kind, target_kind in self._target_surface_for_source.items()
+            )
+        )
 
     def validate_provider_contracts(
         self,
@@ -153,11 +172,7 @@ class RecordPlanner:
 
     def source_record_surfaces(self) -> tuple[str, ...]:
         """Return source record surfaces that the target can represent."""
-        return tuple(
-            source_kind
-            for source_kind in self._source_record_specs
-            if self.target_record_surface_for(source_kind) is not None
-        )
+        return tuple(self._target_surface_for_source)
 
     def can_delete_record(self, target_kind: str) -> bool:
         """Return whether a target record surface supports deletion."""
@@ -166,19 +181,7 @@ class RecordPlanner:
 
     def target_record_surface_for(self, source_kind: str) -> str | None:
         """Return the best target surface for one source record surface."""
-        source_spec = self._source_record_specs.get(source_kind)
-        if source_spec is None:
-            return None
-        candidates: list[tuple[int, int, str]] = []
-        for index, target_spec in enumerate(self.target_capabilities.records):
-            if WriteOp.UPSERT_RECORD not in target_spec.write_ops:
-                continue
-            fields = self.sync_fields_for(source_kind, target_spec.surface)
-            if fields:
-                candidates.append((len(fields), -index, target_spec.surface))
-        if not candidates:
-            return None
-        return max(candidates)[2]
+        return self._target_surface_for_source.get(source_kind)
 
     def syncable_source_records(self, item: ScanItem) -> tuple[Record, ...]:
         """Return scanned records that should drive sync."""
@@ -235,7 +238,7 @@ class RecordPlanner:
         target_kind: str,
         pinned_fields: Sequence[RecordField],
         label: SyncLabel,
-        mappings: Sequence[AnibridgeMapping] = (),
+        mappings: Sequence[MappingRange] = (),
     ) -> PreparedUpdate | SyncOutcome:
         """Plan one source-to-target record upsert."""
         before = RecordSnapshot.from_record(target_record) if target_record else None
@@ -286,7 +289,11 @@ class RecordPlanner:
                 field == RecordField.STATUS
                 and rule.value is not None
                 and self.status_of(rule.value)
-                not in self._status_semantics_for_target(target_kind)
+                not in self._status_semantics(
+                    self._field_spec(
+                        self._target_record_specs.get(target_kind), RecordField.STATUS
+                    )
+                )
             ):
                 blocked_fields.append(FieldBlock(field, "unsupported_status"))
                 continue
@@ -345,10 +352,7 @@ class RecordPlanner:
         diagnostics = PlanDiagnostics(
             blocked_fields=tuple(blocked_fields),
             applied_rules=tuple(applied_rules),
-            mapping_ranges=tuple(
-                MappingRange(mapping.source_key, mapping.target_value)
-                for mapping in mappings
-            ),
+            mappings=tuple(mappings),
         )
         return PreparedUpdate(
             plan=RecordPlan(
@@ -412,23 +416,21 @@ class RecordPlanner:
             parts.append(f"{change.field.value}: {rendered[0]} {ARROW} {rendered[1]}")
         return " | ".join(parts)
 
-    def _sync_fields(self) -> tuple[RecordField, ...]:
-        fields: set[RecordField] = set()
-        for source_kind in self._source_record_specs:
-            target_kind = self.target_record_surface_for(source_kind)
-            if target_kind is not None:
-                fields.update(self.sync_fields_for(source_kind, target_kind))
-        return tuple(field for field in RecordField if field in fields)
-
     def sync_fields_for(
         self,
         source_kind: str,
         target_kind: str,
     ) -> tuple[RecordField, ...]:
         """Return fields syncable between two record surfaces."""
+        return self._surface_fields.get((source_kind, target_kind), ())
+
+    def _sync_fields_for_specs(
+        self,
+        source_spec: RecordSpec,
+        target_spec: RecordSpec,
+    ) -> tuple[RecordField, ...]:
+        """Return fields syncable between two record specs."""
         fields: list[RecordField] = []
-        source_spec = self._source_record_specs.get(source_kind)
-        target_spec = self._target_record_specs.get(target_kind)
         for field in RecordField:
             if self.sync_rule_engine.is_disabled(field):
                 continue
@@ -481,7 +483,13 @@ class RecordPlanner:
                 return value
             current = current_value if isinstance(current_value, Progress) else None
             coerced_current = (
-                self._coerce_progress_current(value.current, constraint.current)
+                None
+                if value.current is None
+                else self._coerce_number(
+                    value.current,
+                    constraint.current,
+                    floor_step=True,
+                )
                 if constraint.current is not None
                 else value.current
             )
@@ -506,19 +514,18 @@ class RecordPlanner:
             and isinstance(value, int | float)
             and not isinstance(value, bool)
         ):
-            return round(
-                self._coerce_number(field, float(value), target_kind=target_kind)
-            )
+            constraint = self._constraint(field, NumericConstraint, target_kind)
+            coerced = self._coerce_number(value, constraint) if constraint else value
+            return round(coerced)
         return value
 
-    def _coerce_progress_current(
-        self,
-        value: int | float | None,
+    @staticmethod
+    def _coerce_number(
+        value: int | float,
         constraint: NumericConstraint,
-    ) -> int | float | None:
-        """Coerce progress counts without marking partial target units complete."""
-        if value is None:
-            return None
+        *,
+        floor_step: bool = False,
+    ) -> int | float:
         coerced = float(value)
         if constraint.minimum is not None:
             coerced = max(coerced, constraint.minimum)
@@ -526,14 +533,17 @@ class RecordPlanner:
             coerced = min(coerced, constraint.maximum)
         if constraint.step is not None:
             origin = constraint.minimum or 0
-            coerced = (
-                floor((coerced - origin) / constraint.step + 1e-9) * constraint.step
-                + origin
+            steps = (coerced - origin) / constraint.step
+            stepped = floor(steps + 1e-9) if floor_step else round(steps)
+            coerced = stepped * constraint.step + origin
+            coerced = max(
+                coerced,
+                constraint.minimum if constraint.minimum is not None else coerced,
             )
-            if constraint.minimum is not None:
-                coerced = max(coerced, constraint.minimum)
-            if constraint.maximum is not None:
-                coerced = min(coerced, constraint.maximum)
+            coerced = min(
+                coerced,
+                constraint.maximum if constraint.maximum is not None else coerced,
+            )
         return int(coerced) if coerced.is_integer() else coerced
 
     def _coerce_temporal(
@@ -577,7 +587,6 @@ class RecordPlanner:
             * (target_max - target_min)
         )
         coerced = self._coerce_number(
-            RecordField.RATING,
             translated,
             NumericConstraint(target_min, target_max, target_step),
         )
@@ -585,31 +594,6 @@ class RecordPlanner:
             float(coerced),
             (float(target_min), float(target_max), target_step),
         )
-
-    def _coerce_number(
-        self,
-        field: RecordField,
-        value: float,
-        constraint: NumericConstraint | None = None,
-        target_kind: str = "",
-    ) -> float:
-        constraint = constraint or self._constraint(
-            field, NumericConstraint, target_kind
-        )
-        if constraint is None:
-            return value
-        if constraint.minimum is not None:
-            value = max(value, constraint.minimum)
-        if constraint.maximum is not None:
-            value = min(value, constraint.maximum)
-        if constraint.step is not None:
-            origin = constraint.minimum or 0
-            value = round((value - origin) / constraint.step) * constraint.step + origin
-            if constraint.minimum is not None:
-                value = max(value, constraint.minimum)
-            if constraint.maximum is not None:
-                value = min(value, constraint.maximum)
-        return value
 
     def _constraint(
         self,
@@ -635,13 +619,6 @@ class RecordPlanner:
         spec = record_spec.fields.get(field)
         return spec if isinstance(spec, FieldSpec) else None
 
-    def _status_semantics_for_target(self, target_kind: str) -> frozenset[Status]:
-        return self._status_semantics(
-            self._field_spec(
-                self._target_record_specs.get(target_kind), RecordField.STATUS
-            )
-        )
-
     def _values_equal(
         self,
         field: RecordField,
@@ -650,7 +627,19 @@ class RecordPlanner:
         target_kind: str,
     ) -> bool:
         if field == RecordField.PROGRESS:
-            if self._empty_progress(current) and self._empty_progress(new):
+            if (
+                current is None
+                or (
+                    isinstance(current, Progress)
+                    and (current.current is None or current.current == 0)
+                )
+            ) and (
+                new is None
+                or (
+                    isinstance(new, Progress)
+                    and (new.current is None or new.current == 0)
+                )
+            ):
                 return True
             if not isinstance(current, Progress) or not isinstance(new, Progress):
                 return current == new
@@ -666,15 +655,6 @@ class RecordPlanner:
                 new_tuple.append(new.unit)
             return current_tuple == new_tuple
         return current == new
-
-    @staticmethod
-    def _empty_progress(value: Any) -> bool:
-        """Return whether a value represents no consumed progress."""
-        if value is None:
-            return True
-        return isinstance(value, Progress) and (
-            value.current is None or value.current == 0
-        )
 
     def _status_gate(self, field: RecordField, status: Status | None) -> str | None:
         if (
@@ -702,7 +682,12 @@ class RecordPlanner:
             return
 
         scoped_units = tuple(
-            unit for unit in units if projector.contains_source(unit.index)
+            unit
+            for unit in units
+            if any(
+                mapping.source_range.contains(unit.index)
+                for mapping in projector.mappings
+            )
         )
         for field in _TEMPORAL_RECORD_FIELDS:
             temporal_values = tuple(

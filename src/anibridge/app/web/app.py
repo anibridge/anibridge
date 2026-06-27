@@ -54,7 +54,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None]:
     """Application lifespan context manager."""
     scheduler: SchedulerClient | None = getattr(app.state, "scheduler", None)
     if scheduler is None:
-        log.info("No scheduler passed; external lifecycle management expected")
+        log.debug("No scheduler passed; external lifecycle management expected")
     else:
         get_app_state().set_scheduler(scheduler)
         if not scheduler._running:

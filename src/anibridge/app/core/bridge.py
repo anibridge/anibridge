@@ -324,11 +324,7 @@ class BridgeClient:
                 scan.require_user_data,
                 scan.from_change_feed,
             )
-            if self.profile_config.batch_requests:
-                items = await sync_client.scan_source(scan=scan)
-                await self._process_scan_items(sync_client, items, total=len(items))
-            else:
-                await self._process_scan_stream(sync_client, scan)
+            await self._process_scan_stream(sync_client, scan)
 
             sync_client.flush_failure_history_cleanup()
 
@@ -378,30 +374,6 @@ class BridgeClient:
             get_app_state().notify_status_change()
             await sync_client.clear_cache()
             release_memory()
-
-    async def _process_scan_items(
-        self,
-        sync_client: SyncClient,
-        items: Sequence[ScanItem],
-        *,
-        total: int,
-    ) -> None:
-        """Process scan items and update live sync progress."""
-        if self.current_sync is not None:
-            self.current_sync.stage = "processing"
-            self.current_sync.scanned_items = total
-            self.current_sync.total_items = total
-            await asyncio.sleep(0)
-
-        try:
-            await sync_client.process_page(items)
-        except Exception:
-            log.exception("[%s] Failed to sync source item batch", self.profile_name)
-        finally:
-            if self.current_sync is not None:
-                self.current_sync.stage = "processing"
-                self.current_sync.processed_items += len(items)
-                await asyncio.sleep(0)
 
     async def _process_scan_stream(
         self,

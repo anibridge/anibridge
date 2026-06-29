@@ -181,7 +181,7 @@ dev = [
 [[package]]
 name = "anibridge-anilist-provider"
 version = "0.2.2"
-source = { git = "https://github.com/anibridge/anibridge-anilist-provider.git?tag=main#5a4a535e28f2fb83cb0a126b041181a94e1886f4" }
+source = { git = "https://github.com/anibridge/anibridge-anilist-provider.git?tag=main#f13e995da53a742380865bda9f91ac2bd4a2a9ef" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -214,7 +214,7 @@ dependencies = [
 [[package]]
 name = "anibridge-mal-provider"
 version = "0.2.2"
-source = { git = "https://github.com/anibridge/anibridge-mal-provider.git?tag=main#fb978053cfb65ba5d4c732f24e017770f6301bc1" }
+source = { git = "https://github.com/anibridge/anibridge-mal-provider.git?tag=main#1645fac0b46f59d047273735ed8e751876a736f8" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -241,7 +241,7 @@ source = { git = "https://github.com/anibridge/anibridge-provider-base.git?branc
 [[package]]
 name = "anibridge-simkl-provider"
 version = "0.1.0"
-source = { git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main#d8c63a604283d54509e1402bafa9f9ba6a4cafb0" }
+source = { git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main#5806eaf3d52825d3c1b027a8e3727e93a9a9ec45" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -252,7 +252,7 @@ dependencies = [
 [[package]]
 name = "anibridge-trakt-provider"
 version = "0.2.0"
-source = { git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main#f548686cae159170a00cb08755c04a30bbc507b8" }
+source = { git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main#5a9c7f24f8323bd1fe77c44ffc0e7583ac8e828a" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },

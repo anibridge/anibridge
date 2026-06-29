@@ -203,10 +203,6 @@ class AnibridgeProfileConfig(BaseModel):
             "-1 disables backup creation)"
         ),
     )
-    batch_requests: bool = Field(
-        default=False,
-        description="Collect scan items before processing provider writes",
-    )
     dry_run: bool = Field(
         default=False, description="Log changes without applying them"
     )

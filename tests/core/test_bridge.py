@@ -136,10 +136,6 @@ class _FakeSyncClient:
         self.sync_stats = SyncStats()
         type(self).instances.append(self)
 
-    async def scan_source(self, *, scan: ScanPlan):
-        self.scan = scan
-        return self.scan_items
-
     async def scan_source_pages(self, *, scan: ScanPlan, page_size: int):
         self.scan = scan
         self.page_size = page_size
@@ -166,7 +162,6 @@ def _config(
         source_provider="source",
         target_provider="target",
         backup_retention_days=overrides.pop("backup_retention_days", 30),
-        batch_requests=overrides.pop("batch_requests", False),
         full_scan=overrides.pop("full_scan", False),
         destructive_sync=overrides.pop("destructive_sync", False),
         dry_run=overrides.pop("dry_run", False),
@@ -309,33 +304,23 @@ async def test_bridge_backup_skips_disabled_empty_unsupported_and_errors(
 
 
 @pytest.mark.asyncio
-async def test_bridge_sync_batch_stream_skip_and_failure_paths(
+async def test_bridge_sync_stream_skip_and_failure_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sqlite_db_factory,
 ) -> None:
-    """Sync should drive batch, stream, no-change, and failure branches."""
+    """Sync should drive stream, no-change, and failure branches."""
     monkeypatch.setattr(bridge_module, "SyncClient", _FakeSyncClient)
     monkeypatch.setattr(bridge_module, "release_memory", lambda: None)
     _FakeSyncClient.instances.clear()
-
-    bridge = _bridge(
-        tmp_path,
-        monkeypatch,
-        sqlite_db_factory,
-        batch_requests=True,
-    )
-    await bridge.sync(SyncRequest(trigger=SyncTrigger.MANUAL))
-    batch_client = _FakeSyncClient.instances[-1]
-    assert [len(items) for items in batch_client.processed] == [2]
-    assert batch_client.flushed is True
-    assert batch_client.cleared is True
-    assert bridge.last_synced is not None
 
     bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory)
     await bridge.sync(SyncRequest(trigger=SyncTrigger.MANUAL))
     stream_client = _FakeSyncClient.instances[-1]
     assert [len(items) for items in stream_client.processed] == [1, 1]
+    assert stream_client.flushed is True
+    assert stream_client.cleared is True
+    assert bridge.last_synced is not None
 
     bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory)
     await bridge.sync(SyncRequest(trigger=SyncTrigger.WEBHOOK))
@@ -349,12 +334,7 @@ async def test_bridge_sync_batch_stream_skip_and_failure_paths(
         raise RuntimeError("page failed")
 
     monkeypatch.setattr(_FakeSyncClient, "process_page", _boom)
-    bridge = _bridge(
-        tmp_path,
-        monkeypatch,
-        sqlite_db_factory,
-        batch_requests=True,
-    )
+    bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory)
     await bridge.sync(SyncRequest(trigger=SyncTrigger.MANUAL))
     assert _FakeSyncClient.instances[-1].cleared is True
 
@@ -490,10 +470,16 @@ async def test_bridge_error_and_fallback_branches(
 
     monkeypatch.setattr(bridge_module, "SyncClient", _FakeSyncClient)
     monkeypatch.setattr(bridge_module, "release_memory", lambda: None)
-    original_scan = _FakeSyncClient.scan_source
+    original_scan_pages = _FakeSyncClient.scan_source_pages
 
-    async def _scan_boom(self: _FakeSyncClient, *, scan: ScanPlan):
-        await original_scan(self, scan=scan)
+    async def _scan_boom(
+        self: _FakeSyncClient,
+        *,
+        scan: ScanPlan,
+        page_size: int,
+    ):
+        async for page in original_scan_pages(self, scan=scan, page_size=page_size):
+            yield page
         self.sync_stats.track_item(
             SyncItem(
                 namespace="source",
@@ -504,8 +490,8 @@ async def test_bridge_error_and_fallback_branches(
         )
         raise RuntimeError("sync failed")
 
-    monkeypatch.setattr(_FakeSyncClient, "scan_source", _scan_boom)
-    bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory, batch_requests=True)
+    monkeypatch.setattr(_FakeSyncClient, "scan_source_pages", _scan_boom)
+    bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory)
     with pytest.raises(RuntimeError, match="sync failed"):
         await bridge.sync(SyncRequest(trigger=SyncTrigger.MANUAL))
     assert _FakeSyncClient.instances[-1].cleared is True

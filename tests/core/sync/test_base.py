@@ -7,11 +7,14 @@ import pytest
 from anibridge.provider.base import (
     AppendEvent,
     Capabilities,
+    DeleteEvent,
     Descriptor,
     Event,
     EventKind,
     EventQuery,
     EventSpec,
+    EventWrite,
+    EventWriteOp,
     ExternalId,
     FieldSpec,
     Match,
@@ -24,6 +27,7 @@ from anibridge.provider.base import (
     RecordQuery,
     RecordSpec,
     RecordWrite,
+    RecordWriteOp,
     Ref,
     Role,
     ScanItem,
@@ -38,7 +42,6 @@ from anibridge.provider.base import (
     SupportsScan,
     UpsertRecord,
     WriteError,
-    WriteOp,
     WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
@@ -96,9 +99,9 @@ def _record_fields(*, readable: bool, writable: bool) -> dict[RecordField, Field
 
 
 def _record_spec(*, readable: bool, writable: bool, delete: bool = False) -> RecordSpec:
-    write_ops = {WriteOp.UPSERT_RECORD} if writable else set()
+    write_ops = {RecordWriteOp.UPSERT} if writable else set()
     if delete:
-        write_ops.add(WriteOp.DELETE_RECORD)
+        write_ops.add(RecordWriteOp.DELETE)
     return RecordSpec(
         surface=_RECORD_KIND,
         fields=_record_fields(readable=readable, writable=writable),
@@ -204,15 +207,16 @@ class _TargetProvider(
         self.event_specs = event_specs or (
             EventSpec(
                 Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                write_ops=frozenset({WriteOp.APPEND_EVENT}),
+                write_ops=frozenset({EventWriteOp.APPEND}),
             ),
         )
         self.records: dict[tuple[object, str], Record] = {}
         self.record_queries: list[RecordQuery] = []
+        self.record_write_batches: list[tuple[RecordWrite, ...]] = []
         self.record_writes: list[RecordWrite] = []
         self.events: dict[tuple[Ref, str, str | None], Page[Event]] = {}
         self.event_queries: list[EventQuery] = []
-        self.event_writes: list[AppendEvent] = []
+        self.event_writes: list[EventWrite] = []
         self.cleared = False
 
     def capabilities(self) -> Capabilities:
@@ -241,8 +245,9 @@ class _TargetProvider(
         return Page(items=tuple(records))
 
     async def write_records(self, writes) -> tuple[WriteResult, ...]:
+        self.record_write_batches.append(tuple(writes))
         self.record_writes.extend(writes)
-        return tuple(WriteResult(ok=True, op=WriteOp.UPSERT_RECORD) for _ in writes)
+        return tuple(WriteResult(ok=True, op=RecordWriteOp.UPSERT) for _ in writes)
 
     async def fetch_events(self, query: EventQuery) -> Page[Event]:
         self.event_queries.append(query)
@@ -255,7 +260,17 @@ class _TargetProvider(
 
     async def write_events(self, writes) -> tuple[WriteResult, ...]:
         self.event_writes.extend(writes)
-        return tuple(WriteResult(ok=True, op=WriteOp.APPEND_EVENT) for _ in writes)
+        return tuple(
+            WriteResult(
+                ok=True,
+                op=(
+                    EventWriteOp.DELETE
+                    if isinstance(write, DeleteEvent)
+                    else EventWriteOp.APPEND
+                ),
+            )
+            for write in writes
+        )
 
 
 def _client(
@@ -409,7 +424,7 @@ def test_validate_events_rejects_mismatched_protocols() -> None:
                 events=(
                     EventSpec(
                         Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                        write_ops=frozenset({WriteOp.APPEND_EVENT}),
+                        write_ops=frozenset({EventWriteOp.APPEND}),
                     ),
                 ),
             ),
@@ -500,17 +515,56 @@ async def test_process_page_writes_records_events_and_tracks_outcomes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_page_batches_record_writes_per_page() -> None:
+    target = _TargetProvider()
+    client = _client(target=target)
+    items = (
+        ScanItem(
+            node=Node(ref=Ref.anchor("source-a"), kind="item", title="Source A"),
+            records=(
+                Record(
+                    ref=Ref.anchor("source-a"),
+                    surface=_RECORD_KIND,
+                    ids=(ExternalId("target", "target-a"),),
+                    values={RecordField.PROGRESS: Progress(current=1)},
+                ),
+            ),
+        ),
+        ScanItem(
+            node=Node(ref=Ref.anchor("source-b"), kind="item", title="Source B"),
+            records=(
+                Record(
+                    ref=Ref.anchor("source-b"),
+                    surface=_RECORD_KIND,
+                    ids=(ExternalId("target", "target-b"),),
+                    values={RecordField.PROGRESS: Progress(current=2)},
+                ),
+            ),
+        ),
+    )
+
+    await client.process_page(items)
+
+    assert [len(batch) for batch in target.record_write_batches] == [2]
+    assert [write.ref for write in target.record_writes] == [
+        Ref.anchor("target-a"),
+        Ref.anchor("target-b"),
+    ]
+    assert client.sync_stats.synced == 2
+
+
+@pytest.mark.asyncio
 async def test_process_page_writes_all_matching_target_event_channels() -> None:
     source = _SourceProvider()
     target = _TargetProvider(
         event_specs=(
             EventSpec(
                 Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                write_ops=frozenset({WriteOp.APPEND_EVENT}),
+                write_ops=frozenset({EventWriteOp.APPEND}),
             ),
             EventSpec(
                 Descriptor("scrobbled_alt", EventKind.SCROBBLE),
-                write_ops=frozenset({WriteOp.APPEND_EVENT}),
+                write_ops=frozenset({EventWriteOp.APPEND}),
             ),
         )
     )
@@ -798,6 +852,91 @@ async def test_event_sync_uses_dedupe_key_before_timestamp() -> None:
 
 
 @pytest.mark.asyncio
+async def test_destructive_event_sync_deletes_extra_target_events() -> None:
+    source = _SourceProvider()
+    target = _TargetProvider(
+        event_specs=(
+            EventSpec(
+                Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                write_ops=frozenset({EventWriteOp.APPEND, EventWriteOp.DELETE}),
+            ),
+        )
+    )
+    source_at = datetime(2026, 1, 1, tzinfo=UTC)
+    target_at = datetime(2026, 1, 2, tzinfo=UTC)
+    source.events[(Ref.anchor("source"), _SOURCE_EVENT, None)] = Page(
+        items=(
+            Event(
+                ref=Ref.anchor("source"),
+                kind=_SOURCE_EVENT,
+                at=source_at,
+                dedupe_key="new-event",
+            ),
+        )
+    )
+    target.events[(Ref.anchor("target"), _TARGET_EVENT, None)] = Page(
+        items=(
+            Event(
+                ref=Ref.anchor("target"),
+                kind=_TARGET_EVENT,
+                at=target_at,
+                key="old-key",
+                dedupe_key="old-event",
+            ),
+        )
+    )
+    client = _client(source=source, target=target, destructive=True)
+
+    assert (
+        await client._sync_events_for_work(
+            _work(source_ref=Ref.anchor("source"), target_ref=Ref.anchor("target"))
+        )
+        == SyncOutcome.SYNCED
+    )
+    assert target.event_writes == [
+        AppendEvent(
+            ref=Ref.anchor("target"),
+            kind=_TARGET_EVENT,
+            at=source_at,
+            dedupe_key="new-event",
+        ),
+        DeleteEvent(
+            ref=Ref.anchor("target"),
+            kind=_TARGET_EVENT,
+            at=target_at,
+            key="old-key",
+            dedupe_key="old-event",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_destructive_event_sync_requires_delete_capability() -> None:
+    source = _SourceProvider()
+    target = _TargetProvider()
+    event_at = datetime(2026, 1, 1, tzinfo=UTC)
+    target.events[(Ref.anchor("target"), _TARGET_EVENT, None)] = Page(
+        items=(
+            Event(
+                ref=Ref.anchor("target"),
+                kind=_TARGET_EVENT,
+                at=event_at,
+                dedupe_key="old-event",
+            ),
+        )
+    )
+    client = _client(source=source, target=target, destructive=True)
+
+    assert (
+        await client._sync_events_for_work(
+            _work(source_ref=Ref.anchor("source"), target_ref=Ref.anchor("target"))
+        )
+        == SyncOutcome.SKIPPED
+    )
+    assert target.event_writes == []
+
+
+@pytest.mark.asyncio
 async def test_fetch_target_records_batch_and_write_record_errors() -> None:
     target = _TargetProvider()
     target.records[(ref_to_key(Ref.anchor("target")), _RECORD_KIND)] = Record(
@@ -823,7 +962,7 @@ async def test_fetch_target_records_batch_and_write_record_errors() -> None:
             return (
                 WriteResult(
                     ok=False,
-                    op=WriteOp.UPSERT_RECORD,
+                    op=RecordWriteOp.UPSERT,
                     code=WriteError.INVALID,
                     error="nope",
                 ),
@@ -995,7 +1134,7 @@ async def test_write_event_failure_and_non_supporting_fetches() -> None:
             return (
                 WriteResult(
                     ok=False,
-                    op=WriteOp.APPEND_EVENT,
+                    op=EventWriteOp.APPEND,
                     code=WriteError.INVALID,
                     error="bad event",
                 ),

@@ -182,7 +182,10 @@ class AnibridgeProfileConfig(BaseModel):
     )
     destructive_sync: bool = Field(
         default=False,
-        description="Allow decreasing watch progress and removing list entries",
+        description=(
+            "Allow target record deletion, destructive record field updates, "
+            "and target event deletion when supported by the provider."
+        ),
     )
     sync_rules: SyncRulesConfig = Field(
         default_factory=SyncRulesConfig,

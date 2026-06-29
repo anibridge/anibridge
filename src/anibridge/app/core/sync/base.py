@@ -12,10 +12,13 @@ import msgspec
 from anibridge.provider.base import (
     AppendEvent,
     Capabilities,
+    DeleteEvent,
     DeleteRecord,
     Event,
     EventQuery,
+    EventSpec,
     EventWrite,
+    EventWriteOp,
     ExternalId,
     FacetName,
     NodeFlag,
@@ -36,7 +39,7 @@ from anibridge.provider.base import (
     SupportsRecordReads,
     SupportsRecordWrites,
     SupportsScan,
-    WriteOp,
+    WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
@@ -105,6 +108,7 @@ class _TargetWork(msgspec.Struct, frozen=True):
 
 
 type TargetRecordKey = tuple[RefKey, str]
+type EventIdentity = tuple[RefKey, str, str, str | datetime]
 
 
 class SyncClient:
@@ -135,6 +139,9 @@ class SyncClient:
 
         self._source_capabilities = source_provider.capabilities()
         self._target_capabilities = target_provider.capabilities()
+        self._target_event_specs = {
+            spec.kind.native: spec for spec in self._target_capabilities.events
+        }
         self._validate_events(
             provider=self.source_provider, capabilities=self._source_capabilities
         )
@@ -192,18 +199,30 @@ class SyncClient:
         writable_events = tuple(
             spec
             for spec in capabilities.events
-            if WriteOp.APPEND_EVENT in spec.write_ops
+            if spec.write_ops.intersection({EventWriteOp.APPEND, EventWriteOp.DELETE})
         )
         if writable_events and not isinstance(provider, SupportsEventWrites):
             raise TypeError(
-                f"Provider {provider.NAMESPACE!r} advertises appendable event "
+                f"Provider {provider.NAMESPACE!r} advertises writable event "
                 "channels but does not implement event writes"
+            )
+
+        deletable_events = tuple(
+            spec
+            for spec in capabilities.events
+            if EventWriteOp.DELETE in spec.write_ops
+        )
+        if deletable_events and not isinstance(provider, SupportsEventReads):
+            raise TypeError(
+                f"Provider {provider.NAMESPACE!r} advertises deletable event "
+                "channels but does not implement event reads"
             )
 
         readable_events = tuple(
             spec
             for spec in capabilities.events
-            if WriteOp.APPEND_EVENT not in spec.write_ops
+            if EventWriteOp.APPEND not in spec.write_ops
+            or EventWriteOp.DELETE in spec.write_ops
         )
         if readable_events and not isinstance(provider, SupportsEventReads):
             raise TypeError(
@@ -270,17 +289,6 @@ class SyncClient:
                 with contextlib.suppress(asyncio.CancelledError):
                     page_task.exception()
 
-    async def scan_source(
-        self,
-        *,
-        scan: ScanPlan,
-    ) -> tuple[ScanItem, ...]:
-        """Collect all source items for explicit batch-mode processing."""
-        items: list[ScanItem] = []
-        async for page in self.scan_source_pages(scan=scan):
-            items.extend(page.items)
-        return tuple(items)
-
     async def process_page(self, items: Sequence[ScanItem]) -> None:
         """Process one source scan page with batched target reads and writes."""
         if not items:
@@ -345,16 +353,10 @@ class SyncClient:
                     SyncOutcome.FAILED,
                 )
 
-        for work, update in updates:
-            try:
-                outcome = await self._apply_update(
-                    update.plan,
-                    source_record=update.source_record,
-                    diff_str=update.diff_str,
-                    label=update.label,
-                )
-            except Exception:
-                outcome = SyncOutcome.FAILED
+        update_outcomes = await self._apply_updates(
+            tuple(update for _work, update in updates)
+        )
+        for (work, _update), outcome in zip(updates, update_outcomes, strict=True):
             self._record_best_outcome(outcomes, work.sync_items, outcome)
 
         for work in work_items:
@@ -716,92 +718,153 @@ class SyncClient:
         label: SyncLabel,
     ) -> SyncOutcome:
         """Queue or apply a record update."""
+        update = PreparedUpdate(
+            plan=plan,
+            source_record=source_record,
+            diff_str=diff_str,
+            label=label,
+        )
         if self.dry_run:
-            log.success(
-                "[%s] Dry run; skipping sync of %s %s",
-                self.profile_name,
-                label.node_kind,
-                self._source_with_target(label),
-            )
-            log.success("\tDRY RUN UPDATE: %s", diff_str)
-            await self._history.create_sync_history(
-                source_node=plan.item.node,
-                source_record=source_record,
-                target_ref=plan.target_ref,
-                snapshots=(plan.before, plan.after),
-                outcome=SyncOutcome.SYNCED,
-                info=plan.diagnostics.as_info(),
-                ephemeral=self.dry_run,
-            )
-            return SyncOutcome.SYNCED
+            return await self._record_update_dry_run(update)
 
         try:
             await self._write_records([plan.write])
-            log.success(
-                "[%s] Synced %s %s",
-                self.profile_name,
-                label.node_kind,
-                self._source_with_target(label),
-            )
-            log.success("\tUPDATE: %s", diff_str)
-            await self._history.create_sync_history(
-                source_node=plan.item.node,
-                source_record=source_record,
-                target_ref=plan.target_ref,
-                snapshots=(plan.before, plan.after),
-                outcome=SyncOutcome.SYNCED,
-                info=plan.diagnostics.as_info(),
-                ephemeral=self.dry_run,
-            )
-            return SyncOutcome.SYNCED
+            return await self._record_update_success(update)
         except Exception as exc:
-            if await self._target_matches_after(plan):
-                log.warning(
-                    "[%s] Provider raised after writing %s %s; target "
-                    "state matches the planned update, so marking it synced: %s",
-                    self.profile_name,
-                    label.node_kind,
-                    self._source_with_target(label),
-                    exc,
-                )
-                await self._history.create_sync_history(
-                    source_node=plan.item.node,
-                    source_record=source_record,
-                    target_ref=plan.target_ref,
-                    snapshots=(plan.before, plan.after),
-                    outcome=SyncOutcome.SYNCED,
-                    info={
-                        **plan.diagnostics.as_info(),
-                        "write_reconciled_after_error": "true",
-                        "write_error_type": type(exc).__name__,
-                        "write_error": str(exc),
-                    },
-                    ephemeral=self.dry_run,
-                )
-                return SyncOutcome.SYNCED
+            outcome = await self._record_update_write_error(update, exc)
+            if outcome == SyncOutcome.SYNCED:
+                return outcome
+            raise
 
-            log.error(
-                "[%s] Failed to sync %s %s: %s",
+    async def _apply_updates(
+        self,
+        updates: Sequence[PreparedUpdate],
+    ) -> tuple[SyncOutcome, ...]:
+        """Apply planned record updates in one provider write batch."""
+        if not updates:
+            return ()
+        if self.dry_run:
+            return tuple(
+                [await self._record_update_dry_run(update) for update in updates]
+            )
+
+        try:
+            results = await self._write_record_batch(
+                tuple(update.plan.write for update in updates)
+            )
+        except Exception as exc:
+            return tuple(
+                [
+                    await self._record_update_write_error(update, exc)
+                    for update in updates
+                ]
+            )
+
+        outcomes: list[SyncOutcome] = []
+        for update, result in zip(updates, results, strict=True):
+            if result.ok:
+                outcomes.append(await self._record_update_success(update))
+                continue
+            outcomes.append(
+                await self._record_update_write_error(
+                    update,
+                    self._write_result_exception(result),
+                )
+            )
+        return tuple(outcomes)
+
+    async def _record_update_dry_run(self, update: PreparedUpdate) -> SyncOutcome:
+        """Record a dry-run update outcome without writing to the target."""
+        log.success(
+            "[%s] Dry run; skipping sync of %s %s",
+            self.profile_name,
+            update.label.node_kind,
+            self._source_with_target(update.label),
+        )
+        log.success("\tDRY RUN UPDATE: %s", update.diff_str)
+        await self._history.create_sync_history(
+            source_node=update.plan.item.node,
+            source_record=update.source_record,
+            target_ref=update.plan.target_ref,
+            snapshots=(update.plan.before, update.plan.after),
+            outcome=SyncOutcome.SYNCED,
+            info=update.plan.diagnostics.as_info(),
+            ephemeral=self.dry_run,
+        )
+        return SyncOutcome.SYNCED
+
+    async def _record_update_success(self, update: PreparedUpdate) -> SyncOutcome:
+        """Record a successful target record update."""
+        log.success(
+            "[%s] Synced %s %s",
+            self.profile_name,
+            update.label.node_kind,
+            self._source_with_target(update.label),
+        )
+        log.success("\tUPDATE: %s", update.diff_str)
+        await self._history.create_sync_history(
+            source_node=update.plan.item.node,
+            source_record=update.source_record,
+            target_ref=update.plan.target_ref,
+            snapshots=(update.plan.before, update.plan.after),
+            outcome=SyncOutcome.SYNCED,
+            info=update.plan.diagnostics.as_info(),
+            ephemeral=self.dry_run,
+        )
+        return SyncOutcome.SYNCED
+
+    async def _record_update_write_error(
+        self,
+        update: PreparedUpdate,
+        exc: Exception,
+    ) -> SyncOutcome:
+        """Record or reconcile a failed target record update."""
+        if await self._target_matches_after(update.plan):
+            log.warning(
+                "[%s] Provider reported failure after writing %s %s; target "
+                "state matches the planned update, so marking it synced: %s",
                 self.profile_name,
-                label.node_kind,
-                self._source_with_target(label),
+                update.label.node_kind,
+                self._source_with_target(update.label),
                 exc,
             )
-            log.exception("[%s] Sync update error details", self.profile_name)
             await self._history.create_sync_history(
-                source_node=plan.item.node,
-                source_record=source_record,
-                target_ref=plan.target_ref,
-                snapshots=(plan.before, plan.after),
-                outcome=SyncOutcome.FAILED,
-                error_message=str(exc),
+                source_node=update.plan.item.node,
+                source_record=update.source_record,
+                target_ref=update.plan.target_ref,
+                snapshots=(update.plan.before, update.plan.after),
+                outcome=SyncOutcome.SYNCED,
                 info={
-                    **plan.diagnostics.as_info(),
-                    "error_type": type(exc).__name__,
+                    **update.plan.diagnostics.as_info(),
+                    "write_reconciled_after_error": "true",
+                    "write_error_type": type(exc).__name__,
+                    "write_error": str(exc),
                 },
                 ephemeral=self.dry_run,
             )
-            raise
+            return SyncOutcome.SYNCED
+
+        log.error(
+            "[%s] Failed to sync %s %s: %s",
+            self.profile_name,
+            update.label.node_kind,
+            self._source_with_target(update.label),
+            exc,
+        )
+        await self._history.create_sync_history(
+            source_node=update.plan.item.node,
+            source_record=update.source_record,
+            target_ref=update.plan.target_ref,
+            snapshots=(update.plan.before, update.plan.after),
+            outcome=SyncOutcome.FAILED,
+            error_message=str(exc),
+            info={
+                **update.plan.diagnostics.as_info(),
+                "error_type": type(exc).__name__,
+            },
+            ephemeral=self.dry_run,
+        )
+        return SyncOutcome.FAILED
 
     async def _target_matches_after(self, plan: RecordPlan) -> bool:
         """Return whether the current target state matches a planned upsert."""
@@ -899,47 +962,56 @@ class SyncClient:
         if not isinstance(self.target_provider, SupportsEventWrites):
             return SyncOutcome.SKIPPED
 
-        writes: list[AppendEvent] = []
+        writes: list[EventWrite] = []
+        append_count = 0
+        delete_count = 0
         for source_kind, target_kind in self._event_pairs:
+            can_append = self._can_append_event(target_kind)
+            can_delete = self.destructive_sync and self._can_delete_event(target_kind)
+            if not can_append and not can_delete:
+                continue
+
             source_events = await self._fetch_source_events(
                 work.projected_record.ref,
                 source_kind,
             )
-            if not source_events:
-                continue
             projected_events = tuple(
                 (event, target_ref)
                 for event in source_events
                 if self._source_event_in_scope(event, work)
                 for target_ref in self._target_event_refs(event.ref, work)
             )
-            if not projected_events:
-                continue
+            target_refs = tuple(target_ref for _event, target_ref in projected_events)
+            if can_delete and not target_refs:
+                target_refs = (work.target_ref,)
             target_events = await self._fetch_target_events(
-                tuple(target_ref for _event, target_ref in projected_events),
+                target_refs,
                 target_kind,
             )
-            existing_dedupe_keys = {
-                (ref_to_key(event.ref), event.kind, event.dedupe_key)
+            existing_events = {
+                self._event_identity(
+                    event.ref,
+                    event.kind,
+                    event.at,
+                    event.dedupe_key,
+                )
                 for event in target_events
-                if event.dedupe_key is not None
             }
-            existing_unkeyed_times = {
-                (ref_to_key(event.ref), event.kind, event.at)
-                for event in target_events
-                if event.dedupe_key is None
-            }
+            projected_event_identities: set[EventIdentity] = set()
             for event, target_ref in projected_events:
                 dedupe_key = self._event_dedupe_key(
                     event,
                     target_ref,
                     scoped=len(projected_events) > 1,
                 )
-                target_key = ref_to_key(target_ref)
-                if dedupe_key is not None:
-                    if (target_key, target_kind, dedupe_key) in existing_dedupe_keys:
-                        continue
-                elif (target_key, target_kind, event.at) in existing_unkeyed_times:
+                identity = self._event_identity(
+                    target_ref,
+                    target_kind,
+                    event.at,
+                    dedupe_key,
+                )
+                projected_event_identities.add(identity)
+                if not can_append or identity in existing_events:
                     continue
                 writes.append(
                     AppendEvent(
@@ -950,14 +1022,31 @@ class SyncClient:
                         metadata=event.metadata,
                     )
                 )
+                append_count += 1
+
+            if can_delete:
+                for event in target_events:
+                    identity = self._event_identity(
+                        event.ref,
+                        event.kind,
+                        event.at,
+                        event.dedupe_key,
+                    )
+                    if identity in projected_event_identities:
+                        continue
+                    writes.append(self._delete_event_for(event))
+                    delete_count += 1
 
         if not writes:
             return SyncOutcome.SKIPPED
         if self.dry_run:
             log.success(
-                "[%s] Dry run; skipping sync of %s activity events for %s %s",
+                "[%s] Dry run; skipping sync of %s activity event changes "
+                "(%s append, %s delete) for %s %s",
                 self.profile_name,
                 len(writes),
+                append_count,
+                delete_count,
                 work.label.node_kind,
                 self._source_with_target(work.label),
             )
@@ -965,9 +1054,11 @@ class SyncClient:
 
         await self._write_events(writes)
         log.success(
-            "[%s] Synced %s activity events for %s %s",
+            "[%s] Synced %s activity event changes (%s appended, %s deleted) for %s %s",
             self.profile_name,
             len(writes),
+            append_count,
+            delete_count,
             work.label.node_kind,
             self._source_with_target(work.label),
         )
@@ -1081,14 +1172,17 @@ class SyncClient:
 
     def _event_sync_pairs(self) -> tuple[tuple[str, str], ...]:
         """Return source event channel to target event channel mappings."""
+        target_can_read_events = isinstance(self.target_provider, SupportsEventReads)
         target_events = tuple(
             spec
             for spec in self._target_capabilities.events
             if spec.kind.semantic is not None
-            and WriteOp.APPEND_EVENT in spec.write_ops
             and (
-                isinstance(self.target_provider, SupportsEventReads)
-                or spec.idempotent_appends
+                (
+                    EventWriteOp.APPEND in spec.write_ops
+                    and (target_can_read_events or spec.idempotent_appends)
+                )
+                or (EventWriteOp.DELETE in spec.write_ops and target_can_read_events)
             )
         )
         return tuple(
@@ -1099,6 +1193,43 @@ class SyncClient:
                 for target in target_events
                 if source.kind.semantic == target.kind.semantic
             )
+        )
+
+    def _can_append_event(self, target_kind: str) -> bool:
+        """Return whether a target event channel supports appending events."""
+        spec = self._target_event_spec(target_kind)
+        return spec is not None and EventWriteOp.APPEND in spec.write_ops
+
+    def _can_delete_event(self, target_kind: str) -> bool:
+        """Return whether a target event channel supports deleting events."""
+        spec = self._target_event_spec(target_kind)
+        return spec is not None and EventWriteOp.DELETE in spec.write_ops
+
+    def _target_event_spec(self, target_kind: str) -> EventSpec | None:
+        """Return a target event channel spec by native kind."""
+        return self._target_event_specs.get(target_kind)
+
+    @staticmethod
+    def _event_identity(
+        ref: Ref,
+        kind: str,
+        at: datetime,
+        dedupe_key: str | None,
+    ) -> EventIdentity:
+        """Return the comparison identity used for event append/delete planning."""
+        if dedupe_key is not None:
+            return (ref_to_key(ref), kind, "dedupe", dedupe_key)
+        return (ref_to_key(ref), kind, "at", at)
+
+    @staticmethod
+    def _delete_event_for(event: Event) -> DeleteEvent:
+        """Build a delete write for an existing target event."""
+        return DeleteEvent(
+            ref=event.ref,
+            kind=event.kind,
+            at=event.at,
+            key=event.key,
+            dedupe_key=event.dedupe_key,
         )
 
     async def _write_events(self, writes: Sequence[EventWrite]):
@@ -1139,6 +1270,19 @@ class SyncClient:
 
     async def _write_records(self, writes: Sequence[RecordWrite]):
         """Write records and raise when any write fails."""
+        results = await self._write_record_batch(writes)
+        for result in results:
+            if not result.ok:
+                raise self._write_result_exception(result)
+        return results
+
+    async def _write_record_batch(
+        self,
+        writes: Sequence[RecordWrite],
+    ) -> Sequence[WriteResult]:
+        """Write records and return positional provider results."""
+        if not writes:
+            return ()
         if not isinstance(self.target_provider, SupportsRecordWrites):
             raise TypeError(
                 f"Target provider '{self.target_provider.NAMESPACE}' must support "
@@ -1150,10 +1294,12 @@ class SyncClient:
                 f"Target provider '{self.target_provider.NAMESPACE}' returned "
                 f"{len(results)} write results for {len(writes)} writes"
             )
-        for result in results:
-            if not result.ok:
-                raise RuntimeError(result.error or result.code or "record write failed")
         return results
+
+    @staticmethod
+    def _write_result_exception(result: WriteResult) -> RuntimeError:
+        """Build an exception from a failed write result."""
+        return RuntimeError(result.error or result.code or "record write failed")
 
     async def _fetch_target_record(self, target_ref, target_kind: str) -> Record | None:
         """Fetch the existing target record for planning."""

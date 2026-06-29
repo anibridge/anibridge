@@ -19,6 +19,7 @@ from anibridge.provider.base import (
     RecordField,
     RecordSpec,
     RecordUnit,
+    RecordWriteOp,
     Ref,
     Role,
     ScanItem,
@@ -33,7 +34,6 @@ from anibridge.provider.base import (
     TextConstraint,
     UpsertRecord,
     Value,
-    WriteOp,
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
@@ -120,7 +120,7 @@ class RecordPlanner:
             for index, target_spec in enumerate(target_capabilities.records):
                 fields = self._sync_fields_for_specs(source_spec, target_spec)
                 self._surface_fields[(source_kind, target_spec.surface)] = fields
-                if fields and WriteOp.UPSERT_RECORD in target_spec.write_ops:
+                if fields and RecordWriteOp.UPSERT in target_spec.write_ops:
                     candidates.append((len(fields), -index, target_spec.surface))
             if candidates:
                 self._target_surface_for_source[source_kind] = max(candidates)[2]
@@ -151,7 +151,7 @@ class RecordPlanner:
             (bool(self.target_capabilities.records), "target record surfaces"),
             (
                 any(
-                    WriteOp.UPSERT_RECORD in spec.write_ops
+                    RecordWriteOp.UPSERT in spec.write_ops
                     for spec in self.target_capabilities.records
                 ),
                 "upsert_record",
@@ -177,7 +177,7 @@ class RecordPlanner:
     def can_delete_record(self, target_kind: str) -> bool:
         """Return whether a target record surface supports deletion."""
         spec = self._target_record_specs.get(target_kind)
-        return spec is not None and WriteOp.DELETE_RECORD in spec.write_ops
+        return spec is not None and RecordWriteOp.DELETE in spec.write_ops
 
     def target_record_surface_for(self, source_kind: str) -> str | None:
         """Return the best target surface for one source record surface."""

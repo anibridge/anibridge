@@ -236,7 +236,7 @@ dependencies = [
 [[package]]
 name = "anibridge-provider-base"
 version = "0.1.0a3"
-source = { git = "https://github.com/anibridge/anibridge-provider-base.git?branch=main#6648287bef75682accb20032b40310216ae911ea" }
+source = { git = "https://github.com/anibridge/anibridge-provider-base.git?branch=main#6aa8a39ca0c43af2701a2b1a3dbc854812b3f8a7" }
 
 [[package]]
 name = "anibridge-simkl-provider"

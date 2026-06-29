@@ -24,6 +24,7 @@ from anibridge.provider.base import (
     RecordField,
     RecordSpec,
     RecordUnit,
+    RecordWriteOp,
     Ref,
     Role,
     ScanItem,
@@ -38,7 +39,6 @@ from anibridge.provider.base import (
     TemporalPrecision,
     TextConstraint,
     UpsertRecord,
-    WriteOp,
     WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
@@ -111,9 +111,9 @@ def _capabilities(
     ),
     delete: bool = False,
 ) -> Capabilities:
-    write_ops = {WriteOp.UPSERT_RECORD} if writable else set()
+    write_ops = {RecordWriteOp.UPSERT} if writable else set()
     if delete:
-        write_ops.add(WriteOp.DELETE_RECORD)
+        write_ops.add(RecordWriteOp.DELETE)
     return Capabilities(
         roles=frozenset({role}),
         external_authorities=(
@@ -151,7 +151,7 @@ class _Target(SupportsMapping, SupportsRecordReads, SupportsRecordWrites):
         return Page(items=())
 
     async def write_records(self, writes) -> Sequence[WriteResult]:
-        return tuple(WriteResult(ok=True, op=WriteOp.UPSERT_RECORD) for _ in writes)
+        return tuple(WriteResult(ok=True, op=RecordWriteOp.UPSERT) for _ in writes)
 
 
 class _PlainProvider(Provider):
@@ -299,7 +299,7 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
                         writable=True,
                     ),
                 },
-                write_ops=frozenset({WriteOp.UPSERT_RECORD}),
+                write_ops=frozenset({RecordWriteOp.UPSERT}),
             ),
         ),
     )
@@ -345,7 +345,7 @@ def test_sync_fields_only_use_selected_writable_target_surfaces() -> None:
                         writable=True,
                     )
                 },
-                write_ops=frozenset({WriteOp.UPSERT_RECORD}),
+                write_ops=frozenset({RecordWriteOp.UPSERT}),
             ),
         ),
     )

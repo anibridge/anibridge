@@ -104,7 +104,8 @@ class ProfileConfigModel(msgspec.Struct):
             bool,
             msgspec.Meta(
                 description=(
-                    "Whether destructive sync behavior is enabled for the profile."
+                    "Whether destructive record and event sync behavior is enabled "
+                    "for the profile."
                 ),
                 examples=[False],
             ),

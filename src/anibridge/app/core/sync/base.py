@@ -1469,7 +1469,8 @@ class SyncClient:
                 .all()
             )
 
-        scored_fields: dict[TargetRecordKey, tuple[int, list[RecordField]]] = {}
+        exact_pin_fields: dict[RefKey, list[RecordField]] = {}
+        anchor_pin_fields: dict[str, list[RecordField]] = {}
         for pin in pins:
             pin_ref = ref_from_payload(pin.target_ref)
             if pin_ref is None:
@@ -1481,18 +1482,19 @@ class SyncClient:
                     pin_fields.append(RecordField(field))
                 except ValueError:
                     continue
-            for target_key in wanted:
-                target_ref_key, _target_kind = target_key
-                if pin_ref_key == target_ref_key:
-                    ref_score = 2
-                elif pin_ref_key.covers(target_ref_key):
-                    ref_score = 1
-                else:
-                    continue
-                existing = scored_fields.get(target_key)
-                if existing is None or ref_score > existing[0]:
-                    scored_fields[target_key] = (ref_score, pin_fields)
-        return {key: fields for key, (_, fields) in scored_fields.items()}
+            exact_pin_fields[pin_ref_key] = pin_fields
+            if pin_ref_key.is_anchor:
+                anchor_pin_fields[pin_ref_key.key] = pin_fields
+
+        pinned_fields: dict[TargetRecordKey, list[RecordField]] = {}
+        for target_key in wanted:
+            target_ref_key, _target_kind = target_key
+            fields = exact_pin_fields.get(target_ref_key)
+            if fields is None:
+                fields = anchor_pin_fields.get(target_ref_key.key)
+            if fields is not None:
+                pinned_fields[target_key] = fields
+        return pinned_fields
 
     def _sync_label(
         self,

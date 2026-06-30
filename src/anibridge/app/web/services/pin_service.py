@@ -18,6 +18,7 @@ from anibridge.provider.base import (
 from anibridge.utils.cache import cache
 
 from anibridge.app.config.database import db
+from anibridge.app.config.settings import get_config
 from anibridge.app.core.sync import (
     RefKey,
     RefPayload,
@@ -169,15 +170,20 @@ class PinService:
             for value in self.allowed_fields
         ]
 
+    @staticmethod
+    def _target_namespace(profile: str) -> str:
+        """Return the configured target provider namespace for a profile."""
+        return get_config().get_profile(profile).target_provider
+
     def _list_pins(self, profile: str) -> list[PinEntry]:
         """Return all pins for a profile ordered by most recent."""
-        bridge = get_bridge(profile)
+        target_namespace = self._target_namespace(profile)
         with db() as ctx:
             rows = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.target_namespace == bridge.target_provider.NAMESPACE,
+                    Pin.target_namespace == target_namespace,
                 )
                 .order_by(Pin.updated_at.desc())
                 .all()
@@ -187,14 +193,14 @@ class PinService:
 
     def _get_pin(self, profile: str, media_key: str) -> PinEntry | None:
         """Return a single anchor-ref pin entry if it exists."""
-        bridge = get_bridge(profile)
+        target_namespace = self._target_namespace(profile)
         target_ref = ref_to_json(Ref.anchor(media_key))
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.target_namespace == bridge.target_provider.NAMESPACE,
+                    Pin.target_namespace == target_namespace,
                     Pin.target_ref == target_ref,
                 )
                 .first()
@@ -212,7 +218,7 @@ class PinService:
         sanitized = self._sanitize_fields(fields)
         if not sanitized:
             raise ValueError("At least one field must be provided")
-        bridge = get_bridge(profile)
+        target_namespace = self._target_namespace(profile)
         target_ref = ref_to_json(Ref.anchor(media_key))
 
         with db() as ctx:
@@ -220,7 +226,7 @@ class PinService:
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.target_namespace == bridge.target_provider.NAMESPACE,
+                    Pin.target_namespace == target_namespace,
                     Pin.target_ref == target_ref,
                 )
                 .first()
@@ -230,7 +236,7 @@ class PinService:
             if not pin:
                 pin = Pin(
                     profile_name=profile,
-                    target_namespace=bridge.target_provider.NAMESPACE,
+                    target_namespace=target_namespace,
                     target_ref=target_ref,
                     fields=sanitized,
                     created_at=now,
@@ -409,14 +415,14 @@ class PinService:
 
     def delete_pin(self, profile: str, media_key: str) -> None:
         """Remove a pin configuration if it exists."""
-        bridge = get_bridge(profile)
+        target_namespace = self._target_namespace(profile)
         target_ref = ref_to_json(Ref.anchor(media_key))
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.target_namespace == bridge.target_provider.NAMESPACE,
+                    Pin.target_namespace == target_namespace,
                     Pin.target_ref == target_ref,
                 )
                 .first()

@@ -11,8 +11,6 @@ from anibridge.app.web.services.history_service import HistoryPage, get_history_
 
 __all__ = ["router"]
 
-# TODO: restore the undo endpoint/functionality?
-
 GetHistoryResponse = HistoryPage
 
 

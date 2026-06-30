@@ -44,9 +44,6 @@ __all__ = ["HistoryService", "get_history_service"]
 log = get_logger(__name__)
 
 
-_PinIndexEntry = tuple[str, RefKey, list[str]]
-
-
 class HistoryItem(msgspec.Struct):
     """Serializable history entry with optional provider metadata."""
 
@@ -172,7 +169,8 @@ class HistoryService:
             else {}
         )
 
-        pin_index: list[_PinIndexEntry] = []
+        exact_pin_index: dict[tuple[str, RefKey], list[str]] = {}
+        anchor_pin_index: dict[tuple[str, str], list[str]] = {}
         has_target_refs = False
         for row in rows:
             if row.target_namespace and ref_payload_from_json(row.target_ref):
@@ -188,13 +186,13 @@ class HistoryService:
                 pin_ref = ref_from_payload(pin.target_ref)
                 if pin_ref is None:
                     continue
-                pin_index.append(
-                    (
-                        pin.target_namespace,
-                        ref_to_key(pin_ref),
-                        list(pin.fields or []),
+                pin_ref_key = ref_to_key(pin_ref)
+                pin_fields = list(pin.fields or [])
+                exact_pin_index[(pin.target_namespace, pin_ref_key)] = pin_fields
+                if pin_ref_key.is_anchor:
+                    anchor_pin_index[(pin.target_namespace, pin_ref_key.key)] = (
+                        pin_fields
                     )
-                )
 
         items: list[HistoryItem] = []
         for row in rows:
@@ -210,24 +208,13 @@ class HistoryService:
                 ref_to_key(target_ref_value) if target_ref_value is not None else None
             )
             if row.target_namespace is not None and target_ref_key is not None:
-                best_score = 0
-                for (
-                    pin_namespace,
-                    pin_ref_key,
-                    pin_fields,
-                ) in pin_index:
-                    if pin_namespace != row.target_namespace:
-                        continue
-                    if pin_ref_key == target_ref_key:
-                        ref_score = 2
-                    elif pin_ref_key.covers(target_ref_key):
-                        ref_score = 1
-                    else:
-                        continue
-
-                    if ref_score > best_score:
-                        best_score = ref_score
-                        pinned_fields = pin_fields
+                pinned_fields = exact_pin_index.get(
+                    (row.target_namespace, target_ref_key)
+                )
+                if pinned_fields is None:
+                    pinned_fields = anchor_pin_index.get(
+                        (row.target_namespace, target_ref_key.key)
+                    )
 
             items.append(
                 HistoryItem(

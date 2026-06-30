@@ -1299,7 +1299,7 @@ async def test_process_page_records_prepare_apply_and_event_failures() -> None:
 
     client._resolve_work_items = cast(Any, resolve_items)
     client._prepare_record_update = cast(Any, prepare_update)
-    client._apply_update = cast(Any, fail_apply)
+    client._write_record_batch = cast(Any, fail_apply)
     await client.process_page((work.item,))
     assert client.sync_stats.failed == 1
 

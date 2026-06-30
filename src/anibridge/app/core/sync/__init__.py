@@ -131,6 +131,16 @@ def ref_to_json(ref: Ref) -> dict[str, object]:
     return ref_to_key(ref).to_json()
 
 
+def _ref_step_value(value: object) -> int | str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
 def ref_payload_from_json(payload: Mapping[str, object] | None) -> RefPayload | None:
     """Deserialize a database JSON ref payload."""
     if not payload or "key" not in payload:
@@ -145,8 +155,8 @@ def ref_payload_from_json(payload: Mapping[str, object] | None) -> RefPayload | 
 
             raw_step_map = cast(Mapping[str, object], raw_step)
             axis = raw_step_map.get("axis")
-            value = raw_step_map.get("value")
-            if isinstance(axis, str) and isinstance(value, str | int):
+            value = _ref_step_value(raw_step_map.get("value"))
+            if isinstance(axis, str) and value is not None:
                 steps.append(RefStepPayload(axis, value))
 
     return RefPayload(key=str(payload["key"]), path=tuple(steps))

@@ -74,8 +74,14 @@ class DummyTargetProvider(SupportsNodeReads, SupportsNodeSearch):
 
 
 @pytest.fixture(autouse=True)
-def _pin_scheduler():
+def _pin_scheduler(monkeypatch: pytest.MonkeyPatch):
     """Attach a scheduler with a target provider for pin service tests."""
+    monkeypatch.setattr(
+        "anibridge.app.web.services.pin_service.get_config",
+        lambda: SimpleNamespace(
+            get_profile=lambda _: SimpleNamespace(target_provider="anilist")
+        ),
+    )
     state = get_app_state()
     original = state.scheduler
     bridge = SimpleNamespace(target_provider=DummyTargetProvider())
@@ -202,6 +208,28 @@ async def test_pin_service_upsert_and_delete_roundtrip():
 
     with pytest.raises(ValueError):
         await service.upsert_pin("default", "xyz", [])
+
+
+@pytest.mark.asyncio
+async def test_pin_service_plain_crud_uses_config_without_scheduler():
+    """Plain pin CRUD should not require active provider clients."""
+    get_app_state().scheduler = None
+    service = PinService()
+
+    created = await service.upsert_pin(
+        "default",
+        "offline",
+        [RecordField.STATUS.value],
+    )
+
+    assert created.target_namespace == "anilist"
+    assert [pin.target_ref.key for pin in await service.list_pins("default")] == [
+        "offline"
+    ]
+    assert await service.get_pin("default", "offline") is not None
+
+    service.delete_pin("default", "offline")
+    assert await service.get_pin("default", "offline") is None
 
 
 @pytest.mark.asyncio

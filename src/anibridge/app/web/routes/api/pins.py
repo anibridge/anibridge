@@ -157,10 +157,6 @@ async def upsert_pin(
         if value not in normalized_fields:
             normalized_fields.append(value)
 
-    normalized_fields = [
-        field.value for field in RecordField if field.value in normalized_fields
-    ]
-
     try:
         entry = await get_pin_service().upsert_pin(
             profile, media_key, normalized_fields, with_media=with_media

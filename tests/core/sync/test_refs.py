@@ -56,3 +56,19 @@ def test_ref_payload_ignores_invalid_path_steps() -> None:
     )
     assert ref_from_payload(None) is None
     assert ref_payload_from_json({}) is None
+
+
+def test_ref_payload_accepts_integral_float_path_steps() -> None:
+    """JSON path coordinates may arrive as floats from external serializers."""
+    payload = {
+        "key": "show",
+        "path": [
+            {"axis": "season", "value": 1.0},
+            {"axis": "episode", "value": 2.5},
+        ],
+    }
+
+    assert ref_payload_from_json(payload) == RefPayload(
+        key="show",
+        path=(RefStepPayload("season", 1),),
+    )

@@ -169,7 +169,7 @@ def test_upsert_pin_route_normalizes_payload_and_handles_errors(
     assert fake_pin_service.upsert_calls[-1] == (
         "default",
         "123",
-        ["status", "progress"],
+        ["progress", "status"],
         True,
     )
 

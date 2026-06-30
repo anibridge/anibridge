@@ -335,8 +335,11 @@ async def test_bridge_sync_stream_skip_and_failure_paths(
 
     monkeypatch.setattr(_FakeSyncClient, "process_page", _boom)
     bridge = _bridge(tmp_path, monkeypatch, sqlite_db_factory)
-    await bridge.sync(SyncRequest(trigger=SyncTrigger.MANUAL))
+    previous_last_synced = bridge.last_synced
+    with pytest.raises(RuntimeError, match="page failed"):
+        await bridge.sync(SyncRequest(trigger=SyncTrigger.MANUAL))
     assert _FakeSyncClient.instances[-1].cleared is True
+    assert bridge.last_synced == previous_last_synced
 
 
 @pytest.mark.asyncio
@@ -374,6 +377,18 @@ async def test_bridge_source_scan_poll_and_webhook_translation(
     assert poll.source_refs == (Ref.anchor("a"), Ref.anchor("b"))
     assert poll.from_change_feed is True
 
+    source.change_pages = [Page(items=(NodeChange(ref=Ref.anchor("changed")),))]
+    coalesced_poll = await bridge._scan_plan_for(
+        SyncRequest(
+            trigger=SyncTrigger.POLL,
+            source_refs=(Ref.anchor("queued"),),
+            full_scan_on_poll_fallback=True,
+        )
+    )
+    assert coalesced_poll is not None
+    assert coalesced_poll.source_refs == (Ref.anchor("changed"), Ref.anchor("queued"))
+    assert coalesced_poll.from_change_feed is True
+
     webhook = await bridge._scan_plan_for(
         SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("w"),))
     )
@@ -404,6 +419,17 @@ async def test_bridge_poll_and_webhook_fallbacks(
     poll = await bridge._scan_plan_for(SyncRequest(trigger=SyncTrigger.POLL))
     assert poll is not None
     assert poll.require_user_data is False
+
+    fallback_poll = await bridge._scan_plan_for(
+        SyncRequest(
+            trigger=SyncTrigger.POLL,
+            source_refs=(Ref.anchor("queued"),),
+            full_scan_on_poll_fallback=True,
+        )
+    )
+    assert fallback_poll is not None
+    assert fallback_poll.source_refs is None
+    assert fallback_poll.require_user_data is False
     assert await bridge.parse_webhook(cast(Any, object())) == (False, None)
 
     source = _BridgeProvider(namespace="source", role=Role.SOURCE)

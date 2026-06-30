@@ -160,6 +160,31 @@ def test_coalesced_request_preserves_record_undos() -> None:
     assert request.record_undos == (undo,)
 
 
+def test_coalesced_request_preserves_poll_fallback_coverage() -> None:
+    """Broad polls should retain fallback coverage when targeted refs merge in."""
+    poll_with_target = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("a"),)),
+            SyncRequest(trigger=SyncTrigger.POLL),
+        ]
+    )
+
+    assert poll_with_target.trigger == SyncTrigger.POLL
+    assert poll_with_target.source_refs == (Ref.anchor("a"),)
+    assert poll_with_target.full_scan_on_poll_fallback is True
+
+    manual_with_poll = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.MANUAL, source_refs=(Ref.anchor("a"),)),
+            SyncRequest(trigger=SyncTrigger.POLL),
+        ]
+    )
+
+    assert manual_with_poll.trigger == SyncTrigger.MANUAL
+    assert manual_with_poll.source_refs is None
+    assert manual_with_poll.full_scan_on_poll_fallback is False
+
+
 @pytest.mark.asyncio
 async def test_trigger_profile_sync_runs_immediately_when_stopped(
     scheduler: SchedulerClient,
@@ -539,6 +564,7 @@ async def test_queue_helpers_reject_coalesce_and_fail_pending(
 
     assert request.trigger == SyncTrigger.POLL
     assert request.source_refs == (Ref.anchor("a"),)
+    assert request.full_scan_on_poll_fallback is True
     assert waiters[0] is first
     assert sources == ("api", "poll")
     assert scheduler._pending_sync_counts == {"other": 1}

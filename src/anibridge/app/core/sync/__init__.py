@@ -49,6 +49,7 @@ class SyncRequest(msgspec.Struct, frozen=True):
     trigger: SyncTrigger = SyncTrigger.MANUAL
     source_refs: tuple[Ref, ...] | None = None
     record_undos: tuple[RecordUndoRequest, ...] = ()
+    full_scan_on_poll_fallback: bool = False
 
 
 class ScanPlan(msgspec.Struct, frozen=True):

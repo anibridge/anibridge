@@ -433,6 +433,7 @@ class BridgeClient:
                     log.exception(
                         "[%s] Failed to sync source item batch", self.profile_name
                     )
+                    raise
                 finally:
                     if self.current_sync is not None:
                         self.current_sync.stage = "processing"
@@ -457,7 +458,9 @@ class BridgeClient:
             changed_refs = await self._poll_source_refs()
             if changed_refs is None:
                 source_refs = (
-                    dedupe_refs(request.source_refs)
+                    None
+                    if request.full_scan_on_poll_fallback
+                    else dedupe_refs(request.source_refs)
                     if request.source_refs is not None
                     else None
                 )

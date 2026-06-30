@@ -517,14 +517,23 @@ class SchedulerClient:
         refs = []
         record_undos: list[RecordUndoRequest] = []
         full_source_scan = False
+        full_scan_on_poll_fallback = False
         for request in requests:
             record_undos.extend(request.record_undos)
+            full_scan_on_poll_fallback = (
+                full_scan_on_poll_fallback or request.full_scan_on_poll_fallback
+            )
             if request.source_refs is None:
                 # A full manual/periodic scan covers any targeted work already queued.
                 if request.trigger in {SyncTrigger.MANUAL, SyncTrigger.PERIODIC}:
                     full_source_scan = True
+                elif request.trigger == SyncTrigger.POLL:
+                    full_scan_on_poll_fallback = True
                 continue
             refs.extend(request.source_refs)
+
+        if full_scan_on_poll_fallback and trigger != SyncTrigger.POLL:
+            full_source_scan = True
 
         source_refs = (
             None
@@ -534,6 +543,9 @@ class SchedulerClient:
         return SyncRequest(
             trigger=trigger,
             source_refs=source_refs,
+            full_scan_on_poll_fallback=(
+                full_scan_on_poll_fallback and trigger == SyncTrigger.POLL
+            ),
             record_undos=tuple(record_undos),
         )
 

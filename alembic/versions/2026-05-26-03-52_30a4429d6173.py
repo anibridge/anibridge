@@ -100,6 +100,17 @@ def upgrade() -> None:
         sa.Column("error_message", sa.String(), nullable=True),
         sa.Column("ephemeral", sa.Boolean(), nullable=False),
         sa.Column("timestamp", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["animap_provider", "animap_id", "animap_scope"],
+            [
+                "animap_entry.provider",
+                "animap_entry.entry_id",
+                "animap_entry.entry_scope",
+            ],
+            name="fk_sync_history_animap_descriptor",
+            ondelete="SET NULL",
+            onupdate="CASCADE",
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
 

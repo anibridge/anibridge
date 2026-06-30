@@ -307,7 +307,7 @@ class BridgeClient:
 
         try:
             scan = await self._scan_plan_for(request)
-            if scan is None:
+            if scan is None and not request.record_undos:
                 log.info(
                     "[%s] No source changes found for %s sync; skipping",
                     self.profile_name,
@@ -315,16 +315,21 @@ class BridgeClient:
                 )
                 return
 
-            log.debug(
-                "[%s] Source scan prepared: trigger=%s refs=%s "
-                "require_user_data=%s change_feed=%s",
-                self.profile_name,
-                scan.trigger.value,
-                len(scan.source_refs) if scan.source_refs else "all",
-                scan.require_user_data,
-                scan.from_change_feed,
-            )
-            await self._process_scan_stream(sync_client, scan)
+            if scan is not None:
+                log.debug(
+                    "[%s] Source scan prepared: trigger=%s refs=%s "
+                    "require_user_data=%s change_feed=%s",
+                    self.profile_name,
+                    scan.trigger.value,
+                    len(scan.source_refs) if scan.source_refs else "all",
+                    scan.require_user_data,
+                    scan.from_change_feed,
+                )
+                await self._process_scan_stream(sync_client, scan)
+
+            if request.record_undos:
+                self.current_sync.stage = "undoing"
+                await sync_client.undo_records(request.record_undos)
 
             sync_client.flush_failure_history_cleanup()
 
@@ -445,6 +450,9 @@ class BridgeClient:
         request: SyncRequest,
     ) -> ScanPlan | None:
         """Translate a sync request into an explicit provider scan projection."""
+        if request.record_undos and request.source_refs == ():
+            return None
+
         if request.trigger == SyncTrigger.POLL:
             changed_refs = await self._poll_source_refs()
             if changed_refs is None:

@@ -26,12 +26,22 @@ export interface RefPayload {
     path?: RefStepPayload[];
 }
 
+export interface RecordSnapshotValue {
+    state?: { native?: string | null; status?: string | null };
+    progress?: { current?: number | null; total?: number | null; unit?: string | null };
+    rating?: { value: number; scale: [number, number, number] };
+    scalar?: string | number | boolean;
+    date_value?: string;
+    datetime_value?: string;
+}
+
 export interface RecordSnapshot {
     ref: RefPayload;
     kind?: string;
+    surface?: string;
     key?: string | null;
     ids?: string[];
-    values?: Record<string, unknown>;
+    values?: Record<string, RecordSnapshotValue>;
 }
 
 // --- Mappings API ---

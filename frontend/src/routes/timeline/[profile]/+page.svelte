@@ -9,6 +9,7 @@
         CircleX,
         Infinity as InfinityIcon,
         LoaderCircle,
+        RotateCcw,
         SearchX,
         Trash2,
     } from "@lucide/svelte";
@@ -19,6 +20,7 @@
     import TimelineItem from "$lib/components/timeline/timeline-item.svelte";
     import TimelineOutcomeFilters from "$lib/components/timeline/timeline-outcome-filters.svelte";
     import type { ItemDiffUi } from "$lib/components/timeline/types";
+    import { displaySnapshotValues } from "$lib/components/timeline/utils";
     import type {
         CurrentSync,
         GetHistoryResponse,
@@ -90,6 +92,7 @@
             order: 2,
         },
         deleted: { label: "Deleted", color: "bg-rose-600/80", icon: Trash2, order: 3 },
+        undone: { label: "Undone", color: "bg-sky-600/80", icon: RotateCcw, order: 4 },
     };
 
     function metaFor(o: string) {
@@ -181,6 +184,25 @@
         }
     }
 
+    function canUndoHistory(item: HistoryItem): boolean {
+        return item.outcome === "synced" || item.outcome === "deleted";
+    }
+
+    async function undoHistory(item: HistoryItem) {
+        if (!confirm("Undo this history entry?")) return;
+        try {
+            const res = await apiFetch(
+                `/api/history/${params.profile}/${item.id}/undo`,
+                { method: "POST" },
+            );
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            toast("Undo queued", "success");
+        } catch (e) {
+            toast("Undo failed", "error");
+            console.error(e);
+        }
+    }
+
     function canShowDiff(item: HistoryItem): boolean {
         return !!(
             item &&
@@ -191,8 +213,8 @@
 
     function diffCountFor(item: HistoryItem): number {
         let count = 0;
-        const before = item.before_state?.values || {};
-        const after = item.after_state?.values || {};
+        const before = displaySnapshotValues(item.before_state);
+        const after = displaySnapshotValues(item.after_state);
         const keys = new Set<string>([...Object.keys(before), ...Object.keys(after)]);
         for (const k of keys) {
             if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) {
@@ -523,6 +545,8 @@
                 {meta}
                 {displayTitle}
                 {coverImage}
+                {undoHistory}
+                {canUndoHistory}
                 {deleteHistory}
                 {canShowDiff}
                 {toggleDiff}

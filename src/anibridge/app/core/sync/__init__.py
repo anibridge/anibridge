@@ -7,7 +7,10 @@ from typing import cast
 import msgspec
 from anibridge.provider.base import Ref, Step
 
+from anibridge.app.core.sync.stats import RecordSnapshot
+
 __all__ = [
+    "RecordUndoRequest",
     "RefKey",
     "RefPayload",
     "RefStepPayload",
@@ -31,11 +34,21 @@ class SyncTrigger(StrEnum):
     WEBHOOK = "webhook"
 
 
+class RecordUndoRequest(msgspec.Struct, frozen=True):
+    """A target record state restoration requested from history."""
+
+    source_ref: Ref
+    target_ref: Ref
+    before: RecordSnapshot | None
+    after: RecordSnapshot | None
+
+
 class SyncRequest(msgspec.Struct, frozen=True):
     """A sync request before it is narrowed to a provider scan."""
 
     trigger: SyncTrigger = SyncTrigger.MANUAL
     source_refs: tuple[Ref, ...] | None = None
+    record_undos: tuple[RecordUndoRequest, ...] = ()
 
 
 class ScanPlan(msgspec.Struct, frozen=True):

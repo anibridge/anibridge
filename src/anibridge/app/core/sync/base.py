@@ -21,6 +21,7 @@ from anibridge.provider.base import (
     EventWriteOp,
     ExternalId,
     FacetName,
+    Node,
     NodeFlag,
     Page,
     Progress,
@@ -39,6 +40,7 @@ from anibridge.provider.base import (
     SupportsRecordReads,
     SupportsRecordWrites,
     SupportsScan,
+    UpsertRecord,
     WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
@@ -46,7 +48,13 @@ from anibridge.utils.mappings import AnibridgeMapping
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import SyncRulesConfig
 from anibridge.app.core.animap import AnimapClient
-from anibridge.app.core.sync import RefKey, ScanPlan, ref_from_payload, ref_to_key
+from anibridge.app.core.sync import (
+    RecordUndoRequest,
+    RefKey,
+    ScanPlan,
+    ref_from_payload,
+    ref_to_key,
+)
 from anibridge.app.core.sync.history import SyncHistoryManager
 from anibridge.app.core.sync.planner import (
     PreparedUpdate,
@@ -772,6 +780,86 @@ class SyncClient:
                 )
             )
         return tuple(outcomes)
+
+    async def undo_records(
+        self,
+        requests: Sequence[RecordUndoRequest],
+    ) -> tuple[SyncOutcome, ...]:
+        """Restore target record states captured in history."""
+        outcomes: list[SyncOutcome] = [await self._undo_record(r) for r in requests]
+        return tuple(outcomes)
+
+    async def _undo_record(self, request: RecordUndoRequest) -> SyncOutcome:
+        """Apply one target record undo request."""
+        before = request.before
+        after = request.after
+        try:
+            write = self._undo_record_write(request)
+            if self.dry_run:
+                log.debug(
+                    "[%s] Dry run; skipping undo of target record %s",
+                    self.profile_name,
+                    request.target_ref,
+                )
+            else:
+                await self._write_records([write])
+            await self._history.create_sync_history(
+                source_node=Node(ref=request.source_ref, kind="history_undo"),
+                source_record=None,
+                target_ref=request.target_ref,
+                snapshots=(after, before),
+                outcome=SyncOutcome.UNDONE,
+                info={"source": "history:undo_item"},
+                ephemeral=self.dry_run,
+                dedupe_failures=False,
+            )
+            return SyncOutcome.UNDONE
+        except Exception as exc:
+            log.error(
+                "[%s] Failed to undo target record %s: %s",
+                self.profile_name,
+                request.target_ref,
+                exc,
+            )
+            await self._history.create_sync_history(
+                source_node=Node(ref=request.source_ref, kind="history_undo"),
+                source_record=None,
+                target_ref=request.target_ref,
+                snapshots=(after, before),
+                outcome=SyncOutcome.FAILED,
+                error_message=str(exc),
+                info={
+                    "source": "history:undo_item",
+                    "error_type": type(exc).__name__,
+                },
+                ephemeral=self.dry_run,
+                dedupe_failures=False,
+            )
+            return SyncOutcome.FAILED
+
+    def _undo_record_write(self, request: RecordUndoRequest) -> RecordWrite:
+        """Build the provider write that restores a history snapshot."""
+        before = request.before
+        after = request.after
+        if before is None:
+            if after is None:
+                raise ValueError("Cannot undo history item without record state")
+            if not self._planner.can_delete_record(after.surface):
+                raise TypeError(
+                    "Target provider does not support deleting created records"
+                )
+            return DeleteRecord(ref=request.target_ref, surface=after.surface)
+
+        set_values = before.values_for_restore()
+        before_fields = set(set_values)
+        after_fields = set(after.values) if after is not None else set()
+        return UpsertRecord(
+            ref=request.target_ref,
+            surface=before.surface,
+            key=before.key,
+            set=set_values,
+            clear=frozenset(after_fields - before_fields),
+        )
 
     async def _record_update_dry_run(self, update: PreparedUpdate) -> SyncOutcome:
         """Record a dry-run update outcome without writing to the target."""

@@ -10,12 +10,17 @@ from anibridge.provider.base import (
     Node,
     NodeQuery,
     Page,
+    Progress,
+    Record,
+    RecordField,
     Ref,
     SupportsNodeReads,
 )
 
 import anibridge.app.web.services.history_service as history_service_module
 from anibridge.app.core.sync import SyncRequest
+from anibridge.app.core.sync.history import to_builtins
+from anibridge.app.core.sync.stats import RecordSnapshot
 from anibridge.app.exceptions import HistoryItemNotFoundError, HistoryPermissionError
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
@@ -98,6 +103,18 @@ def _ref_payload(
     path: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {"key": key, "path": path or []}
+
+
+def _snapshot_payload(key: str, progress: int) -> dict[str, object]:
+    return to_builtins(
+        RecordSnapshot.from_record(
+            Record(
+                ref=Ref.anchor(key),
+                surface="target_state",
+                values={RecordField.PROGRESS: Progress(current=progress, total=12)},
+            )
+        )
+    )
 
 
 def _seed_history_row(
@@ -333,6 +350,46 @@ async def test_history_service_retry_item_targets_source_ref(
     assert profile == "profile"
     assert source == "history:retry_item"
     assert request.source_refs == (Ref.anchor("src1"),)
+
+
+@pytest.mark.asyncio
+async def test_history_service_undo_item_schedules_record_undo(
+    history_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """undo_item should submit restorable target states through SyncRequest."""
+    row_id = _seed_history_row(
+        before_state=_snapshot_payload("tgt1", 0),
+        after_state=_snapshot_payload("tgt1", 1),
+    )
+    scheduled: list[tuple[Any, str]] = []
+
+    async def fake_trigger(profile: str, *, request: SyncRequest, source: str) -> None:
+        history_env.scheduler.calls.append((profile, request, source))
+
+    history_env.scheduler.trigger_profile_sync = fake_trigger
+    monkeypatch.setattr(
+        history_service_module,
+        "schedule_task",
+        lambda coro, *, name: scheduled.append((coro, name)),
+    )
+
+    await HistoryService().undo_item("profile", row_id)
+
+    coro, name = scheduled[0]
+    assert name == f"undo_history_item:profile:{row_id}"
+    await coro
+    profile, request, source = history_env.scheduler.calls[0]
+    assert profile == "profile"
+    assert source == "history:undo_item"
+    assert request.source_refs == ()
+    undo = request.record_undos[0]
+    assert undo.source_ref == Ref.anchor("src1")
+    assert undo.target_ref == Ref.anchor("tgt1")
+    assert undo.before is not None
+    assert undo.before.values_for_restore() == {
+        RecordField.PROGRESS: Progress(current=0, total=12)
+    }
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from sqlalchemy.sql.functions import func
 
 from anibridge.app.config.database import db
 from anibridge.app.core.sync import (
+    RecordUndoRequest,
     RefKey,
     RefPayload,
     SyncRequest,
@@ -461,6 +462,71 @@ class HistoryService:
                 source="history:retry_item",
             ),
             name=f"retry_history_item:{profile}:{item_id}",
+        )
+
+    async def undo_item(self, profile: str, item_id: int) -> None:
+        """Undo a successful history item by restoring its target record state."""
+        log.info("Undoing history item id=%s for profile %s", item_id, profile)
+
+        scheduler = get_app_state().scheduler
+        if scheduler is None:
+            raise SchedulerNotInitializedError("Scheduler not available")
+
+        with db() as ctx:
+            row = (
+                ctx.session.query(SyncHistory)
+                .filter(SyncHistory.profile_name == profile, SyncHistory.id == item_id)
+                .first()
+            )
+        if row is None:
+            raise HistoryItemNotFoundError("Not found")
+
+        bridge = get_bridge(profile)
+        if row.source_namespace != bridge.source_provider.NAMESPACE:
+            raise HistoryPermissionError(
+                "History item belongs to a different source provider"
+            )
+        if row.target_namespace != bridge.target_provider.NAMESPACE:
+            raise HistoryPermissionError(
+                "History item belongs to a different target provider"
+            )
+        if row.outcome not in (SyncOutcome.SYNCED, SyncOutcome.DELETED):
+            raise HistoryPermissionError(
+                "Undo is only available for synced or deleted items"
+            )
+
+        source_ref = ref_from_payload(row.source_ref)
+        target_ref = ref_from_payload(row.target_ref)
+        if source_ref is None or target_ref is None:
+            raise HistoryPermissionError(
+                "Cannot undo history item without source and target refs"
+            )
+
+        before_state = _snapshot_from_json(row.before_state)
+        after_state = _snapshot_from_json(row.after_state)
+        if before_state is None and after_state is None:
+            raise HistoryPermissionError(
+                "Cannot undo history item without record state"
+            )
+
+        schedule_task(
+            scheduler.trigger_profile_sync(
+                profile,
+                request=SyncRequest(
+                    trigger=SyncTrigger.MANUAL,
+                    source_refs=(),
+                    record_undos=(
+                        RecordUndoRequest(
+                            source_ref=source_ref,
+                            target_ref=target_ref,
+                            before=before_state,
+                            after=after_state,
+                        ),
+                    ),
+                ),
+                source="history:undo_item",
+            ),
+            name=f"undo_history_item:{profile}:{item_id}",
         )
 
     async def purge_ephemeral_items(self) -> int:

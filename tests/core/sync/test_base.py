@@ -47,7 +47,13 @@ from anibridge.provider.base import (
 from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.core.animap import AnimapClient
-from anibridge.app.core.sync import ScanPlan, SyncTrigger, ref_to_json, ref_to_key
+from anibridge.app.core.sync import (
+    RecordUndoRequest,
+    ScanPlan,
+    SyncTrigger,
+    ref_to_json,
+    ref_to_key,
+)
 from anibridge.app.core.sync.base import SyncClient, _TargetWork
 from anibridge.app.core.sync.planner import PreparedUpdate, SyncLabel
 from anibridge.app.core.sync.projection import MappingProjector
@@ -345,6 +351,48 @@ def test_target_event_refs_preserve_generic_relative_path() -> None:
     )
 
     assert refs == (Ref.at("target", ("bucket", "a"), ("part", 5)),)
+
+
+@pytest.mark.asyncio
+async def test_undo_records_restores_before_snapshot_values() -> None:
+    """Undo requests should restore values without field-specific service code."""
+    target = _TargetProvider()
+    client = _client(target=target)
+    before_record = Record(
+        ref=Ref.anchor("target"),
+        surface=_RECORD_KIND,
+        key="entry",
+        values={RecordField.PROGRESS: Progress(current=1, total=12)},
+    )
+    after_record = Record(
+        ref=Ref.anchor("target"),
+        surface=_RECORD_KIND,
+        key="entry",
+        values={
+            RecordField.STATUS: State(status=Status.COMPLETED),
+            RecordField.PROGRESS: Progress(current=2, total=12),
+        },
+    )
+
+    outcomes = await client.undo_records(
+        (
+            RecordUndoRequest(
+                source_ref=Ref.anchor("source"),
+                target_ref=Ref.anchor("target"),
+                before=RecordSnapshot.from_record(before_record),
+                after=RecordSnapshot.from_record(after_record),
+            ),
+        )
+    )
+
+    assert outcomes == (SyncOutcome.UNDONE,)
+    write = target.record_writes[0]
+    assert isinstance(write, UpsertRecord)
+    assert write.key == "entry"
+    assert write.set == {RecordField.PROGRESS: Progress(current=1, total=12)}
+    assert write.clear == frozenset({RecordField.STATUS})
+    history = cast(_History, client._history)
+    assert history.created[-1]["outcome"] == SyncOutcome.UNDONE
 
 
 def test_target_event_refs_map_generic_final_path_index() -> None:

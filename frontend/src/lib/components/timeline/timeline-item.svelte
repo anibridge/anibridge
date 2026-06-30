@@ -6,6 +6,7 @@
         Hash,
         Info,
         LoaderCircle,
+        RotateCcw,
         SquareMinus,
         SquarePlus,
         Trash2,
@@ -36,6 +37,8 @@
         meta: OutcomeMeta;
         displayTitle: (item: HistoryItem) => string | null;
         coverImage: (item: HistoryItem) => string | null;
+        undoHistory?: (item: HistoryItem) => void;
+        canUndoHistory?: (item: HistoryItem) => boolean;
         deleteHistory?: (item: HistoryItem) => void;
         canShowDiff?: (item: HistoryItem) => boolean;
         toggleDiff?: (id: number) => void;
@@ -61,6 +64,8 @@
         meta,
         displayTitle,
         coverImage,
+        undoHistory,
+        canUndoHistory = () => false,
         deleteHistory,
         canShowDiff = () => false,
         toggleDiff = () => undefined,
@@ -364,7 +369,7 @@
                     </div>
                 </div>
                 <div
-                    class="flex shrink-0 flex-col items-stretch gap-1 self-start sm:gap-2">
+                    class="flex shrink-0 flex-col flex-wrap items-stretch gap-1 self-start sm:gap-2">
                     {#if deleteHistory}
                         <button
                             type="button"
@@ -372,6 +377,15 @@
                             class="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-red-600/80 bg-red-700/70 px-2 text-[10px] font-medium text-red-100 hover:bg-red-600/70"
                             title="Delete history entry">
                             <Trash2 class="inline h-4 w-4" />
+                        </button>
+                    {/if}
+                    {#if undoHistory && canUndoHistory(item)}
+                        <button
+                            type="button"
+                            onclick={() => undoHistory?.(item)}
+                            class="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-sky-500/70 bg-sky-700/60 px-2 text-[10px] font-medium text-sky-100 hover:bg-sky-600/70"
+                            title="Undo history entry">
+                            <RotateCcw class="inline h-4 w-4" />
                         </button>
                     {/if}
                 </div>

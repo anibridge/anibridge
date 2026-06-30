@@ -13,7 +13,7 @@ import anibridge.app.core.sched.client as sched_module
 from anibridge.app.config.settings import AnibridgeConfig
 from anibridge.app.core.bridge import BridgeClient
 from anibridge.app.core.sched.client import SchedulerClient
-from anibridge.app.core.sync import SyncRequest, SyncTrigger
+from anibridge.app.core.sync import RecordUndoRequest, SyncRequest, SyncTrigger
 from anibridge.app.exceptions import ProfileNotFoundError
 
 
@@ -134,6 +134,30 @@ def test_coalesced_request_deduplicates_targeted_refs() -> None:
 
     assert request.trigger == SyncTrigger.WEBHOOK
     assert request.source_refs == (Ref.anchor("a"), Ref.anchor("b"), Ref.anchor("c"))
+
+
+def test_coalesced_request_preserves_record_undos() -> None:
+    """Queued undo requests should survive request coalescing."""
+    undo = RecordUndoRequest(
+        source_ref=Ref.anchor("source"),
+        target_ref=Ref.anchor("target"),
+        before=None,
+        after=None,
+    )
+
+    request = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.MANUAL),
+            SyncRequest(
+                trigger=SyncTrigger.MANUAL,
+                record_undos=(undo,),
+                source_refs=(),
+            ),
+        ]
+    )
+
+    assert request.source_refs is None
+    assert request.record_undos == (undo,)
 
 
 @pytest.mark.asyncio

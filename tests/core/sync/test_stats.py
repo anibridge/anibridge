@@ -99,8 +99,8 @@ def test_sync_item_identity_ignores_record_channel_and_display_label() -> None:
     assert stats.count() == 1
 
 
-def test_record_snapshot_stores_history_display_values() -> None:
-    """Snapshots should expose display values, not provider value-object internals."""
+def test_record_snapshot_stores_restorable_values_and_display_view() -> None:
+    """Snapshots should preserve values for restore and expose display data."""
     snapshot = RecordSnapshot.from_record(
         Record(
             ref=Ref.anchor("a"),
@@ -117,14 +117,19 @@ def test_record_snapshot_stores_history_display_values() -> None:
     )
 
     assert snapshot.key == "record-key"
-    assert snapshot.values == {
+    assert snapshot.values_for_display() == {
         "status": "active",
         "progress": 3,
         "rating": 8,
         "started_at": date(2026, 1, 2),
         "notes": "solid",
     }
-    assert msgspec.convert(msgspec.to_builtins(snapshot), type=RecordSnapshot)
+    assert snapshot.values_for_restore()[RecordField.PROGRESS] == Progress(
+        current=3,
+        total=12,
+    )
+    decoded = msgspec.convert(msgspec.to_builtins(snapshot), type=RecordSnapshot)
+    assert decoded.values_for_restore() == snapshot.values_for_restore()
 
 
 def test_sync_stats_tracking_and_coverage() -> None:

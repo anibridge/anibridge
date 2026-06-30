@@ -1,11 +1,31 @@
 import { SvelteSet } from "svelte/reactivity";
 
 import type { DiffEntry } from "$lib/components/timeline/types";
-import type { HistoryItem } from "$lib/types/api";
+import type { HistoryItem, RecordSnapshot, RecordSnapshotValue } from "$lib/types/api";
+
+export function displaySnapshotValues(
+    snapshot: RecordSnapshot | null | undefined,
+): Record<string, unknown> {
+    const values: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(snapshot?.values || {})) {
+        const displayValue = snapshotValueForDisplay(value);
+        if (displayValue !== null && displayValue !== undefined)
+            values[field] = displayValue;
+    }
+    return values;
+}
+
+function snapshotValueForDisplay(value: RecordSnapshotValue): unknown {
+    if (value.state) return value.state.status ?? null;
+    if (value.progress) return value.progress.current ?? null;
+    if (value.rating) return value.rating.value;
+    if ("scalar" in value) return value.scalar;
+    return value.date_value ?? value.datetime_value ?? null;
+}
 
 export function buildDiff(item: HistoryItem): DiffEntry[] {
-    const before = item.before_state?.values || {};
-    const after = item.after_state?.values || {};
+    const before = displaySnapshotValues(item.before_state);
+    const after = displaySnapshotValues(item.after_state);
     const paths = new SvelteSet<string>();
     const visit = (obj: unknown, base = "") => {
         if (!obj || typeof obj !== "object") return;

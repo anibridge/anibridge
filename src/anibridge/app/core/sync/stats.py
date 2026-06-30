@@ -1,7 +1,7 @@
 """Synchronization statistics and planning value objects."""
 
 from collections.abc import Iterable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 import msgspec
@@ -15,6 +15,7 @@ from anibridge.provider.base import (
     RecordField,
     RecordWrite,
     Ref,
+    Scalar,
     ScanItem,
     State,
     Structure,
@@ -33,10 +34,62 @@ __all__ = [
     "PlanDiagnostics",
     "RecordPlan",
     "RecordSnapshot",
+    "RecordSnapshotValue",
     "SyncItem",
     "SyncProgress",
     "SyncStats",
 ]
+
+
+class RecordSnapshotValue(msgspec.Struct, frozen=True, omit_defaults=True):
+    """Restorable record value captured in history."""
+
+    state: State | None = None
+    progress: Progress | None = None
+    rating: Rating | None = None
+    scalar: Scalar | None = None
+    date_value: date | None = None
+    datetime_value: datetime | None = None
+
+    @classmethod
+    def from_value(cls, value: Value) -> RecordSnapshotValue:
+        """Wrap a provider value in a typed snapshot payload."""
+        if isinstance(value, State):
+            return cls(state=value)
+        if isinstance(value, Progress):
+            return cls(progress=value)
+        if isinstance(value, Rating):
+            return cls(rating=value)
+        if isinstance(value, datetime):
+            return cls(datetime_value=value)
+        if isinstance(value, date):
+            return cls(date_value=value)
+        return cls(scalar=value)
+
+    def to_record_value(self) -> Value:
+        """Return the provider value represented by this snapshot value."""
+        for value in (
+            self.state,
+            self.progress,
+            self.rating,
+            self.scalar,
+            self.date_value,
+            self.datetime_value,
+        ):
+            if value is not None:
+                return value
+        raise ValueError("Record snapshot value is empty")
+
+    def as_display_value(self) -> object | None:
+        """Return the compact history display value."""
+        value = self.to_record_value()
+        if isinstance(value, State):
+            return value.status.value if value.status is not None else None
+        if isinstance(value, Progress):
+            return value.current
+        if isinstance(value, Rating):
+            return value.value
+        return value
 
 
 class SyncItem(msgspec.Struct, frozen=True):
@@ -271,23 +324,36 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
     surface: str = ""
     key: str | None = None
     ids: tuple[str, ...] = ()
-    values: Mapping[str, object] = msgspec.field(default_factory=dict)
+    values: Mapping[RecordField, RecordSnapshotValue] = msgspec.field(
+        default_factory=dict
+    )
 
     @classmethod
     def from_record(cls, record: Record) -> RecordSnapshot:
         """Create a snapshot from a provider record."""
-        values: dict[str, object] = {}
-        for field, value in record.values.items():
-            snapshot_value = cls.snapshot_value(value)
-            if snapshot_value is not None:
-                values[field.value] = snapshot_value
         return cls(
             ref=record.ref,
             surface=record.surface,
             key=record.key,
             ids=tuple(item.descriptor for item in record.ids),
-            values=values,
+            values={
+                field: RecordSnapshotValue.from_value(value)
+                for field, value in record.values.items()
+            },
         )
+
+    def values_for_restore(self) -> dict[RecordField, Value]:
+        """Return provider values that can restore the target state."""
+        return {field: value.to_record_value() for field, value in self.values.items()}
+
+    def values_for_display(self) -> dict[str, object]:
+        """Return compact values for diffs and UI display."""
+        values: dict[str, object] = {}
+        for field, value in self.values.items():
+            display_value = value.as_display_value()
+            if display_value is not None:
+                values[field.value] = display_value
+        return values
 
     def diff(
         self,
@@ -296,9 +362,11 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
     ) -> tuple[FieldChange, ...]:
         """Compare this snapshot to another snapshot."""
         changes: list[FieldChange] = []
+        before_values = self.values_for_display()
+        after_values = after.values_for_display()
         for field in fields:
-            before_value = self.values.get(field.value)
-            after_value = after.values.get(field.value)
+            before_value = before_values.get(field.value)
+            after_value = after_values.get(field.value)
             if before_value != after_value:
                 changes.append(FieldChange(field, before_value, after_value))
         return tuple(changes)
@@ -314,17 +382,6 @@ class RecordSnapshot(msgspec.Struct, frozen=True):
         if before is None:
             before = cls(ref=after.ref, surface=after.surface, key=after.key)
         return before.diff(after, fields)
-
-    @staticmethod
-    def snapshot_value(value: Value) -> object | None:
-        """Reduce provider value objects to the history field value AniBridge owns."""
-        if isinstance(value, State):
-            return value.status.value if value.status is not None else None
-        if isinstance(value, Progress):
-            return value.current
-        if isinstance(value, Rating):
-            return value.value
-        return value
 
 
 class RecordPlan(msgspec.Struct):

@@ -12,7 +12,12 @@ from anibridge.utils.cache import lru_cache
 from anibridge.app.config.settings import AnibridgeConfig, ScanMode
 from anibridge.app.core.animap import AnimapClient
 from anibridge.app.core.bridge import BridgeClient
-from anibridge.app.core.sync import SyncRequest, SyncTrigger, dedupe_refs
+from anibridge.app.core.sync import (
+    RecordUndoRequest,
+    SyncRequest,
+    SyncTrigger,
+    dedupe_refs,
+)
 from anibridge.app.exceptions import ProfileNotFoundError, SchedulerUnavailableError
 from anibridge.app.logging import get_logger
 from anibridge.app.utils.cron import (
@@ -510,8 +515,10 @@ class SchedulerClient:
         }
         trigger = max(requests, key=lambda item: trigger_priority[item.trigger]).trigger
         refs = []
+        record_undos: list[RecordUndoRequest] = []
         full_source_scan = False
         for request in requests:
+            record_undos.extend(request.record_undos)
             if request.source_refs is None:
                 # A full manual/periodic scan covers any targeted work already queued.
                 if request.trigger in {SyncTrigger.MANUAL, SyncTrigger.PERIODIC}:
@@ -524,7 +531,11 @@ class SchedulerClient:
             if full_source_scan or (not refs and trigger == SyncTrigger.POLL)
             else dedupe_refs(refs)
         )
-        return SyncRequest(trigger=trigger, source_refs=source_refs)
+        return SyncRequest(
+            trigger=trigger,
+            source_refs=source_refs,
+            record_undos=tuple(record_undos),
+        )
 
     def _fail_queued(self, exc: BaseException) -> None:
         """Fail all pending queued sync requests."""

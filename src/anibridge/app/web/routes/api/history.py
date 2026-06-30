@@ -40,6 +40,18 @@ class RetryResponse(msgspec.Struct):
     ] = True
 
 
+class UndoResponse(msgspec.Struct):
+    """Response model for undo operation."""
+
+    ok: Annotated[
+        bool,
+        msgspec.Meta(
+            description="Whether the undo request was accepted.",
+            examples=[True],
+        ),
+    ] = True
+
+
 @get(path="/{profile:str}")
 async def get_history(
     profile: Annotated[str, PathParameter()],
@@ -84,7 +96,17 @@ async def retry_history(
     return RetryResponse()
 
 
+@post(path="/{profile:str}/{item_id:int}/undo", status_code=200)
+async def undo_history(
+    profile: Annotated[str, PathParameter()],
+    item_id: Annotated[int, PathParameter()],
+) -> UndoResponse:
+    """Undo a synced or deleted history item."""
+    await get_history_service().undo_item(profile, item_id)
+    return UndoResponse()
+
+
 router = Router(
     path="/history",
-    route_handlers=[get_history, delete_history, retry_history],
+    route_handlers=[get_history, delete_history, retry_history, undo_history],
 )

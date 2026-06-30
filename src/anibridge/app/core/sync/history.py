@@ -36,7 +36,7 @@ def to_builtins(value: Any) -> Any:
     if isinstance(value, Ref):
         return ref_to_json(value)
     if isinstance(value, msgspec.Struct):
-        return to_builtins(msgspec.structs.asdict(value))
+        return to_builtins(msgspec.to_builtins(value))
     if is_dataclass(value):
         return to_builtins(asdict(value))
     if isinstance(value, Mapping):
@@ -76,6 +76,7 @@ class SyncHistoryManager:
         error_message: str | None = None,
         info: Mapping[str, str] | None = None,
         ephemeral: bool = False,
+        dedupe_failures: bool = True,
     ) -> None:
         """Persist a sync history record."""
         before_snapshot, after_snapshot = snapshots
@@ -108,7 +109,10 @@ class SyncHistoryManager:
             if outcome == SyncOutcome.SKIPPED:
                 return
 
-            if outcome in (SyncOutcome.NOT_FOUND, SyncOutcome.FAILED):
+            if dedupe_failures and outcome in (
+                SyncOutcome.NOT_FOUND,
+                SyncOutcome.FAILED,
+            ):
                 query = ctx.session.query(SyncHistory).filter(
                     SyncHistory.profile_name == self.profile_name,
                     SyncHistory.source_namespace == self.source_namespace,

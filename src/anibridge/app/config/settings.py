@@ -49,8 +49,6 @@ _SCHEMA_EXTRA_BEHAVIOR_KEY = "x-anibridge-extraBehavior"
 ProviderConfigMap = dict[str, object]
 ProviderNamespaceConfigMap = dict[str, ProviderConfigMap]
 
-# TODO: backwards compatability for list/library keywords?
-
 
 class LogLevel(BaseStrEnum):
     """Enumeration of available logging levels.

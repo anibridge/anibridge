@@ -181,7 +181,7 @@ dev = [
 [[package]]
 name = "anibridge-anilist-provider"
 version = "0.2.2"
-source = { git = "https://github.com/anibridge/anibridge-anilist-provider.git?tag=main#f13e995da53a742380865bda9f91ac2bd4a2a9ef" }
+source = { git = "https://github.com/anibridge/anibridge-anilist-provider.git?tag=main#b5e08e4bc50b9568de358cfa3733974e041ce40d" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -192,7 +192,7 @@ dependencies = [
 [[package]]
 name = "anibridge-emby-provider"
 version = "0.2.3"
-source = { git = "https://github.com/anibridge/anibridge-emby-provider.git?tag=main#d74302529f024bbc22c0954886405b43e2ac7ae3" }
+source = { git = "https://github.com/anibridge/anibridge-emby-provider.git?tag=main#b104f16904afc7a9a4e1ca24887ef93f22c40951" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -203,7 +203,7 @@ dependencies = [
 [[package]]
 name = "anibridge-jellyfin-provider"
 version = "0.2.3"
-source = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git?tag=main#9b0e18a900b514b5f8e30abf90e91acb7293cb87" }
+source = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git?tag=main#2fb14920dcad707a7e95333f79d478640d0190d9" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -225,7 +225,7 @@ dependencies = [
 [[package]]
 name = "anibridge-plex-provider"
 version = "0.2.2"
-source = { git = "https://github.com/anibridge/anibridge-plex-provider.git?tag=main#3995a561b792bcc01025166d565b6d3166453e24" }
+source = { git = "https://github.com/anibridge/anibridge-plex-provider.git?tag=main#8150e47d66f846c7d52cc9cf0407869b81febd1d" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -241,7 +241,7 @@ source = { git = "https://github.com/anibridge/anibridge-provider-base.git?branc
 [[package]]
 name = "anibridge-simkl-provider"
 version = "0.1.0"
-source = { git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main#5806eaf3d52825d3c1b027a8e3727e93a9a9ec45" }
+source = { git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main#63e8c8fa4ead42a1124b50092649a113ec682858" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -252,7 +252,7 @@ dependencies = [
 [[package]]
 name = "anibridge-trakt-provider"
 version = "0.2.0"
-source = { git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main#5a9c7f24f8323bd1fe77c44ffc0e7583ac8e828a" }
+source = { git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main#7e8ce13b9bc4f3c2c02ffe3f7fad3e000bbbc56d" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anibridge-provider-base" },
@@ -493,14 +493,14 @@ wheels = [
 
 [[package]]
 name = "faker"
-version = "40.23.0"
+version = "40.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/d6/fc071e5754815d9058e12ab549cc88e90f8f4ecf4dc33b6b750cdf4b622d/faker-40.23.0.tar.gz", hash = "sha256:f135e563f1f95f19346bb680bc2e43570bc43b7893e566023746f51f32c69dfc", size = 1972975, upload-time = "2026-06-10T20:53:21.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/7b/c62c98764137c949be240ad83f763b6f96cf76055952a3e2835359acc3af/faker-40.27.0.tar.gz", hash = "sha256:f697cf07f461474ad7d511164c21f45317e69f1d531d25f3e0f872b639e346a1", size = 2018361, upload-time = "2026-06-30T18:05:17.775Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/5f/824e6fb3e9d63408151dc9173994fa65bde620a67dde3a59354f5aecd497/faker-40.23.0-py3-none-any.whl", hash = "sha256:775922453e54afa42eaf60eac478fa3a969357f224d09a8022b93e3ad88f18ae", size = 2013046, upload-time = "2026-06-10T20:53:19.226Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/b2/788aae329da3d7e4f08f8e1a82e82243c3376c0f3f49b75ae29eea40b371/faker-40.27.0-py3-none-any.whl", hash = "sha256:6099bd6d7bc79041b46c28e100815e2558952bcf384b76ce6c71c8bdca744256", size = 2057897, upload-time = "2026-06-30T18:05:15.555Z" },
 ]
 
 [[package]]
@@ -1340,7 +1340,7 @@ wheels = [
 
 [[package]]
 name = "textual"
-version = "8.2.7"
+version = "8.2.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markdown-it-py", extra = ["linkify"] },
@@ -1350,9 +1350,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/7a/c519db0aba5024f86e71e9631810bfdd6866ed2c8695bd7fa34b90e7ef59/textual-8.2.7.tar.gz", hash = "sha256:658f568ff81e30ed43890c3e07520390e5cf1b4763822006e060656b0a88f105", size = 1859249, upload-time = "2026-05-19T10:52:49.531Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/21/39a76b01bd5eea82a04baaca7580e105d8c59450df03998345bb2cfb307b/textual-8.2.8.tar.gz", hash = "sha256:3f106a9fbc73e39dd266c9712432087de78a6d644084c7c241d6a25c3169115b", size = 1860502, upload-time = "2026-06-30T06:51:24.495Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a8/f5/c1e18bc0707300a0e90204343abbf7d7acd6fb7ebe03a6d4893b99a234b8/textual-8.2.7-py3-none-any.whl", hash = "sha256:4caaa13a90bc4cf9c6c862c067ccd34fe84e9c161710a2a907a8026313b6bd73", size = 731129, upload-time = "2026-05-19T10:52:51.773Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/be/35261223d9416a0751cdff1c7b4a6f881387218a12d439fe22fefebc8c04/textual-8.2.8-py3-none-any.whl", hash = "sha256:267375fd402dc8d981457212efa71f0e3365fd17bba144ba9bb3ed7563cb374a", size = 731418, upload-time = "2026-06-30T06:51:26.364Z" },
 ]
 
 [[package]]

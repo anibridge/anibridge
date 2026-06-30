@@ -1,4 +1,4 @@
-"""v3 database migration: backup and recreate pin + sync_history.
+"""v3 database migration: recreate pin + sync_history.
 
 Revision ID: 30a4429d6173
 Revises: a1b2c3d4e5f6
@@ -17,27 +17,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-PIN_BACKUP_TABLE = f"pin_{revision}"
-SYNC_HISTORY_BACKUP_TABLE = f"sync_history_{revision}"
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-
-    if inspector.has_table(PIN_BACKUP_TABLE):
-        raise RuntimeError(
-            f"Backup table {PIN_BACKUP_TABLE!r} already exists. "
-            "Refusing to overwrite downgrade backup."
-        )
-
-    if inspector.has_table(SYNC_HISTORY_BACKUP_TABLE):
-        raise RuntimeError(
-            f"Backup table {SYNC_HISTORY_BACKUP_TABLE!r} already exists. "
-            "Refusing to overwrite downgrade backup."
-        )
-
-    op.execute(f'CREATE TABLE "{PIN_BACKUP_TABLE}" AS SELECT * FROM "pin"')
     op.drop_table("pin")
 
     op.create_table(
@@ -75,9 +55,6 @@ def upgrade() -> None:
             unique=False,
         )
 
-    op.execute(
-        f'CREATE TABLE "{SYNC_HISTORY_BACKUP_TABLE}" AS SELECT * FROM "sync_history"'
-    )
     op.drop_table("sync_history")
 
     op.create_table(
@@ -183,9 +160,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-
     with op.batch_alter_table("sync_history") as batch_op:
         for idx_name in (
             "ix_sync_history_profile_timestamp",
@@ -230,53 +204,6 @@ def downgrade() -> None:
         sa.Column("timestamp", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
-
-    if inspector.has_table(SYNC_HISTORY_BACKUP_TABLE):
-        op.execute(
-            f'''
-            INSERT INTO "sync_history" (
-                id,
-                profile_name,
-                library_namespace,
-                library_section_key,
-                library_media_key,
-                list_namespace,
-                list_media_key,
-                media_kind,
-                animap_provider,
-                animap_id,
-                animap_scope,
-                outcome,
-                before_state,
-                after_state,
-                info,
-                error_message,
-                ephemeral,
-                timestamp
-            )
-            SELECT
-                id,
-                profile_name,
-                library_namespace,
-                library_section_key,
-                library_media_key,
-                list_namespace,
-                list_media_key,
-                media_kind,
-                animap_provider,
-                animap_id,
-                animap_scope,
-                outcome,
-                before_state,
-                after_state,
-                info,
-                error_message,
-                ephemeral,
-                timestamp
-            FROM "{SYNC_HISTORY_BACKUP_TABLE}"
-            '''
-        )
-        op.drop_table(SYNC_HISTORY_BACKUP_TABLE)
 
     with op.batch_alter_table("sync_history") as batch_op:
         batch_op.create_index(
@@ -385,10 +312,6 @@ def downgrade() -> None:
             name="uq_pin_profile_list_media",
         ),
     )
-
-    if inspector.has_table(PIN_BACKUP_TABLE):
-        op.execute(f'INSERT INTO "pin" SELECT * FROM "{PIN_BACKUP_TABLE}"')
-        op.drop_table(PIN_BACKUP_TABLE)
 
     with op.batch_alter_table("pin") as batch_op:
         batch_op.create_index(

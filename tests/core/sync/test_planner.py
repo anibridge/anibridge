@@ -9,6 +9,7 @@ import pytest
 from anibridge.provider.base import (
     Capabilities,
     Descriptor,
+    Event,
     ExternalId,
     FieldConstraint,
     FieldSpec,
@@ -19,12 +20,12 @@ from anibridge.provider.base import (
     Progress,
     ProgressConstraint,
     Provider,
+    Query,
     Rating,
     Record,
     RecordField,
     RecordSpec,
     RecordUnit,
-    RecordWriteOp,
     Ref,
     Role,
     ScanItem,
@@ -32,13 +33,15 @@ from anibridge.provider.base import (
     State,
     Status,
     SupportsMapping,
-    SupportsRecordReads,
-    SupportsRecordWrites,
+    SupportsReads,
     SupportsScan,
+    SupportsWrites,
     TemporalConstraint,
     TemporalPrecision,
     TextConstraint,
     UpsertRecord,
+    Write,
+    WriteAction,
     WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
@@ -111,24 +114,24 @@ def _capabilities(
     ),
     delete: bool = False,
 ) -> Capabilities:
-    write_ops = {RecordWriteOp.UPSERT} if writable else set()
+    write_actions = {WriteAction.UPSERT} if writable else set()
     if delete:
-        write_ops.add(RecordWriteOp.DELETE)
+        write_actions.add(WriteAction.DELETE)
     return Capabilities(
         roles=frozenset({role}),
         external_authorities=(
             frozenset({"target"}) if role == Role.TARGET else frozenset()
         ),
-        records=(
+        specs=(
             RecordSpec(
-                surface=_KIND,
+                name=_KIND,
                 fields=_fields(
                     readable=readable,
                     writable=writable,
                     constraints=constraints,
                     statuses=statuses,
                 ),
-                write_ops=frozenset(write_ops),
+                write_actions=frozenset(write_actions),
             ),
         ),
     )
@@ -141,17 +144,20 @@ class _Source(SupportsScan):
         return Page(items=())
 
 
-class _Target(SupportsMapping, SupportsRecordReads, SupportsRecordWrites):
+class _Target(SupportsMapping, SupportsReads, SupportsWrites):
     NAMESPACE = "target"
 
     async def resolve(self, ids: Sequence[ExternalId]) -> Sequence[Match]:
         return tuple(Match(item, Ref.anchor(item.value), 1.0) for item in ids)
 
-    async def fetch_records(self, query) -> Page[Record]:
+    async def fetch(self, query: Query) -> Page[Node | Record | Event]:
         return Page(items=())
 
-    async def write_records(self, writes) -> Sequence[WriteResult]:
-        return tuple(WriteResult(ok=True, op=RecordWriteOp.UPSERT) for _ in writes)
+    async def write(self, writes: Sequence[Write]) -> Sequence[WriteResult]:
+        return tuple(
+            WriteResult(ok=True, resource=write.resource, action=write.action)
+            for write in writes
+        )
 
 
 class _PlainProvider(Provider):
@@ -246,7 +252,7 @@ def test_record_channel_projection_sync_fields_and_deletion() -> None:
         ),
     )
 
-    assert planner.source_record_surfaces() == (_KIND,)
+    assert planner.source_record_kinds() == (_KIND,)
     assert planner.target_record_surface_for(_KIND) == _KIND
     assert planner.target_record_surface_for("unknown") is None
     assert planner.can_delete_record(_KIND) is True
@@ -265,9 +271,9 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
     target_kind = "anime_list"
     source = Capabilities(
         roles=frozenset({Role.SOURCE}),
-        records=(
+        specs=(
             RecordSpec(
-                surface=source_kind,
+                name=source_kind,
                 fields={
                     RecordField.STATUS: FieldSpec(
                         RecordField.STATUS,
@@ -285,9 +291,9 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
     target = Capabilities(
         roles=frozenset({Role.TARGET}),
         external_authorities=frozenset({"target"}),
-        records=(
+        specs=(
             RecordSpec(
-                surface=target_kind,
+                name=target_kind,
                 fields={
                     RecordField.STATUS: FieldSpec(
                         RecordField.STATUS,
@@ -299,13 +305,13 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
                         writable=True,
                     ),
                 },
-                write_ops=frozenset({RecordWriteOp.UPSERT}),
+                write_actions=frozenset({WriteAction.UPSERT}),
             ),
         ),
     )
     planner = _planner(source=source, target=target)
 
-    assert planner.source_record_surfaces() == (source_kind,)
+    assert planner.source_record_kinds() == (source_kind,)
     assert planner.target_record_surface_for(source_kind) == target_kind
     assert planner.sync_fields_for(source_kind, target_kind) == (
         RecordField.STATUS,
@@ -316,9 +322,9 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
 def test_sync_fields_only_use_selected_writable_target_surfaces() -> None:
     source = Capabilities(
         roles=frozenset({Role.SOURCE}),
-        records=(
+        specs=(
             RecordSpec(
-                surface=_KIND,
+                name=_KIND,
                 fields={
                     RecordField.PROGRESS: FieldSpec(
                         RecordField.PROGRESS,
@@ -332,20 +338,20 @@ def test_sync_fields_only_use_selected_writable_target_surfaces() -> None:
     target = Capabilities(
         roles=frozenset({Role.TARGET}),
         external_authorities=frozenset({"target"}),
-        records=(
+        specs=(
             RecordSpec(
-                surface="archive",
+                name="archive",
                 fields={RecordField.NOTES: FieldSpec(RecordField.NOTES, writable=True)},
             ),
             RecordSpec(
-                surface=_KIND,
+                name=_KIND,
                 fields={
                     RecordField.PROGRESS: FieldSpec(
                         RecordField.PROGRESS,
                         writable=True,
                     )
                 },
-                write_ops=frozenset({RecordWriteOp.UPSERT}),
+                write_actions=frozenset({WriteAction.UPSERT}),
             ),
         ),
     )
@@ -740,12 +746,13 @@ def test_progress_equality_status_gates_mapping_edges_and_diff_formatting() -> N
 
 def test_missing_status_spec_rejects_status_translation() -> None:
     target = _capabilities(role=Role.TARGET, readable=True, writable=True)
+    target_record = next(spec for spec in target.specs if isinstance(spec, RecordSpec))
     target = target.__replace__(
-        records=(
-            target.records[0].__replace__(
+        specs=(
+            target_record.__replace__(
                 fields={
                     key: value
-                    for key, value in target.records[0].fields.items()
+                    for key, value in target_record.fields.items()
                     if key != RecordField.STATUS
                 }
             ),

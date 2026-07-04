@@ -19,21 +19,21 @@ from anibridge.provider.base import (
     RecordField,
     RecordSpec,
     RecordUnit,
-    RecordWriteOp,
     Ref,
     Role,
     ScanItem,
     State,
     Status,
     SupportsMapping,
-    SupportsRecordReads,
-    SupportsRecordWrites,
+    SupportsReads,
     SupportsScan,
+    SupportsWrites,
     TemporalConstraint,
     TemporalPrecision,
     TextConstraint,
     UpsertRecord,
     Value,
+    WriteAction,
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
@@ -72,6 +72,11 @@ _TEMPORAL_RECORD_FIELDS = (
 )
 
 
+def _record_specs(capabilities: Capabilities) -> tuple[RecordSpec, ...]:
+    """Return record resource specs from unified provider capabilities."""
+    return tuple(spec for spec in capabilities.specs if isinstance(spec, RecordSpec))
+
+
 class SyncLabel(msgspec.Struct, frozen=True):
     """Formatted source/target labels for one sync log subject."""
 
@@ -106,22 +111,20 @@ class RecordPlanner:
         self.sync_rule_engine = sync_rule_engine
         self.destructive_sync = destructive_sync
 
-        self._source_record_specs = {
-            spec.surface: spec for spec in source_capabilities.records
-        }
-        self._target_record_specs = {
-            spec.surface: spec for spec in target_capabilities.records
-        }
+        source_record_specs = _record_specs(source_capabilities)
+        target_record_specs = _record_specs(target_capabilities)
+        self._source_record_specs = {spec.name: spec for spec in source_record_specs}
+        self._target_record_specs = {spec.name: spec for spec in target_record_specs}
         self._surface_fields: dict[tuple[str, str], tuple[RecordField, ...]] = {}
 
         self._target_surface_for_source: dict[str, str] = {}
         for source_kind, source_spec in self._source_record_specs.items():
             candidates: list[tuple[int, int, str]] = []
-            for index, target_spec in enumerate(target_capabilities.records):
+            for index, target_spec in enumerate(target_record_specs):
                 fields = self._sync_fields_for_specs(source_spec, target_spec)
-                self._surface_fields[(source_kind, target_spec.surface)] = fields
-                if fields and RecordWriteOp.UPSERT in target_spec.write_ops:
-                    candidates.append((len(fields), -index, target_spec.surface))
+                self._surface_fields[(source_kind, target_spec.name)] = fields
+                if fields and WriteAction.UPSERT in target_spec.write_actions:
+                    candidates.append((len(fields), -index, target_spec.name))
             if candidates:
                 self._target_surface_for_source[source_kind] = max(candidates)[2]
         self.sync_fields = tuple(
@@ -145,14 +148,14 @@ class RecordPlanner:
             (Role.TARGET in self.target_capabilities.roles, "target role"),
             (isinstance(source_provider, SupportsScan), "scan"),
             (isinstance(target_provider, SupportsMapping), "mapping resolution"),
-            (isinstance(target_provider, SupportsRecordReads), "record reads"),
-            (isinstance(target_provider, SupportsRecordWrites), "record writes"),
-            (bool(self.source_capabilities.records), "source record surfaces"),
-            (bool(self.target_capabilities.records), "target record surfaces"),
+            (isinstance(target_provider, SupportsReads), "record reads"),
+            (isinstance(target_provider, SupportsWrites), "record writes"),
+            (bool(self._source_record_specs), "source record surfaces"),
+            (bool(self._target_record_specs), "target record surfaces"),
             (
                 any(
-                    RecordWriteOp.UPSERT in spec.write_ops
-                    for spec in self.target_capabilities.records
+                    WriteAction.UPSERT in spec.write_actions
+                    for spec in self._target_record_specs.values()
                 ),
                 "upsert_record",
             ),
@@ -170,14 +173,14 @@ class RecordPlanner:
                 + f"target={target_provider.NAMESPACE!r})"
             )
 
-    def source_record_surfaces(self) -> tuple[str, ...]:
-        """Return source record surfaces that the target can represent."""
+    def source_record_kinds(self) -> tuple[str, ...]:
+        """Return source record kinds that the target can represent."""
         return tuple(self._target_surface_for_source)
 
     def can_delete_record(self, target_kind: str) -> bool:
         """Return whether a target record surface supports deletion."""
         spec = self._target_record_specs.get(target_kind)
-        return spec is not None and RecordWriteOp.DELETE in spec.write_ops
+        return spec is not None and WriteAction.DELETE in spec.write_actions
 
     def target_record_surface_for(self, source_kind: str) -> str | None:
         """Return the best target surface for one source record surface."""

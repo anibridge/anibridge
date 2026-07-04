@@ -6,15 +6,17 @@ from typing import Any
 import pytest
 from anibridge.provider.base import (
     Artwork,
+    Event,
     FacetName,
     Node,
     NodeQuery,
     Page,
     Progress,
+    Query,
     Record,
     RecordField,
     Ref,
-    SupportsNodeReads,
+    SupportsReads,
 )
 
 import anibridge.app.web.services.history_service as history_service_module
@@ -30,13 +32,14 @@ from anibridge.app.web.services.history_service import (
 )
 
 
-class FakeNodeProvider(SupportsNodeReads):
+class FakeNodeProvider(SupportsReads):
     """Provider double that returns node metadata by ref."""
 
     def __init__(self, namespace: str) -> None:
         self.NAMESPACE = namespace
 
-    async def fetch_nodes(self, query: NodeQuery) -> Page[Node]:
+    async def fetch(self, query: Query) -> Page[Node | Record | Event]:
+        assert isinstance(query, NodeQuery)
         return Page(
             items=tuple(
                 Node(

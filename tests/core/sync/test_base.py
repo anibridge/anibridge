@@ -1,20 +1,18 @@
 """Tests for sync client event ref helpers."""
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
 import pytest
 from anibridge.provider.base import (
-    AppendEvent,
     Capabilities,
-    DeleteEvent,
+    Delete,
     Descriptor,
     Event,
     EventKind,
     EventQuery,
     EventSpec,
-    EventWrite,
-    EventWriteOp,
     ExternalId,
     FieldSpec,
     Match,
@@ -22,25 +20,26 @@ from anibridge.provider.base import (
     Page,
     Progress,
     Provider,
+    Query,
     Record,
     RecordField,
     RecordQuery,
     RecordSpec,
-    RecordWrite,
-    RecordWriteOp,
     Ref,
+    ResourceKind,
     Role,
     ScanItem,
     ScanQuery,
     State,
     Status,
-    SupportsEventReads,
-    SupportsEventWrites,
     SupportsMapping,
-    SupportsRecordReads,
-    SupportsRecordWrites,
+    SupportsReads,
     SupportsScan,
+    SupportsWrites,
+    UpsertEvent,
     UpsertRecord,
+    Write,
+    WriteAction,
     WriteError,
     WriteResult,
 )
@@ -105,13 +104,13 @@ def _record_fields(*, readable: bool, writable: bool) -> dict[RecordField, Field
 
 
 def _record_spec(*, readable: bool, writable: bool, delete: bool = False) -> RecordSpec:
-    write_ops = {RecordWriteOp.UPSERT} if writable else set()
+    write_actions = {WriteAction.UPSERT} if writable else set()
     if delete:
-        write_ops.add(RecordWriteOp.DELETE)
+        write_actions.add(WriteAction.DELETE)
     return RecordSpec(
-        surface=_RECORD_KIND,
+        name=_RECORD_KIND,
         fields=_record_fields(readable=readable, writable=writable),
-        write_ops=frozenset(write_ops),
+        write_actions=frozenset(write_actions),
     )
 
 
@@ -123,14 +122,14 @@ def _capabilities(
 ) -> Capabilities:
     return Capabilities(
         roles=frozenset({role}),
-        records=(
+        specs=(
             _record_spec(
                 readable=role == Role.SOURCE,
                 writable=role == Role.TARGET,
                 delete=delete,
             ),
+            *events,
         ),
-        events=events,
         external_authorities=(
             frozenset({"target"}) if role == Role.TARGET else frozenset()
         ),
@@ -163,7 +162,7 @@ class _Animap:
         return ()
 
 
-class _SourceProvider(SupportsScan, SupportsEventReads):
+class _SourceProvider(SupportsScan, SupportsReads):
     NAMESPACE = "source"
     DISPLAY_NAME = "Source"
 
@@ -176,7 +175,7 @@ class _SourceProvider(SupportsScan, SupportsEventReads):
     def capabilities(self) -> Capabilities:
         return _capabilities(
             role=Role.SOURCE,
-            events=(EventSpec(Descriptor(_SOURCE_EVENT, EventKind.SCROBBLE)),),
+            events=(EventSpec(kind=Descriptor(_SOURCE_EVENT, EventKind.SCROBBLE)),),
         )
 
     async def clear_cache(self) -> None:
@@ -186,17 +185,19 @@ class _SourceProvider(SupportsScan, SupportsEventReads):
         self.scan_queries.append(query)
         return self.pages.pop(0) if self.pages else Page(items=())
 
-    async def fetch_events(self, query: EventQuery) -> Page[Event]:
-        key = (query.refs[0], query.native_event_kinds[0], query.cursor)
-        return self.events.get(key, Page(items=()))
+    async def fetch(self, query: Query) -> Page[Node | Record | Event]:
+        assert isinstance(query, EventQuery)
+        key = (query.refs[0], query.native_kinds[0], query.cursor)
+        return cast(
+            Page[Node | Record | Event],
+            self.events.get(key, Page(items=())),
+        )
 
 
 class _TargetProvider(
     SupportsMapping,
-    SupportsRecordReads,
-    SupportsRecordWrites,
-    SupportsEventReads,
-    SupportsEventWrites,
+    SupportsReads,
+    SupportsWrites,
 ):
     NAMESPACE = "target"
     DISPLAY_NAME = "Target"
@@ -212,17 +213,17 @@ class _TargetProvider(
         self.resolve_matches = resolve_matches
         self.event_specs = event_specs or (
             EventSpec(
-                Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                write_ops=frozenset({EventWriteOp.APPEND}),
+                kind=Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                write_actions=frozenset({WriteAction.UPSERT}),
             ),
         )
         self.records: dict[tuple[object, str], Record] = {}
         self.record_queries: list[RecordQuery] = []
-        self.record_write_batches: list[tuple[RecordWrite, ...]] = []
-        self.record_writes: list[RecordWrite] = []
+        self.record_write_batches: list[tuple[Write, ...]] = []
+        self.record_writes: list[Write] = []
         self.events: dict[tuple[Ref, str, str | None], Page[Event]] = {}
         self.event_queries: list[EventQuery] = []
-        self.event_writes: list[EventWrite] = []
+        self.event_writes: list[Write] = []
         self.cleared = False
 
     def capabilities(self) -> Capabilities:
@@ -240,41 +241,38 @@ class _TargetProvider(
             return ()
         return tuple(Match(item, Ref.anchor(item.value), 1.0) for item in ids)
 
-    async def fetch_records(self, query: RecordQuery) -> Page[Record]:
-        self.record_queries.append(query)
-        records = []
-        for ref in query.refs:
-            for kind in query.record_surfaces:
-                record = self.records.get((ref_to_key(ref), kind))
-                if record is not None:
-                    records.append(record)
-        return Page(items=tuple(records))
+    async def fetch(self, query: Query) -> Page[Node | Record | Event]:
+        if isinstance(query, RecordQuery):
+            self.record_queries.append(query)
+            records = []
+            for ref in query.refs:
+                for kind in query.native_kinds:
+                    record = self.records.get((ref_to_key(ref), kind))
+                    if record is not None:
+                        records.append(record)
+            return Page(items=tuple(records))
 
-    async def write_records(self, writes) -> tuple[WriteResult, ...]:
-        self.record_write_batches.append(tuple(writes))
-        self.record_writes.extend(writes)
-        return tuple(WriteResult(ok=True, op=RecordWriteOp.UPSERT) for _ in writes)
-
-    async def fetch_events(self, query: EventQuery) -> Page[Event]:
+        assert isinstance(query, EventQuery)
         self.event_queries.append(query)
         items: list[Event] = []
         for ref in query.refs:
-            for kind in query.native_event_kinds:
+            for kind in query.native_kinds:
                 page = self.events.get((ref, kind, query.cursor), Page(items=()))
                 items.extend(page.items)
         return Page(items=tuple(items))
 
-    async def write_events(self, writes) -> tuple[WriteResult, ...]:
-        self.event_writes.extend(writes)
+    async def write(self, writes: Sequence[Write]) -> tuple[WriteResult, ...]:
+        self.record_write_batches.append(
+            tuple(write for write in writes if write.resource is ResourceKind.RECORD)
+        )
+        self.record_writes.extend(
+            write for write in writes if write.resource is ResourceKind.RECORD
+        )
+        self.event_writes.extend(
+            write for write in writes if write.resource is ResourceKind.EVENT
+        )
         return tuple(
-            WriteResult(
-                ok=True,
-                op=(
-                    EventWriteOp.DELETE
-                    if isinstance(write, DeleteEvent)
-                    else EventWriteOp.APPEND
-                ),
-            )
+            WriteResult(ok=True, resource=write.resource, action=write.action)
             for write in writes
         )
 
@@ -460,7 +458,7 @@ def test_validate_events_rejects_mismatched_protocols() -> None:
             provider=cast(Provider, Plain()),
             capabilities=_capabilities(
                 role=Role.SOURCE,
-                events=(EventSpec(Descriptor(_SOURCE_EVENT, EventKind.SCROBBLE)),),
+                events=(EventSpec(kind=Descriptor(_SOURCE_EVENT, EventKind.SCROBBLE)),),
             ),
         )
 
@@ -471,8 +469,8 @@ def test_validate_events_rejects_mismatched_protocols() -> None:
                 role=Role.TARGET,
                 events=(
                     EventSpec(
-                        Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                        write_ops=frozenset({EventWriteOp.APPEND}),
+                        kind=Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                        write_actions=frozenset({WriteAction.UPSERT}),
                     ),
                 ),
             ),
@@ -549,7 +547,7 @@ async def test_process_page_writes_records_events_and_tracks_outcomes() -> None:
     assert isinstance(target.record_writes[0], UpsertRecord)
     assert target.record_writes[0].set[RecordField.PROGRESS] == Progress(current=1)
     assert target.event_writes == [
-        AppendEvent(
+        UpsertEvent(
             ref=Ref.at("target", ("part", 1)),
             kind=_TARGET_EVENT,
             at=event_at,
@@ -594,7 +592,8 @@ async def test_process_page_batches_record_writes_per_page() -> None:
     await client.process_page(items)
 
     assert [len(batch) for batch in target.record_write_batches] == [2]
-    assert [write.ref for write in target.record_writes] == [
+    record_writes = [cast(UpsertRecord, write) for write in target.record_writes]
+    assert [write.ref for write in record_writes] == [
         Ref.anchor("target-a"),
         Ref.anchor("target-b"),
     ]
@@ -607,12 +606,12 @@ async def test_process_page_writes_all_matching_target_event_channels() -> None:
     target = _TargetProvider(
         event_specs=(
             EventSpec(
-                Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                write_ops=frozenset({EventWriteOp.APPEND}),
+                kind=Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                write_actions=frozenset({WriteAction.UPSERT}),
             ),
             EventSpec(
-                Descriptor("scrobbled_alt", EventKind.SCROBBLE),
-                write_ops=frozenset({EventWriteOp.APPEND}),
+                kind=Descriptor("scrobbled_alt", EventKind.SCROBBLE),
+                write_actions=frozenset({WriteAction.UPSERT}),
             ),
         )
     )
@@ -642,9 +641,8 @@ async def test_process_page_writes_all_matching_target_event_channels() -> None:
 
     await client.process_page((item,))
 
-    assert [
-        (write.ref, write.kind, write.dedupe_key) for write in target.event_writes
-    ] == [
+    event_writes = [cast(UpsertEvent, write) for write in target.event_writes]
+    assert [(write.ref, write.kind, write.dedupe_key) for write in event_writes] == [
         (Ref.anchor("target"), _TARGET_EVENT, "event-1"),
         (Ref.anchor("target"), "scrobbled_alt", "event-1"),
     ]
@@ -847,12 +845,13 @@ async def test_event_sync_skips_existing_and_validates_write_results() -> None:
     assert target.event_writes == []
 
     class BadTarget(_TargetProvider):
-        async def write_events(self, writes):
+        async def write(self, writes):
             return ()
 
     with pytest.raises(ValueError, match="write results"):
-        await _client(target=BadTarget())._write_events(
-            [AppendEvent(ref=Ref.anchor("target"), kind=_TARGET_EVENT, at=event_at)]
+        await _client(target=BadTarget())._write(
+            [UpsertEvent(ref=Ref.anchor("target"), kind=_TARGET_EVENT, at=event_at)],
+            resource_label="event",
         )
 
 
@@ -890,7 +889,7 @@ async def test_event_sync_uses_dedupe_key_before_timestamp() -> None:
         == SyncOutcome.SYNCED
     )
     assert target.event_writes == [
-        AppendEvent(
+        UpsertEvent(
             ref=Ref.anchor("target"),
             kind=_TARGET_EVENT,
             at=event_at,
@@ -905,8 +904,8 @@ async def test_destructive_event_sync_deletes_extra_target_events() -> None:
     target = _TargetProvider(
         event_specs=(
             EventSpec(
-                Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
-                write_ops=frozenset({EventWriteOp.APPEND, EventWriteOp.DELETE}),
+                kind=Descriptor(_TARGET_EVENT, EventKind.SCROBBLE),
+                write_actions=frozenset({WriteAction.UPSERT, WriteAction.DELETE}),
             ),
         )
     )
@@ -942,15 +941,16 @@ async def test_destructive_event_sync_deletes_extra_target_events() -> None:
         == SyncOutcome.SYNCED
     )
     assert target.event_writes == [
-        AppendEvent(
+        UpsertEvent(
             ref=Ref.anchor("target"),
             kind=_TARGET_EVENT,
             at=source_at,
             dedupe_key="new-event",
         ),
-        DeleteEvent(
+        Delete(
+            resource=ResourceKind.EVENT,
             ref=Ref.anchor("target"),
-            kind=_TARGET_EVENT,
+            name=_TARGET_EVENT,
             at=target_at,
             key="old-key",
             dedupe_key="old-event",
@@ -1006,19 +1006,21 @@ async def test_fetch_target_records_batch_and_write_record_errors() -> None:
     )
 
     class FailingTarget(_TargetProvider):
-        async def write_records(self, writes):
+        async def write(self, writes):
             return (
                 WriteResult(
                     ok=False,
-                    op=RecordWriteOp.UPSERT,
+                    resource=ResourceKind.RECORD,
+                    action=WriteAction.UPSERT,
                     code=WriteError.INVALID,
                     error="nope",
                 ),
             )
 
     with pytest.raises(RuntimeError, match="nope"):
-        await _client(target=FailingTarget())._write_records(
-            [UpsertRecord(ref=Ref.anchor("target"), surface=_RECORD_KIND)]
+        await _client(target=FailingTarget())._write(
+            [UpsertRecord(ref=Ref.anchor("target"), surface=_RECORD_KIND)],
+            resource_label="record",
         )
 
 
@@ -1052,7 +1054,7 @@ def test_labels_and_best_outcome_helpers() -> None:
 @pytest.mark.asyncio
 async def test_apply_update_reconciles_write_error_and_records_failure() -> None:
     class RaisingTarget(_TargetProvider):
-        async def write_records(self, writes):
+        async def write(self, writes):
             raise RuntimeError("after-write failure")
 
     item = ScanItem(node=Node(ref=Ref.anchor("source"), kind="item"))
@@ -1130,7 +1132,7 @@ async def test_delete_record_skips_without_capability_and_writes_delete() -> Non
         label=label,
     )
     assert deleted == SyncOutcome.DELETED
-    assert target.record_writes[0].key == "entry"
+    assert cast(Delete, target.record_writes[0]).key == "entry"
     history = cast(_History, client._history)
     assert history.created[-1]["outcome"] == SyncOutcome.DELETED
 
@@ -1178,11 +1180,12 @@ async def test_write_event_failure_and_non_supporting_fetches() -> None:
     event_at = datetime(2026, 1, 1, tzinfo=UTC)
 
     class FailingEventTarget(_TargetProvider):
-        async def write_events(self, writes):
+        async def write(self, writes):
             return (
                 WriteResult(
                     ok=False,
-                    op=EventWriteOp.APPEND,
+                    resource=ResourceKind.EVENT,
+                    action=WriteAction.UPSERT,
                     code=WriteError.INVALID,
                     error="bad event",
                 ),
@@ -1190,11 +1193,12 @@ async def test_write_event_failure_and_non_supporting_fetches() -> None:
 
     client = _client(target=FailingEventTarget())
     with pytest.raises(RuntimeError, match="bad event"):
-        await client._write_events(
-            [AppendEvent(ref=Ref.anchor("target"), kind=_TARGET_EVENT, at=event_at)]
+        await client._write(
+            [UpsertEvent(ref=Ref.anchor("target"), kind=_TARGET_EVENT, at=event_at)],
+            resource_label="event",
         )
 
-    class NoReadTarget(SupportsMapping, SupportsRecordReads, SupportsRecordWrites):
+    class NoReadTarget(SupportsMapping, SupportsWrites):
         NAMESPACE = "target"
 
         def capabilities(self) -> Capabilities:
@@ -1203,10 +1207,7 @@ async def test_write_event_failure_and_non_supporting_fetches() -> None:
         async def resolve(self, ids):
             return ()
 
-        async def fetch_records(self, query):
-            return Page(items=())
-
-        async def write_records(self, writes):
+        async def write(self, writes):
             return ()
 
     no_read = object.__new__(SyncClient)
@@ -1299,7 +1300,7 @@ async def test_process_page_records_prepare_apply_and_event_failures() -> None:
 
     client._resolve_work_items = cast(Any, resolve_items)
     client._prepare_record_update = cast(Any, prepare_update)
-    client._write_record_batch = cast(Any, fail_apply)
+    client._write_batch = cast(Any, fail_apply)
     await client.process_page((work.item,))
     assert client.sync_stats.failed == 1
 

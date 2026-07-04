@@ -10,15 +10,11 @@ from typing import cast
 
 import msgspec
 from anibridge.provider.base import (
-    AppendEvent,
     Capabilities,
-    DeleteEvent,
-    DeleteRecord,
+    Delete,
     Event,
     EventQuery,
     EventSpec,
-    EventWrite,
-    EventWriteOp,
     ExternalId,
     FacetName,
     Node,
@@ -29,18 +25,19 @@ from anibridge.provider.base import (
     Record,
     RecordField,
     RecordQuery,
-    RecordWrite,
     Ref,
+    ResourceKind,
     Role,
     ScanItem,
     ScanQuery,
     Step,
-    SupportsEventReads,
-    SupportsEventWrites,
-    SupportsRecordReads,
-    SupportsRecordWrites,
+    SupportsReads,
     SupportsScan,
+    SupportsWrites,
+    UpsertEvent,
     UpsertRecord,
+    Write,
+    WriteAction,
     WriteResult,
 )
 from anibridge.utils.mappings import AnibridgeMapping
@@ -99,6 +96,11 @@ _STATUS_ORDER: Mapping[object, int] = {
 }
 
 
+def _event_specs(capabilities: Capabilities) -> tuple[EventSpec, ...]:
+    """Return event resource specs from unified provider capabilities."""
+    return tuple(spec for spec in capabilities.specs if isinstance(spec, EventSpec))
+
+
 class _TargetWork(msgspec.Struct, frozen=True):
     """One source record resolved to one target record location."""
 
@@ -148,7 +150,7 @@ class SyncClient:
         self._source_capabilities = source_provider.capabilities()
         self._target_capabilities = target_provider.capabilities()
         self._target_event_specs = {
-            spec.kind.native: spec for spec in self._target_capabilities.events
+            spec.kind.native: spec for spec in _event_specs(self._target_capabilities)
         }
         self._validate_events(
             provider=self.source_provider, capabilities=self._source_capabilities
@@ -192,12 +194,13 @@ class SyncClient:
         capabilities: Capabilities,
     ) -> None:
         """Fail fast when event specs and event protocols disagree."""
-        if not capabilities.events:
+        event_specs = _event_specs(capabilities)
+        if not event_specs:
             return
 
         if Role.SOURCE in capabilities.roles and not isinstance(
             provider,
-            SupportsEventReads,
+            SupportsReads,
         ):
             raise TypeError(
                 f"Provider {provider.NAMESPACE!r} advertises source event channels "
@@ -206,21 +209,19 @@ class SyncClient:
 
         writable_events = tuple(
             spec
-            for spec in capabilities.events
-            if spec.write_ops.intersection({EventWriteOp.APPEND, EventWriteOp.DELETE})
+            for spec in event_specs
+            if spec.write_actions.intersection({WriteAction.UPSERT, WriteAction.DELETE})
         )
-        if writable_events and not isinstance(provider, SupportsEventWrites):
+        if writable_events and not isinstance(provider, SupportsWrites):
             raise TypeError(
                 f"Provider {provider.NAMESPACE!r} advertises writable event "
                 "channels but does not implement event writes"
             )
 
         deletable_events = tuple(
-            spec
-            for spec in capabilities.events
-            if EventWriteOp.DELETE in spec.write_ops
+            spec for spec in event_specs if WriteAction.DELETE in spec.write_actions
         )
-        if deletable_events and not isinstance(provider, SupportsEventReads):
+        if deletable_events and not isinstance(provider, SupportsReads):
             raise TypeError(
                 f"Provider {provider.NAMESPACE!r} advertises deletable event "
                 "channels but does not implement event reads"
@@ -228,11 +229,11 @@ class SyncClient:
 
         readable_events = tuple(
             spec
-            for spec in capabilities.events
-            if EventWriteOp.APPEND not in spec.write_ops
-            or EventWriteOp.DELETE in spec.write_ops
+            for spec in event_specs
+            if WriteAction.UPSERT not in spec.write_actions
+            or WriteAction.DELETE in spec.write_actions
         )
-        if readable_events and not isinstance(provider, SupportsEventReads):
+        if readable_events and not isinstance(provider, SupportsReads):
             raise TypeError(
                 f"Provider {provider.NAMESPACE!r} advertises readable event channels "
                 "but does not implement event reads"
@@ -257,7 +258,7 @@ class SyncClient:
             for facet in (FacetName.IDS, FacetName.STRUCTURE)
             if facet in self._source_capabilities.facets
         )
-        record_surfaces = frozenset(self._planner.source_record_surfaces())
+        record_kinds = frozenset(self._planner.source_record_kinds())
         source_provider = cast(SupportsScan, self.source_provider)
 
         async def fetch_page(cursor: str | None):
@@ -266,7 +267,7 @@ class SyncClient:
                     sources=source_refs,
                     flags=frozenset({NodeFlag.TRACKABLE}),
                     facets=facets,
-                    record_surfaces=record_surfaces,
+                    record_kinds=record_kinds,
                     record_fields=frozenset(self._sync_fields),
                     include_records=True,
                     require_user_data=scan.require_user_data,
@@ -736,7 +737,7 @@ class SyncClient:
             return await self._record_update_dry_run(update)
 
         try:
-            await self._write_records([plan.write])
+            await self._write([plan.write], resource_label="record")
             return await self._record_update_success(update)
         except Exception as exc:
             outcome = await self._record_update_write_error(update, exc)
@@ -757,8 +758,9 @@ class SyncClient:
             )
 
         try:
-            results = await self._write_record_batch(
-                tuple(update.plan.write for update in updates)
+            results = await self._write_batch(
+                tuple(update.plan.write for update in updates),
+                resource_label="record",
             )
         except Exception as exc:
             return tuple(
@@ -802,7 +804,7 @@ class SyncClient:
                     request.target_ref,
                 )
             else:
-                await self._write_records([write])
+                await self._write([write], resource_label="record")
             await self._history.create_sync_history(
                 source_node=Node(ref=request.source_ref, kind="history_undo"),
                 source_record=None,
@@ -837,7 +839,7 @@ class SyncClient:
             )
             return SyncOutcome.FAILED
 
-    def _undo_record_write(self, request: RecordUndoRequest) -> RecordWrite:
+    def _undo_record_write(self, request: RecordUndoRequest) -> Write:
         """Build the provider write that restores a history snapshot."""
         before = request.before
         after = request.after
@@ -848,7 +850,11 @@ class SyncClient:
                 raise TypeError(
                     "Target provider does not support deleting created records"
                 )
-            return DeleteRecord(ref=request.target_ref, surface=after.surface)
+            return Delete(
+                resource=ResourceKind.RECORD,
+                ref=request.target_ref,
+                name=after.surface,
+            )
 
         set_values = before.values_for_restore()
         before_fields = set(set_values)
@@ -958,7 +964,7 @@ class SyncClient:
         """Return whether the current target state matches a planned upsert."""
         if plan.target_ref is None or plan.after is None:
             return False
-        if not isinstance(self.target_provider, SupportsRecordReads):
+        if not isinstance(self.target_provider, SupportsReads):
             return False
         try:
             actual = await self._fetch_target_record(
@@ -1025,12 +1031,13 @@ class SyncClient:
             )
             return SyncOutcome.DELETED
 
-        write = DeleteRecord(
+        write = Delete(
+            resource=ResourceKind.RECORD,
             ref=target_ref,
-            surface=target_kind,
+            name=target_kind,
             key=target_record.key if target_record else None,
         )
-        await self._write_records([write])
+        await self._write([write], resource_label="record")
         await self._history.create_sync_history(
             source_node=item.node,
             source_record=source_record,
@@ -1045,12 +1052,12 @@ class SyncClient:
         """Append missing source events to the resolved target ref."""
         if not self._event_pairs:
             return SyncOutcome.SKIPPED
-        if not isinstance(self.source_provider, SupportsEventReads):
+        if not isinstance(self.source_provider, SupportsReads):
             return SyncOutcome.SKIPPED
-        if not isinstance(self.target_provider, SupportsEventWrites):
+        if not isinstance(self.target_provider, SupportsWrites):
             return SyncOutcome.SKIPPED
 
-        writes: list[EventWrite] = []
+        writes: list[Write] = []
         append_count = 0
         delete_count = 0
         for source_kind, target_kind in self._event_pairs:
@@ -1102,7 +1109,7 @@ class SyncClient:
                 if not can_append or identity in existing_events:
                     continue
                 writes.append(
-                    AppendEvent(
+                    UpsertEvent(
                         ref=target_ref,
                         kind=target_kind,
                         at=event.at,
@@ -1140,7 +1147,7 @@ class SyncClient:
             )
             return SyncOutcome.SYNCED
 
-        await self._write_events(writes)
+        await self._write(writes, resource_label="event")
         log.success(
             "[%s] Synced %s activity event changes (%s appended, %s deleted) for %s %s",
             self.profile_name,
@@ -1154,17 +1161,20 @@ class SyncClient:
 
     async def _fetch_source_events(self, ref: Ref, kind: str) -> tuple[Event, ...]:
         """Fetch source events for one source ref and event channel."""
-        if not isinstance(self.source_provider, SupportsEventReads):
+        if not isinstance(self.source_provider, SupportsReads):
             return ()
         events: list[Event] = []
         cursor: str | None = None
         while True:
-            page = await self.source_provider.fetch_events(
-                EventQuery(
-                    refs=(ref,),
-                    native_event_kinds=(kind,),
-                    cursor=cursor,
-                )
+            page = cast(
+                Page[Event],
+                await self.source_provider.fetch(
+                    EventQuery(
+                        refs=(ref,),
+                        native_kinds=(kind,),
+                        cursor=cursor,
+                    )
+                ),
             )
             events.extend(page.items)
             if page.cursor is None:
@@ -1177,18 +1187,21 @@ class SyncClient:
         kind: str,
     ) -> tuple[Event, ...]:
         """Fetch target events when the target can report existing activity."""
-        if not refs or not isinstance(self.target_provider, SupportsEventReads):
+        if not refs or not isinstance(self.target_provider, SupportsReads):
             return ()
         deduped = tuple({ref_to_key(ref): ref for ref in refs}.values())
         events: list[Event] = []
         cursor: str | None = None
         while True:
-            page = await self.target_provider.fetch_events(
-                EventQuery(
-                    refs=deduped,
-                    native_event_kinds=(kind,),
-                    cursor=cursor,
-                )
+            page = cast(
+                Page[Event],
+                await self.target_provider.fetch(
+                    EventQuery(
+                        refs=deduped,
+                        native_kinds=(kind,),
+                        cursor=cursor,
+                    )
+                ),
             )
             events.extend(page.items)
             if page.cursor is None:
@@ -1260,23 +1273,23 @@ class SyncClient:
 
     def _event_sync_pairs(self) -> tuple[tuple[str, str], ...]:
         """Return source event channel to target event channel mappings."""
-        target_can_read_events = isinstance(self.target_provider, SupportsEventReads)
+        target_can_read_events = isinstance(self.target_provider, SupportsReads)
         target_events = tuple(
             spec
-            for spec in self._target_capabilities.events
+            for spec in _event_specs(self._target_capabilities)
             if spec.kind.semantic is not None
             and (
                 (
-                    EventWriteOp.APPEND in spec.write_ops
-                    and (target_can_read_events or spec.idempotent_appends)
+                    WriteAction.UPSERT in spec.write_actions
+                    and (target_can_read_events or spec.idempotent_upserts)
                 )
-                or (EventWriteOp.DELETE in spec.write_ops and target_can_read_events)
+                or (WriteAction.DELETE in spec.write_actions and target_can_read_events)
             )
         )
         return tuple(
             dict.fromkeys(
                 (source.kind.native, target.kind.native)
-                for source in self._source_capabilities.events
+                for source in _event_specs(self._source_capabilities)
                 if source.kind.semantic is not None
                 for target in target_events
                 if source.kind.semantic == target.kind.semantic
@@ -1286,12 +1299,12 @@ class SyncClient:
     def _can_append_event(self, target_kind: str) -> bool:
         """Return whether a target event channel supports appending events."""
         spec = self._target_event_spec(target_kind)
-        return spec is not None and EventWriteOp.APPEND in spec.write_ops
+        return spec is not None and WriteAction.UPSERT in spec.write_actions
 
     def _can_delete_event(self, target_kind: str) -> bool:
         """Return whether a target event channel supports deleting events."""
         spec = self._target_event_spec(target_kind)
-        return spec is not None and EventWriteOp.DELETE in spec.write_ops
+        return spec is not None and WriteAction.DELETE in spec.write_actions
 
     def _target_event_spec(self, target_kind: str) -> EventSpec | None:
         """Return a target event channel spec by native kind."""
@@ -1310,33 +1323,16 @@ class SyncClient:
         return (ref_to_key(ref), kind, "at", at)
 
     @staticmethod
-    def _delete_event_for(event: Event) -> DeleteEvent:
+    def _delete_event_for(event: Event) -> Delete:
         """Build a delete write for an existing target event."""
-        return DeleteEvent(
+        return Delete(
+            resource=ResourceKind.EVENT,
             ref=event.ref,
-            kind=event.kind,
+            name=event.kind,
             at=event.at,
             key=event.key,
             dedupe_key=event.dedupe_key,
         )
-
-    async def _write_events(self, writes: Sequence[EventWrite]):
-        """Write events and raise when any write fails."""
-        if not isinstance(self.target_provider, SupportsEventWrites):
-            raise TypeError(
-                f"Target provider '{self.target_provider.NAMESPACE}' must support "
-                "event writes"
-            )
-        results = await self.target_provider.write_events(writes)
-        if len(results) != len(writes):
-            raise ValueError(
-                f"Target provider '{self.target_provider.NAMESPACE}' returned "
-                f"{len(results)} write results for {len(writes)} writes"
-            )
-        for result in results:
-            if not result.ok:
-                raise RuntimeError(result.error or result.code or "event write failed")
-        return results
 
     @staticmethod
     def _relative_event_path(ref: Ref, root_ref: Ref) -> tuple[Step, ...]:
@@ -1356,27 +1352,34 @@ class SyncClient:
         except TypeError, ValueError:
             return None
 
-    async def _write_records(self, writes: Sequence[RecordWrite]):
-        """Write records and raise when any write fails."""
-        results = await self._write_record_batch(writes)
+    async def _write(
+        self,
+        writes: Sequence[Write],
+        *,
+        resource_label: str,
+    ) -> Sequence[WriteResult]:
+        """Write resources and raise when any write fails."""
+        results = await self._write_batch(writes, resource_label=resource_label)
         for result in results:
             if not result.ok:
-                raise self._write_result_exception(result)
+                raise self._write_result_exception(result, resource_label)
         return results
 
-    async def _write_record_batch(
+    async def _write_batch(
         self,
-        writes: Sequence[RecordWrite],
+        writes: Sequence[Write],
+        *,
+        resource_label: str,
     ) -> Sequence[WriteResult]:
-        """Write records and return positional provider results."""
+        """Write resources and return positional provider results."""
         if not writes:
             return ()
-        if not isinstance(self.target_provider, SupportsRecordWrites):
+        if not isinstance(self.target_provider, SupportsWrites):
             raise TypeError(
                 f"Target provider '{self.target_provider.NAMESPACE}' must support "
-                "record writes"
+                f"{resource_label} writes"
             )
-        results = await self.target_provider.write_records(writes)
+        results = await self.target_provider.write(writes)
         if len(results) != len(writes):
             raise ValueError(
                 f"Target provider '{self.target_provider.NAMESPACE}' returned "
@@ -1385,22 +1388,30 @@ class SyncClient:
         return results
 
     @staticmethod
-    def _write_result_exception(result: WriteResult) -> RuntimeError:
+    def _write_result_exception(
+        result: WriteResult,
+        resource_label: str = "write",
+    ) -> RuntimeError:
         """Build an exception from a failed write result."""
-        return RuntimeError(result.error or result.code or "record write failed")
+        return RuntimeError(
+            result.error or result.code or f"{resource_label} write failed"
+        )
 
     async def _fetch_target_record(self, target_ref, target_kind: str) -> Record | None:
         """Fetch the existing target record for planning."""
-        if not isinstance(self.target_provider, SupportsRecordReads):
+        if not isinstance(self.target_provider, SupportsReads):
             return None
         fields = self._target_fields_for(target_kind)
-        page = await self.target_provider.fetch_records(
-            RecordQuery(
-                refs=(target_ref,),
-                record_surfaces=(target_kind,),
-                fields=fields,
-                limit=1,
-            )
+        page = cast(
+            Page[Record],
+            await self.target_provider.fetch(
+                RecordQuery(
+                    refs=(target_ref,),
+                    native_kinds=(target_kind,),
+                    fields=fields,
+                    limit=1,
+                )
+            ),
         )
         return page.items[0] if page.items else None
 
@@ -1409,7 +1420,7 @@ class SyncClient:
         requests: Iterable[tuple[Ref, str]],
     ) -> dict[TargetRecordKey, Record]:
         """Fetch existing target records grouped by record surface."""
-        if not isinstance(self.target_provider, SupportsRecordReads):
+        if not isinstance(self.target_provider, SupportsReads):
             return {}
 
         grouped: dict[str, dict[RefKey, Ref]] = {}
@@ -1425,13 +1436,16 @@ class SyncClient:
             if not refs:
                 continue
             fields = self._target_fields_for(target_kind)
-            page = await self.target_provider.fetch_records(
-                RecordQuery(
-                    refs=refs,
-                    record_surfaces=(target_kind,),
-                    fields=fields,
-                    limit=len(refs),
-                )
+            page = cast(
+                Page[Record],
+                await self.target_provider.fetch(
+                    RecordQuery(
+                        refs=refs,
+                        native_kinds=(target_kind,),
+                        fields=fields,
+                        limit=len(refs),
+                    )
+                ),
             )
             for record in page.items:
                 record_key = ref_to_key(record.ref)
@@ -1442,7 +1456,7 @@ class SyncClient:
     def _target_fields_for(self, target_kind: str) -> frozenset[RecordField]:
         """Return the source fields that can be synced into one target surface."""
         fields: set[RecordField] = set()
-        for source_kind in self._planner.source_record_surfaces():
+        for source_kind in self._planner.source_record_kinds():
             if self._planner.target_record_surface_for(source_kind) == target_kind:
                 fields.update(self._planner.sync_fields_for(source_kind, target_kind))
         return frozenset(fields)

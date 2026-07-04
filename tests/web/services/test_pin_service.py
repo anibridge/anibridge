@@ -7,14 +7,17 @@ from typing import cast
 import pytest
 from anibridge.provider.base import (
     Artwork,
+    Event,
     FacetName,
     Node,
     NodeQuery,
     Page,
+    Query,
+    Record,
     RecordField,
     Ref,
-    SupportsNodeReads,
     SupportsNodeSearch,
+    SupportsReads,
 )
 
 from anibridge.app.config.database import db
@@ -24,12 +27,13 @@ from anibridge.app.web.services.pin_service import PinService
 from anibridge.app.web.state import get_app_state
 
 
-class DummyTargetProvider(SupportsNodeReads, SupportsNodeSearch):
+class DummyTargetProvider(SupportsReads, SupportsNodeSearch):
     """Minimal target provider stub for pin service tests."""
 
     NAMESPACE = "anilist"
 
-    async def fetch_nodes(self, query: NodeQuery) -> Page[Node]:
+    async def fetch(self, query: Query) -> Page[Node | Record | Event]:
+        assert isinstance(query, NodeQuery)
         return Page(
             items=tuple(
                 Node(

@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, cast
 
 import msgspec
 from anibridge.provider.base import (
@@ -10,10 +10,11 @@ from anibridge.provider.base import (
     FacetName,
     Node,
     NodeQuery,
+    Page,
     RecordField,
     Ref,
-    SupportsNodeReads,
     SupportsNodeSearch,
+    SupportsReads,
 )
 from anibridge.utils.cache import cache
 
@@ -266,14 +267,17 @@ class PinService:
             ref = ref_from_payload(item)
             if ref is not None:
                 provider_refs.append(ref)
-        if not isinstance(bridge.target_provider, SupportsNodeReads):
+        if not isinstance(bridge.target_provider, SupportsReads):
             return {}
 
-        page = await bridge.target_provider.fetch_nodes(
-            NodeQuery(
-                refs=tuple(provider_refs),
-                facets=frozenset({FacetName.ARTWORK}),
-            )
+        page = cast(
+            Page[Node],
+            await bridge.target_provider.fetch(
+                NodeQuery(
+                    refs=tuple(provider_refs),
+                    facets=frozenset({FacetName.ARTWORK}),
+                )
+            ),
         )
         metadata: dict[RefKey, ProviderMediaMetadata] = {}
         for node in page.items:

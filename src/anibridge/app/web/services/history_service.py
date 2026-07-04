@@ -9,7 +9,7 @@ from anibridge.provider.base import (
     FacetName,
     NodeQuery,
     Ref,
-    SupportsNodeReads,
+    SupportsReads,
 )
 from anibridge.utils.cache import cache
 from sqlalchemy.sql import select
@@ -99,14 +99,14 @@ class HistoryService:
         refs: Sequence[Ref],
     ) -> dict[RefKey, ProviderMediaMetadata]:
         """Fetch provider node metadata for history refs when supported."""
-        if not refs or not isinstance(provider, SupportsNodeReads):
+        if not refs or not isinstance(provider, SupportsReads):
             return {}
 
         deduped: dict[RefKey, Ref] = {}
         for ref in refs:
             deduped.setdefault(ref_to_key(ref), ref)
 
-        page = await provider.fetch_nodes(
+        page = await provider.fetch(
             NodeQuery(
                 refs=tuple(deduped.values()),
                 facets=frozenset({FacetName.ARTWORK}),

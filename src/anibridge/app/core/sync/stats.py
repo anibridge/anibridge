@@ -13,13 +13,13 @@ from anibridge.provider.base import (
     Rating,
     Record,
     RecordField,
-    RecordWrite,
     Ref,
     Scalar,
     ScanItem,
     State,
     Structure,
     Value,
+    Write,
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
@@ -391,6 +391,6 @@ class RecordPlan(msgspec.Struct):
     source_record: Record | None
     before: RecordSnapshot | None
     after: RecordSnapshot | None
-    write: RecordWrite
+    write: Write
     target_ref: Ref | None
     diagnostics: PlanDiagnostics = msgspec.field(default_factory=PlanDiagnostics)

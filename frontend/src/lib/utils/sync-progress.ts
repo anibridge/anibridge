@@ -15,7 +15,8 @@ export function progressCount(sync?: CurrentSync | null): string {
     const processed = Math.max(0, sync.processed_items ?? 0);
     const scanned = Math.max(0, sync.scanned_items ?? 0);
     if (typeof sync.total_items === "number") {
-        return `${processed}/${Math.max(0, sync.total_items)}`;
+        const total = Math.max(0, sync.total_items);
+        return `${processed}/${total > 0 ? total : "?"}`;
     }
     if (scanned > processed) return `${processed} processed · ${scanned} found`;
     return `${processed} processed`;

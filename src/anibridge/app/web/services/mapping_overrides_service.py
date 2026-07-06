@@ -246,7 +246,7 @@ class MappingOverridesService:
             except ValueError:
                 continue
 
-            provider, entry_id, scope = parsed
+            authority, value, scope = parsed
             descriptor_str = descriptor_key(parsed)
 
             upstream_raw = upstream.get(target_key)
@@ -268,8 +268,8 @@ class MappingOverridesService:
             entries.append(
                 {
                     "descriptor": descriptor_str,
-                    "provider": provider,
-                    "entry_id": entry_id,
+                    "authority": authority,
+                    "value": value,
                     "scope": scope,
                     "origin": origin,
                     "deleted": custom_deleted,
@@ -287,7 +287,7 @@ class MappingOverridesService:
     async def get_mapping_detail(self, descriptor: str) -> dict[str, Any]:
         """Fetch mapping detail with layered upstream/custom targets."""
         parsed = parse_mapping_descriptor(descriptor)
-        provider, entry_id, scope = parsed
+        authority, value, scope = parsed
         descriptor_str = descriptor_key(parsed)
 
         async with self._lock:
@@ -304,8 +304,8 @@ class MappingOverridesService:
 
         return {
             "descriptor": descriptor_str,
-            "provider": provider,
-            "entry_id": entry_id,
+            "authority": authority,
+            "value": value,
             "scope": scope,
             "layers": {
                 "upstream": upstream_targets,
@@ -368,13 +368,13 @@ class MappingOverridesService:
 
         normalized: dict[str, dict[str, str | None] | None] = {}
         for entry in targets:
-            provider = str(entry.get("provider", "")).strip()
-            entry_id = str(entry.get("entry_id", "")).strip()
+            authority = str(entry.get("authority", "")).strip()
+            value = str(entry.get("value", "")).strip()
             raw_scope = str(entry.get("scope", "") or "").strip()
-            if not provider or not entry_id:
-                raise MappingError("provider and entry_id are required")
+            if not authority or not value:
+                raise MappingError("authority and value are required")
             scope = raw_scope or None
-            target = (provider, entry_id, scope)
+            target = (authority, value, scope)
             target_key = descriptor_key(target)
             if entry.get("deleted") is True:
                 normalized[target_key] = None

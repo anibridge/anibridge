@@ -139,11 +139,16 @@ def _capabilities(
 class _History:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
+        self.event_operations: list[dict[str, Any]] = []
         self.cleanup: list[tuple[Ref, Ref | None]] = []
         self.flushed = False
+        self.completed = False
 
     async def create_sync_history(self, **kwargs) -> None:
         self.created.append(kwargs)
+
+    async def record_event_operation(self, **kwargs) -> None:
+        self.event_operations.append(kwargs)
 
     def queue_failure_history_cleanup(
         self,
@@ -155,6 +160,9 @@ class _History:
 
     def flush_failure_history_cleanup(self) -> None:
         self.flushed = True
+
+    def complete_run(self) -> None:
+        self.completed = True
 
 
 class _Animap:
@@ -687,6 +695,8 @@ async def test_process_page_writes_mapped_record_with_event_channels() -> None:
         current=11,
         total=12,
     )
+    history = cast(_History, client._history)
+    assert history.created[-1]["external_id"] == ExternalId("tmdb_show", "245842", "s2")
     assert client.sync_stats.synced == 1
 
 
@@ -801,25 +811,29 @@ async def test_prepare_record_update_delete_and_dry_run_apply() -> None:
             values={RecordField.PROGRESS: Progress(current=2)},
         )
     )
-    outcome = await client._apply_update(
-        __import__("anibridge.app.core.sync.stats", fromlist=["RecordPlan"]).RecordPlan(
-            item=item,
-            source_record=target_record,
-            before=None,
-            after=plan,
-            write=UpsertRecord(
-                ref=Ref.anchor("target"),
-                surface=_RECORD_KIND,
-                set={RecordField.PROGRESS: Progress(current=2)},
+    outcomes = await client._apply_updates(
+        (
+            PreparedUpdate(
+                plan=RecordPlan(
+                    item=item,
+                    source_record=target_record,
+                    before=None,
+                    after=plan,
+                    write=UpsertRecord(
+                        ref=Ref.anchor("target"),
+                        surface=_RECORD_KIND,
+                        set={RecordField.PROGRESS: Progress(current=2)},
+                    ),
+                    target_ref=Ref.anchor("target"),
+                ),
+                source_record=target_record,
+                diff_str="progress: 1 -> 2",
+                label=SyncLabel("item", "source", "target"),
             ),
-            target_ref=Ref.anchor("target"),
-        ),
-        source_record=target_record,
-        diff_str="progress: 1 -> 2",
-        label=SyncLabel("item", "source", "target"),
+        )
     )
 
-    assert outcome == SyncOutcome.SYNCED
+    assert outcomes == (SyncOutcome.SYNCED,)
     assert history.created[-1]["ephemeral"] is True
 
 
@@ -1079,26 +1093,19 @@ async def test_apply_update_reconciles_write_error_and_records_failure() -> None
         target_ref=after_record.ref,
     )
 
-    assert (
-        await client._apply_update(
-            plan,
-            source_record=after_record,
-            diff_str="progress",
-            label=SyncLabel("item", "source", "target"),
-        )
-        == SyncOutcome.SYNCED
+    update = PreparedUpdate(
+        plan=plan,
+        source_record=after_record,
+        diff_str="progress",
+        label=SyncLabel("item", "source", "target"),
     )
+
+    assert await client._apply_updates((update,)) == (SyncOutcome.SYNCED,)
     history = cast(_History, client._history)
     assert history.created[-1]["info"]["write_reconciled_after_error"] == "true"
 
     target.records.clear()
-    with pytest.raises(RuntimeError, match="after-write failure"):
-        await client._apply_update(
-            plan,
-            source_record=after_record,
-            diff_str="progress",
-            label=SyncLabel("item", "source", "target"),
-        )
+    assert await client._apply_updates((update,)) == (SyncOutcome.FAILED,)
     assert history.created[-1]["outcome"] == SyncOutcome.FAILED
 
 

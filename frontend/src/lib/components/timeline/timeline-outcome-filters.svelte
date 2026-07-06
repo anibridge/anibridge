@@ -24,12 +24,12 @@
     const activeMeta = () => (active ? (meta[active] ?? null) : null);
 </script>
 
-<div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+<div class="flex flex-wrap gap-3">
     {#each Object.entries(meta) as [k, value] (k)}
         <button
             type="button"
             onclick={() => toggle(k)}
-            class={`group relative cursor-pointer overflow-hidden rounded-md p-3 text-left transition select-none ${active === k ? "border-sky-500 bg-sky-950/40 ring-1 ring-sky-400/60" : "border border-slate-800 bg-linear-to-br from-slate-900/70 to-slate-800/30 hover:border-slate-700"}`}
+            class={`group relative min-w-36 flex-1 basis-[min(100%,9rem)] cursor-pointer overflow-hidden rounded-md p-3 text-left transition select-none ${active === k ? "border-sky-500 bg-sky-950/40 ring-1 ring-sky-400/60" : "border border-slate-800 bg-linear-to-br from-slate-900/70 to-slate-800/30 hover:border-slate-700"}`}
             title={active === k
                 ? "Click to remove filter"
                 : "Filter by " + value.label}>

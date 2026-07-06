@@ -97,12 +97,12 @@ def _descriptor_expr(
 ) -> ColumnElement[str]:
     """Build a SQL expression matching a serialized mapping descriptor."""
     return (
-        entry_model.provider
+        entry_model.authority
         + literal(":")
-        + entry_model.entry_id
+        + entry_model.value
         + case(
-            (entry_model.entry_scope.is_(None), literal("")),
-            else_=literal(":") + entry_model.entry_scope,
+            (entry_model.scope.is_(None), literal("")),
+            else_=literal(":") + entry_model.scope,
         )
     )
 
@@ -110,27 +110,27 @@ def _descriptor_expr(
 _DB_FIELDS: tuple[QueryFieldSpec, ...] = (
     QueryFieldSpec(
         key="source.descriptor",
-        desc="Source descriptor (provider:id[:scope])",
+        desc="Source descriptor (authority:value[:scope])",
         kind=QueryFieldKind.DB_SCALAR,
         type=QueryFieldType.STRING,
         operators=_STRING_OPS,
         column=_descriptor_expr(),
     ),
     QueryFieldSpec(
-        key="source.provider",
-        desc="Source provider",
+        key="source.authority",
+        desc="Source authority",
         kind=QueryFieldKind.DB_SCALAR,
         type=QueryFieldType.STRING,
         operators=_STRING_OPS,
-        column=AnimapEntry.provider,
+        column=AnimapEntry.authority,
     ),
     QueryFieldSpec(
-        key="source.id",
-        desc="Source entry identifier",
+        key="source.value",
+        desc="Source descriptor value",
         kind=QueryFieldKind.DB_SCALAR,
         type=QueryFieldType.STRING,
         operators=_STRING_OPS,
-        column=AnimapEntry.entry_id,
+        column=AnimapEntry.value,
     ),
     QueryFieldSpec(
         key="source.scope",
@@ -138,31 +138,31 @@ _DB_FIELDS: tuple[QueryFieldSpec, ...] = (
         kind=QueryFieldKind.DB_SCALAR,
         type=QueryFieldType.STRING,
         operators=(QueryFieldOperator.EQ,),
-        column=AnimapEntry.entry_scope,
+        column=AnimapEntry.scope,
     ),
     QueryFieldSpec(
         key="target.descriptor",
-        desc="Destination descriptor (provider:id[:scope])",
+        desc="Destination descriptor (authority:value[:scope])",
         kind=QueryFieldKind.DB_EDGE_TARGET,
         type=QueryFieldType.STRING,
         operators=_STRING_OPS,
         column=_descriptor_expr(),
     ),
     QueryFieldSpec(
-        key="target.provider",
-        desc="Destination provider",
+        key="target.authority",
+        desc="Destination authority",
         kind=QueryFieldKind.DB_EDGE_TARGET,
         type=QueryFieldType.STRING,
         operators=_STRING_OPS,
-        edge_field="provider",
+        edge_field="authority",
     ),
     QueryFieldSpec(
-        key="target.id",
-        desc="Destination entry identifier",
+        key="target.value",
+        desc="Destination descriptor value",
         kind=QueryFieldKind.DB_EDGE_TARGET,
         type=QueryFieldType.STRING,
         operators=_STRING_OPS,
-        edge_field="entry_id",
+        edge_field="value",
     ),
     QueryFieldSpec(
         key="target.scope",
@@ -170,7 +170,7 @@ _DB_FIELDS: tuple[QueryFieldSpec, ...] = (
         kind=QueryFieldKind.DB_EDGE_TARGET,
         type=QueryFieldType.STRING,
         operators=(QueryFieldOperator.EQ,),
-        edge_field="entry_scope",
+        edge_field="scope",
     ),
     QueryFieldSpec(
         key="edge.source_range",
@@ -324,24 +324,24 @@ for spec in _QUERY_FIELDS:
 @cache
 def get_query_field_specs() -> list[QueryFieldSpec]:
     """Return the query field specifications."""
-    # Collect dynamic `source.provider` and `target.provider` values from the database.
+    # Collect dynamic source/target authority values from the database.
     with db() as ctx:
         stmt = (
-            select(AnimapEntry.provider)
-            .where(AnimapEntry.provider != "")
+            select(AnimapEntry.authority)
+            .where(AnimapEntry.authority != "")
             .distinct()
-            .order_by(AnimapEntry.provider)
+            .order_by(AnimapEntry.authority)
         )
         provider_values = tuple(
-            provider.strip()
-            for provider in ctx.session.execute(stmt).scalars()
-            if provider and provider.strip()
+            authority.strip()
+            for authority in ctx.session.execute(stmt).scalars()
+            if authority and authority.strip()
         )
 
     # Inject these values into the relevant field specs.
     return [
         msgspec.structs.replace(spec, values=provider_values)
-        if spec.key in ("source.provider", "target.provider")
+        if spec.key in ("source.authority", "target.authority")
         else spec
         for spec in _QUERY_FIELDS
     ]

@@ -5,7 +5,12 @@ from anibridge.provider.base import Node, Progress, Record, RecordField, Ref
 
 from anibridge.app.core.sync.history import SyncHistoryManager
 from anibridge.app.core.sync.stats import RecordSnapshot
-from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
+from anibridge.app.models.db.sync_history import (
+    SyncHistoryGroup,
+    SyncHistoryOperation,
+    SyncHistoryRun,
+    SyncOutcome,
+)
 
 
 @pytest.fixture
@@ -46,7 +51,9 @@ async def test_create_sync_history_skips_skipped_rows(
     )
 
     with sqlite_db_factory() as ctx:
-        assert ctx.session.query(SyncHistory).count() == 0
+        assert ctx.session.query(SyncHistoryRun).count() == 0
+        assert ctx.session.query(SyncHistoryGroup).count() == 0
+        assert ctx.session.query(SyncHistoryOperation).count() == 0
 
 
 @pytest.mark.asyncio
@@ -74,14 +81,20 @@ async def test_create_sync_history_updates_existing_failure_record(
     )
 
     with sqlite_db_factory() as ctx:
-        rows = ctx.session.query(SyncHistory).all()
+        rows = ctx.session.query(SyncHistoryOperation).all()
         assert len(rows) == 1
         assert rows[0].error_message == "new"
-        assert rows[0].source_record_surface == "user_state"
-        assert rows[0].target_record_surface == "user_state"
+        assert rows[0].source_surface == "user_state"
+        assert rows[0].target_surface == "user_state"
         assert rows[0].info["source"] == "retry"
-        assert "source_record_surface" not in rows[0].info
-        assert "target_record_surface" not in rows[0].info
+        assert "source_surface" not in rows[0].info
+        assert "target_surface" not in rows[0].info
+        group = ctx.session.query(SyncHistoryGroup).one()
+        assert group.operation_count == 1
+        assert group.source_parent_ref == {"key": "src1", "path": []}
+        assert group.target_parent_ref == {"key": "tgt1", "path": []}
+        assert "source_parent_ref" not in group.info
+        assert "target_parent_ref" not in group.info
 
 
 @pytest.mark.asyncio
@@ -114,6 +127,9 @@ async def test_successful_sync_cleans_matching_failure_rows(
     history_manager.flush_failure_history_cleanup()
 
     with sqlite_db_factory() as ctx:
-        rows = ctx.session.query(SyncHistory).all()
+        rows = ctx.session.query(SyncHistoryOperation).all()
         assert len(rows) == 1
         assert rows[0].outcome == SyncOutcome.SYNCED
+        group = ctx.session.query(SyncHistoryGroup).one()
+        assert group.operation_count == 1
+        assert group.outcome == SyncOutcome.SYNCED

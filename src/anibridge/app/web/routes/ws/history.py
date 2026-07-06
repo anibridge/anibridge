@@ -25,13 +25,14 @@ async def history_websocket(
     await socket.accept()
 
     outcome = socket.query_params.get("outcome") or None
+    resource_kind = socket.query_params.get("resource_kind") or None
     last_latest_id: int | None = None
     history_service = get_history_service()
 
     try:
         while True:
             latest_id = await history_service.get_latest_id(
-                profile=profile, outcome=outcome
+                profile=profile, outcome=outcome, resource_kind=resource_kind
             )
             if latest_id != last_latest_id:
                 last_latest_id = latest_id
@@ -39,7 +40,8 @@ async def history_websocket(
                     {
                         "profile": profile,
                         "outcome": outcome,
-                        "latest_id": latest_id,
+                        "resource_kind": resource_kind,
+                        "latest_group_id": latest_id,
                     }
                 )
 

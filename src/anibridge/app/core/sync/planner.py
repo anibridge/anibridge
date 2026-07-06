@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 import msgspec
 from anibridge.provider.base import (
     Capabilities,
+    ExternalId,
     FieldSpec,
     NumericConstraint,
     Progress,
@@ -92,6 +93,7 @@ class PreparedUpdate(msgspec.Struct, frozen=True):
     source_record: Record
     diff_str: str
     label: SyncLabel
+    source_descriptor: ExternalId | None = None
 
 
 class RecordPlanner:

@@ -2,7 +2,7 @@
     import { ExternalLink } from "@lucide/svelte";
 
     interface Props {
-        entryId: string;
+        value: string;
         scope?: string | null;
         url?: string | null;
         label?: string;
@@ -12,7 +12,7 @@
     }
 
     let {
-        entryId,
+        value,
         scope = null,
         url = null,
         label = "",
@@ -41,13 +41,13 @@
         <button
             class={`cursor-pointer rounded px-0.5 text-left ${tone === "source" ? "text-emerald-200" : "text-emerald-300"} select-text hover:underline focus:outline-none`}
             type="button"
-            title={`Filter by entry ${entryId}`}
-            onclick={onNavigate}>{entryId}</button>
+            title={`Filter by value ${value}`}
+            onclick={onNavigate}>{value}</button>
         {#if url}
             <button
                 class={`${tone === "source" ? "text-emerald-200/70 hover:text-emerald-100" : "text-slate-500 hover:text-emerald-300"} cursor-pointer transition-colors`}
-                aria-label={`Open external ${entryId}`}
-                title={`Open external ${entryId}`}
+                aria-label={`Open external ${value}`}
+                title={`Open external ${value}`}
                 type="button"
                 onclick={() =>
                     window.open(String(url), "_blank", "noopener,noreferrer")}>

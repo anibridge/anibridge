@@ -46,8 +46,8 @@ export interface RecordSnapshot {
 
 // --- Mappings API ---
 export interface MappingEdge {
-    target_provider: string;
-    target_entry_id: string;
+    target_authority: string;
+    target_value: string;
     target_scope: string | null;
     source_range: string;
     destination_range?: string | null;
@@ -56,8 +56,8 @@ export interface MappingEdge {
 
 export interface Mapping {
     descriptor: string;
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope: string | null;
     edges: MappingEdge[];
     custom?: boolean;
@@ -71,8 +71,8 @@ export interface RangeInputPayload {
 }
 
 export interface TargetPayload {
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope?: string | null;
     ranges: RangeInputPayload[];
     deleted?: boolean;
@@ -101,8 +101,8 @@ export interface MappingRangeView {
 
 export interface MappingTarget {
     descriptor: string;
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope: string | null;
     origin: TargetOrigin;
     deleted?: boolean;
@@ -117,8 +117,8 @@ export interface MappingLayers {
 
 export interface MappingDetail {
     descriptor: string;
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope: string | null;
     layers: MappingLayers;
     targets: MappingTarget[];
@@ -299,37 +299,62 @@ export interface RestartResponse {
 }
 
 // --- History API ---
-export interface HistoryItem {
+export interface HistoryOperation {
     id: number;
+    group_id: number;
     profile_name: string;
+    resource_kind: string;
+    action: string;
+    outcome: string;
+    timestamp: string;
     source_namespace?: string | null;
     source_ref?: RefPayload | null;
     target_namespace?: string | null;
     target_ref?: RefPayload | null;
-    source_record_surface?: string | null;
-    target_record_surface?: string | null;
-    animap_provider?: string | null;
-    animap_id?: string | null;
-    animap_scope?: string | null;
-    outcome: string;
+    source_surface?: string | null;
+    target_surface?: string | null;
+    resource_key?: string | null;
     before_state?: RecordSnapshot | null;
     after_state?: RecordSnapshot | null;
     info?: Record<string, string> | null;
     error_message?: string | null;
     ephemeral?: boolean;
-    timestamp: string;
-    source_media?: ProviderMediaMetadata | null;
-    target_media?: ProviderMediaMetadata | null;
     pinned_fields?: string[] | null;
 }
 
+export interface HistoryGroup {
+    id: number;
+    run_id: number;
+    profile_name: string;
+    outcome: string;
+    timestamp: string;
+    source_namespace?: string | null;
+    source_parent_ref?: RefPayload | null;
+    target_namespace?: string | null;
+    target_parent_ref?: RefPayload | null;
+    animap_authority?: string | null;
+    animap_value?: string | null;
+    animap_scope?: string | null;
+    operation_count?: number;
+    record_count?: number;
+    event_count?: number;
+    node_count?: number;
+    error_count?: number;
+    info?: Record<string, string> | null;
+    ephemeral?: boolean;
+    source_media?: ProviderMediaMetadata | null;
+    target_media?: ProviderMediaMetadata | null;
+    operations?: HistoryOperation[];
+}
+
 export interface GetHistoryResponse {
-    items: HistoryItem[];
+    groups: HistoryGroup[];
     limit: number;
     has_more: boolean;
     next_before_id?: number | null;
-    latest_id?: number | null;
+    latest_group_id?: number | null;
     stats?: Record<string, number> | null;
+    resource_stats?: Record<string, number> | null;
 }
 
 export interface PinFieldOption {

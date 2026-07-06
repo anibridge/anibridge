@@ -1,4 +1,4 @@
-"""Animap client for v3 provider-range mappings."""
+"""Animap client for v3 authority-range mappings."""
 
 from collections.abc import Sequence, Set
 from hashlib import md5
@@ -34,7 +34,7 @@ log = get_logger(__name__)
 
 
 class AnimapEdge(msgspec.Struct, frozen=True):
-    """Directed mapping between two provider entries with episode ranges."""
+    """Directed mapping between two authority entries with episode ranges."""
 
     source: MappingDescriptor
     destination: MappingDescriptor
@@ -79,7 +79,7 @@ class AnimapClient:
         self,
         descriptors: Sequence[MappingDescriptor],
         *,
-        target_providers: Set[str] | None = None,
+        target_authorities: Set[str] | None = None,
     ) -> tuple[AnimapEdge, ...]:
         """Resolve mapping edges for the provided source descriptors."""
         if not descriptors:
@@ -99,12 +99,12 @@ class AnimapClient:
                 dest_entry = aliased(AnimapEntry)
                 query = (
                     select(
-                        source_entry.provider,
-                        source_entry.entry_id,
-                        source_entry.entry_scope,
-                        dest_entry.provider,
-                        dest_entry.entry_id,
-                        dest_entry.entry_scope,
+                        source_entry.authority,
+                        source_entry.value,
+                        source_entry.scope,
+                        dest_entry.authority,
+                        dest_entry.value,
+                        dest_entry.scope,
                         AnimapMapping.source_range,
                         AnimapMapping.destination_range,
                     )
@@ -119,25 +119,25 @@ class AnimapClient:
                     )
                     .where(AnimapMapping.source_entry_id.in_(chunk))
                 )
-                if target_providers:
-                    query = query.where(dest_entry.provider.in_(target_providers))
+                if target_authorities:
+                    query = query.where(dest_entry.authority.in_(target_authorities))
 
                 rows = ctx.session.execute(query).all()
                 for row in rows:
                     (
-                        src_provider,
-                        src_entry_id,
+                        src_authority,
+                        src_value,
                         src_scope,
-                        dst_provider,
-                        dst_entry_id,
+                        dst_authority,
+                        dst_value,
                         dst_scope,
                         src_range,
                         dst_range,
                     ) = row
                     edges.append(
                         AnimapEdge(
-                            source=(src_provider, src_entry_id, src_scope),
-                            destination=(dst_provider, dst_entry_id, dst_scope),
+                            source=(src_authority, src_value, src_scope),
+                            destination=(dst_authority, dst_value, dst_scope),
                             source_range=src_range,
                             destination_range=dst_range,
                         )
@@ -149,14 +149,17 @@ class AnimapClient:
         self,
         descriptors: Sequence[MappingDescriptor],
         *,
-        target_providers: Set[str] | None = None,
+        target_authorities: Set[str] | None = None,
     ) -> dict[MappingDescriptor, dict[MappingDescriptor, list[tuple[str, str | None]]]]:
         """Resolve mapping edges into a grouped target->source mapping."""
         grouped: dict[
             MappingDescriptor,
             dict[MappingDescriptor, list[tuple[str, str | None]]],
         ] = {}
-        for edge in self.resolve_edges(descriptors, target_providers=target_providers):
+        for edge in self.resolve_edges(
+            descriptors,
+            target_authorities=target_authorities,
+        ):
             target_ranges = grouped.setdefault(edge.destination, {})
             source_ranges = target_ranges.setdefault(edge.source, [])
             source_ranges.append((edge.source_range, edge.destination_range))
@@ -172,16 +175,16 @@ class AnimapClient:
         entry_ids: list[int] = []
         for chunk in batched(descriptors, cls._SQLITE_SAFE_VARIABLES, strict=False):
             normalized = [
-                (provider, entry_id, scope or "") for provider, entry_id, scope in chunk
+                (authority, value, scope or "") for authority, value, scope in chunk
             ]
             if not normalized:
                 continue
-            scope_key = func.coalesce(AnimapEntry.entry_scope, "")
+            scope_key = func.coalesce(AnimapEntry.scope, "")
             rows = session.execute(
                 select(AnimapEntry).where(
                     tuple_(
-                        AnimapEntry.provider,
-                        AnimapEntry.entry_id,
+                        AnimapEntry.authority,
+                        AnimapEntry.value,
                         scope_key,
                     ).in_(normalized)
                 )
@@ -424,13 +427,13 @@ class AnimapClient:
             )
         with db() as ctx:
             existing_entries = {
-                descriptor_key((provider, entry_id, entry_scope)): entry_id_db
-                for entry_id_db, provider, entry_id, entry_scope in ctx.session.execute(
+                descriptor_key((authority, value, scope)): entry_id_db
+                for entry_id_db, authority, value, scope in ctx.session.execute(
                     select(
                         AnimapEntry.id,
-                        AnimapEntry.provider,
-                        AnimapEntry.entry_id,
-                        AnimapEntry.entry_scope,
+                        AnimapEntry.authority,
+                        AnimapEntry.value,
+                        AnimapEntry.scope,
                     )
                 )
             }
@@ -462,12 +465,12 @@ class AnimapClient:
                 rows: list[dict[str, object]] = []
                 for key in to_insert_entries:
                     d = descriptors[key]
-                    provider, entry_id, scope = d
+                    authority, value, scope = d
                     rows.append(
                         {
-                            "provider": provider,
-                            "entry_id": entry_id,
-                            "entry_scope": scope,
+                            "authority": authority,
+                            "value": value,
+                            "scope": scope,
                         }
                     )
                 for chunk in batched(rows, self._SQLITE_SAFE_VARIABLES, strict=False):
@@ -475,7 +478,7 @@ class AnimapClient:
                         insert(AnimapEntry)
                         .values(chunk)
                         .on_conflict_do_nothing(
-                            index_elements=["provider", "entry_id", "entry_scope"]
+                            index_elements=["authority", "value", "scope"]
                         )
                     )
                 ctx.session.flush()
@@ -485,13 +488,13 @@ class AnimapClient:
 
             # Refresh entry map after inserts
             existing_entries = {
-                descriptor_key((provider, entry_id, entry_scope)): entry_id_db
-                for entry_id_db, provider, entry_id, entry_scope in ctx.session.execute(
+                descriptor_key((authority, value, scope)): entry_id_db
+                for entry_id_db, authority, value, scope in ctx.session.execute(
                     select(
                         AnimapEntry.id,
-                        AnimapEntry.provider,
-                        AnimapEntry.entry_id,
-                        AnimapEntry.entry_scope,
+                        AnimapEntry.authority,
+                        AnimapEntry.value,
+                        AnimapEntry.scope,
                     )
                 )
             }

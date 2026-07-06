@@ -174,9 +174,9 @@
     function collectProviders(list: Mapping[]): string[] {
         const providers = new SvelteSet<string>();
         for (const item of list) {
-            if (item.provider) providers.add(item.provider);
+            if (item.authority) providers.add(item.authority);
             for (const edge of item.edges || []) {
-                providers.add(edge.target_provider);
+                providers.add(edge.target_authority);
             }
         }
         return Array.from(providers).sort();
@@ -196,7 +196,7 @@
         const dynamic = providers.map(
             (p) =>
                 ({
-                    id: `provider:${p}`,
+                    id: `authority:${p}`,
                     title: normalizeColumnTitle(p),
                     visible: true,
                     width: 200,

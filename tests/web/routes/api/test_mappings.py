@@ -47,14 +47,14 @@ def _fresh_tables():
 
 
 def test_query_capabilities_include_distinct_provider_values() -> None:
-    """Provider query fields expose provider suggestions from the database."""
+    """Provider query fields expose authority suggestions from the database."""
     with _fresh_tables():
         with db() as ctx:
             ctx.session.add_all(
                 [
-                    AnimapEntry(provider="tmdb", entry_id="10", entry_scope=None),
-                    AnimapEntry(provider="anilist", entry_id="1", entry_scope=None),
-                    AnimapEntry(provider="tmdb", entry_id="11", entry_scope="s1"),
+                    AnimapEntry(authority="tmdb", value="10", scope=None),
+                    AnimapEntry(authority="anilist", value="1", scope=None),
+                    AnimapEntry(authority="tmdb", value="11", scope="s1"),
                 ]
             )
             ctx.session.commit()
@@ -65,14 +65,14 @@ def test_query_capabilities_include_distinct_provider_values() -> None:
     assert response.status_code == 200
     fields = response.json()["fields"]
     source_provider = next(
-        field for field in fields if field["key"] == "source.provider"
+        field for field in fields if field["key"] == "source.authority"
     )
-    target_provider = next(
-        field for field in fields if field["key"] == "target.provider"
+    target_authority = next(
+        field for field in fields if field["key"] == "target.authority"
     )
 
     assert source_provider["values"] == ["anilist", "tmdb"]
-    assert target_provider["values"] == ["anilist", "tmdb"]
+    assert target_authority["values"] == ["anilist", "tmdb"]
 
 
 def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,8 +95,8 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
                 [
                     {
                         "descriptor": "anilist:1",
-                        "provider": "anilist",
-                        "entry_id": "1",
+                        "authority": "anilist",
+                        "value": "1",
                         "scope": None,
                         "edges": [],
                         "custom": False,
@@ -119,8 +119,8 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
         async def get_mapping_detail(self, descriptor: str):
             return {
                 "descriptor": descriptor,
-                "provider": "anilist",
-                "entry_id": "1",
+                "authority": "anilist",
+                "value": "1",
                 "scope": None,
                 "layers": {},
                 "targets": [],
@@ -129,8 +129,8 @@ def test_list_mappings_and_override_routes(monkeypatch: pytest.MonkeyPatch) -> N
         async def save_override(self, **kwargs):
             return {
                 "descriptor": kwargs["descriptor"],
-                "provider": "anilist",
-                "entry_id": "1",
+                "authority": "anilist",
+                "value": "1",
                 "scope": None,
                 "layers": {},
                 "targets": [],

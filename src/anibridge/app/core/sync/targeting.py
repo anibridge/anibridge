@@ -75,7 +75,7 @@ class TargetResolver:
         )
         for edge in self.animap_client.resolve_edges(
             descriptors,
-            target_providers=self.capabilities.external_authorities,
+            target_authorities=self.capabilities.external_authorities,
         ):
             if edge.destination_range is None:
                 continue

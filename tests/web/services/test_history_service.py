@@ -1,7 +1,8 @@
 """Tests for the sync history service."""
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from anibridge.provider.base import (
@@ -25,7 +26,14 @@ from anibridge.app.core.sync.history import to_builtins
 from anibridge.app.core.sync.stats import RecordSnapshot
 from anibridge.app.exceptions import HistoryItemNotFoundError, HistoryPermissionError
 from anibridge.app.models.db.pin import Pin
-from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
+from anibridge.app.models.db.sync_history import (
+    SyncHistoryGroup,
+    SyncHistoryOperation,
+    SyncHistoryRun,
+    SyncOperationAction,
+    SyncOutcome,
+    SyncResourceKind,
+)
 from anibridge.app.web.services.history_service import (
     HistoryService,
     get_history_service,
@@ -128,7 +136,9 @@ def _seed_history_row(
 ) -> int:
     with history_service_module.db() as ctx:
         if clear:
-            ctx.session.query(SyncHistory).delete()
+            ctx.session.query(SyncHistoryOperation).delete()
+            ctx.session.query(SyncHistoryGroup).delete()
+            ctx.session.query(SyncHistoryRun).delete()
             ctx.session.query(Pin).delete()
             ctx.session.commit()
 
@@ -138,8 +148,8 @@ def _seed_history_row(
             "source_ref": _ref_payload("src1"),
             "target_namespace": "target",
             "target_ref": _ref_payload("tgt1"),
-            "source_record_surface": "source_state",
-            "target_record_surface": "target_state",
+            "source_surface": "source_state",
+            "target_surface": "target_state",
             "outcome": SyncOutcome.SYNCED,
             "before_state": {
                 "ref": _ref_payload("tgt1"),
@@ -153,10 +163,73 @@ def _seed_history_row(
             },
             "info": {"source": "test-seed"},
             "error_message": None,
+            "ephemeral": False,
         }
         payload.update(overrides)
-        row = SyncHistory(**payload)
-        ctx.session.add(row)
+
+        row_number = (
+            ctx.session.query(SyncHistoryGroup).count()
+            + ctx.session.query(SyncHistoryOperation).count()
+            + 1
+        )
+        timestamp = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=row_number)
+        run = SyncHistoryRun(
+            profile_name=payload["profile_name"],
+            source_namespace=payload["source_namespace"],
+            target_namespace=payload["target_namespace"],
+            outcome=payload["outcome"],
+            info={},
+            ephemeral=payload["ephemeral"],
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+        ctx.session.add(run)
+        ctx.session.flush()
+        source_ref = payload["source_ref"]
+        target_ref = cast(dict[str, object] | None, payload.get("target_ref"))
+        group = SyncHistoryGroup(
+            run_id=run.id,
+            profile_name=payload["profile_name"],
+            source_namespace=payload["source_namespace"],
+            source_parent_ref=_ref_payload(cast(str, source_ref["key"])),
+            target_namespace=payload["target_namespace"],
+            target_parent_ref=_ref_payload(cast(str, target_ref["key"]))
+            if target_ref
+            else None,
+            outcome=payload["outcome"],
+            operation_count=1,
+            record_count=1,
+            event_count=0,
+            node_count=0,
+            error_count=1
+            if payload["outcome"] in (SyncOutcome.FAILED, SyncOutcome.NOT_FOUND)
+            else 0,
+            info=payload["info"],
+            ephemeral=payload["ephemeral"],
+            timestamp=timestamp,
+        )
+        ctx.session.add(group)
+        ctx.session.flush()
+        operation = SyncHistoryOperation(
+            group_id=group.id,
+            profile_name=payload["profile_name"],
+            resource_kind=SyncResourceKind.RECORD,
+            action=SyncOperationAction.UPSERT,
+            source_namespace=payload["source_namespace"],
+            source_ref=payload["source_ref"],
+            target_namespace=payload["target_namespace"],
+            target_ref=payload.get("target_ref"),
+            source_surface=payload["source_surface"],
+            target_surface=payload["target_surface"],
+            outcome=payload["outcome"],
+            before_state=payload["before_state"],
+            after_state=payload["after_state"],
+            info=payload["info"],
+            error_message=payload["error_message"],
+            ephemeral=payload["ephemeral"],
+            timestamp=timestamp,
+        )
+        ctx.session.add(operation)
         if pin and payload.get("target_ref"):
             ctx.session.add(
                 Pin(
@@ -167,7 +240,7 @@ def _seed_history_row(
                 )
             )
         ctx.session.commit()
-        return row.id
+        return group.id
 
 
 @pytest.mark.asyncio
@@ -184,20 +257,21 @@ async def test_history_service_get_page_enriches_metadata_and_pins(history_env):
         include_stats=True,
     )
 
-    assert page.latest_id == row_id
+    assert page.latest_group_id == row_id
     assert page.has_more is False
     assert page.stats == {SyncOutcome.SYNCED.value: 1}
-    item = page.items[0]
-    assert item.source_media is not None
-    assert item.source_media.title == "source:src1"
-    assert item.target_media is not None
-    assert item.target_media.poster_url == "https://img.test/tgt1.jpg"
-    assert item.before_state is not None
-    assert item.after_state is not None
-    assert item.source_record_surface == "source_state"
-    assert item.target_record_surface == "target_state"
-    assert item.pinned_fields == ["status"]
-    assert item.info == {"source": "test-seed"}
+    group = page.groups[0]
+    operation = group.operations[0]
+    assert group.source_media is not None
+    assert group.source_media.title == "source:src1"
+    assert group.target_media is not None
+    assert group.target_media.poster_url == "https://img.test/tgt1.jpg"
+    assert operation.before_state is not None
+    assert operation.after_state is not None
+    assert operation.source_surface == "source_state"
+    assert operation.target_surface == "target_state"
+    assert operation.pinned_fields == ["status"]
+    assert operation.info == {"source": "test-seed"}
 
 
 @pytest.mark.asyncio
@@ -234,9 +308,10 @@ async def test_history_service_pin_fields_prefer_exact_refs(history_env):
     )
 
     fields_by_episode = {
-        item.target_ref.path[0].value: item.pinned_fields
-        for item in page.items
-        if item.target_ref is not None
+        operation.target_ref.path[0].value: operation.pinned_fields
+        for group in page.groups
+        for operation in group.operations
+        if operation.target_ref is not None
     }
     assert fields_by_episode == {1: ["notes"], 2: ["rating"]}
 
@@ -269,9 +344,9 @@ async def test_history_service_get_page_paginates_and_filters(history_env):
         include_target_media=False,
     )
 
-    assert [item.id for item in failed_page.items] == [row2]
-    assert failed_page.items[0].error_message == "boom"
-    assert [item.id for item in after_page.items] == [row2]
+    assert [group.id for group in failed_page.groups] == [row2]
+    assert failed_page.groups[0].operations[0].error_message == "boom"
+    assert [group.id for group in after_page.groups] == [row2]
 
 
 @pytest.mark.asyncio
@@ -314,23 +389,23 @@ async def test_history_service_get_page_validates_inputs(
 
 
 @pytest.mark.asyncio
-async def test_history_service_delete_item_removes_row(history_env):
-    """delete_item should remove only the requested profile row."""
+async def test_history_service_delete_group_removes_row(history_env):
+    """delete_group should remove only the requested profile group."""
     row_id = _seed_history_row()
     service = HistoryService()
 
-    await service.delete_item("profile", row_id)
+    await service.delete_group("profile", row_id)
 
     with pytest.raises(HistoryItemNotFoundError):
-        await service.delete_item("profile", row_id)
+        await service.delete_group("profile", row_id)
 
 
 @pytest.mark.asyncio
-async def test_history_service_retry_item_targets_source_ref(
+async def test_history_service_retry_group_targets_source_ref(
     history_env,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """retry_item should resubmit failed rows as targeted provider scans."""
+    """retry_group should resubmit failed groups as targeted provider scans."""
     row_id = _seed_history_row(outcome=SyncOutcome.FAILED)
     scheduled: list[tuple[Any, str]] = []
 
@@ -344,23 +419,23 @@ async def test_history_service_retry_item_targets_source_ref(
         lambda coro, *, name: scheduled.append((coro, name)),
     )
 
-    await HistoryService().retry_item("profile", row_id)
+    await HistoryService().retry_group("profile", row_id)
 
     coro, name = scheduled[0]
-    assert name == f"retry_history_item:profile:{row_id}"
+    assert name == f"retry_history_group:profile:{row_id}"
     await coro
     profile, request, source = history_env.scheduler.calls[0]
     assert profile == "profile"
-    assert source == "history:retry_item"
+    assert source == "history:retry_group"
     assert request.source_refs == (Ref.anchor("src1"),)
 
 
 @pytest.mark.asyncio
-async def test_history_service_undo_item_schedules_record_undo(
+async def test_history_service_undo_operation_schedules_record_undo(
     history_env,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """undo_item should submit restorable target states through SyncRequest."""
+    """undo_operation should submit restorable target states through SyncRequest."""
     row_id = _seed_history_row(
         before_state=_snapshot_payload("tgt1", 0),
         after_state=_snapshot_payload("tgt1", 1),
@@ -377,14 +452,14 @@ async def test_history_service_undo_item_schedules_record_undo(
         lambda coro, *, name: scheduled.append((coro, name)),
     )
 
-    await HistoryService().undo_item("profile", row_id)
+    await HistoryService().undo_operation("profile", row_id)
 
     coro, name = scheduled[0]
-    assert name == f"undo_history_item:profile:{row_id}"
+    assert name == f"undo_history_operation:profile:{row_id}"
     await coro
     profile, request, source = history_env.scheduler.calls[0]
     assert profile == "profile"
-    assert source == "history:undo_item"
+    assert source == "history:undo_operation"
     assert request.source_refs == ()
     undo = request.record_undos[0]
     assert undo.source_ref == Ref.anchor("src1")
@@ -396,12 +471,12 @@ async def test_history_service_undo_item_schedules_record_undo(
 
 
 @pytest.mark.asyncio
-async def test_history_service_retry_item_rejects_synced_rows(history_env) -> None:
+async def test_history_service_retry_group_rejects_synced_rows(history_env) -> None:
     """Retry should remain limited to failed and not-found rows."""
     row_id = _seed_history_row(outcome=SyncOutcome.SYNCED)
 
     with pytest.raises(HistoryPermissionError, match="failed or not found"):
-        await HistoryService().retry_item("profile", row_id)
+        await HistoryService().retry_group("profile", row_id)
 
 
 @pytest.mark.asyncio
@@ -424,15 +499,16 @@ async def test_history_service_purge_ephemeral_items(history_env):
         include_source_media=False,
         include_target_media=False,
     )
-    assert len(page.items) == 1
-    assert page.items[0].target_ref is not None
-    assert page.items[0].target_ref.key == "tgt2"
+    assert len(page.groups) == 1
+    operation = page.groups[0].operations[0]
+    assert operation.target_ref is not None
+    assert operation.target_ref.key == "tgt2"
 
 
 @pytest.mark.asyncio
-async def test_history_service_build_history_items_short_circuits(history_env):
+async def test_history_service_build_history_groups_short_circuits(history_env):
     """Empty history row batches should avoid provider work."""
-    assert await HistoryService()._build_history_items("profile", []) == []
+    assert await HistoryService()._build_history_groups("profile", []) == []
 
 
 def test_get_history_service_returns_singleton() -> None:

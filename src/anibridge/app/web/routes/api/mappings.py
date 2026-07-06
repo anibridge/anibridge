@@ -26,19 +26,19 @@ __all__ = ["router"]
 
 
 class MappingEdgeModel(msgspec.Struct):
-    target_provider: Annotated[
+    target_authority: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Target provider namespace for the edge.",
+            description="Target authority namespace for the edge.",
             examples=["tmdb"],
         ),
     ]
-    target_entry_id: Annotated[
+    target_value: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Target provider entry identifier for the edge.",
+            description="Target authority entry identifier for the edge.",
             examples=["1396"],
         ),
     ]
@@ -88,19 +88,19 @@ class MappingItemModel(msgspec.Struct):
             examples=["anilist:5114"],
         ),
     ]
-    provider: Annotated[
+    authority: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Source provider namespace for the mapping item.",
+            description="Source authority namespace for the mapping item.",
             examples=["anilist"],
         ),
     ]
-    entry_id: Annotated[
+    value: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Source provider entry identifier for the mapping item.",
+            description="Source authority entry identifier for the mapping item.",
             examples=["5114"],
         ),
     ]
@@ -111,8 +111,8 @@ class MappingItemModel(msgspec.Struct):
             examples=[
                 [
                     {
-                        "target_provider": "tmdb",
-                        "target_entry_id": "1396",
+                        "target_authority": "tmdb",
+                        "target_value": "1396",
                         "source_range": "1-12",
                     }
                 ]
@@ -166,8 +166,8 @@ class ListMappingsResponse(msgspec.Struct):
                 [
                     {
                         "descriptor": "anilist:5114",
-                        "provider": "anilist",
-                        "entry_id": "5114",
+                        "authority": "anilist",
+                        "value": "5114",
                         "edges": [],
                     }
                 ]
@@ -239,7 +239,7 @@ class RangeInputModel(msgspec.Struct):
             str,
             msgspec.Meta(
                 description=(
-                    "Destination range on the target provider when remapping episodes."
+                    "Destination range on the target authority when remapping episodes."
                 ),
                 examples=["1-12"],
             ),
@@ -249,19 +249,19 @@ class RangeInputModel(msgspec.Struct):
 
 
 class TargetInputModel(msgspec.Struct):
-    provider: Annotated[
+    authority: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Target provider namespace for the override.",
+            description="Target authority namespace for the override.",
             examples=["tmdb"],
         ),
     ]
-    entry_id: Annotated[
+    value: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Target provider entry identifier for the override.",
+            description="Target authority entry identifier for the override.",
             examples=["1396"],
         ),
     ]
@@ -314,8 +314,8 @@ class MappingOverridePayload(msgspec.Struct):
             examples=[
                 [
                     {
-                        "provider": "tmdb",
-                        "entry_id": "1396",
+                        "authority": "tmdb",
+                        "value": "1396",
                         "ranges": [
                             {"source_range": "1-12", "destination_range": "1-12"}
                         ],
@@ -442,19 +442,19 @@ class MappingTargetViewModel(msgspec.Struct):
             examples=["anilist:5114"],
         ),
     ]
-    provider: Annotated[
+    authority: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Target provider namespace.",
+            description="Target authority namespace.",
             examples=["tmdb"],
         ),
     ]
-    entry_id: Annotated[
+    value: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Target provider entry identifier.",
+            description="Target authority entry identifier.",
             examples=["1396"],
         ),
     ]
@@ -531,20 +531,20 @@ class MappingDetailModel(msgspec.Struct):
             examples=["anilist:5114"],
         ),
     ]
-    provider: Annotated[
+    authority: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="Source provider namespace for the mapping detail payload.",
+            description="Source authority namespace for the mapping detail payload.",
             examples=["anilist"],
         ),
     ]
-    entry_id: Annotated[
+    value: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
             description=(
-                "Source provider entry identifier for the mapping detail payload."
+                "Source authority entry identifier for the mapping detail payload."
             ),
             examples=["5114"],
         ),
@@ -577,8 +577,8 @@ class MappingDetailModel(msgspec.Struct):
                 [
                     {
                         "descriptor": "anilist:5114",
-                        "provider": "tmdb",
-                        "entry_id": "1396",
+                        "authority": "tmdb",
+                        "value": "1396",
                         "origin": "upstream",
                     }
                 ]
@@ -595,7 +595,7 @@ class FieldCapabilityModel(msgspec.Struct):
             description=(
                 "Query field identifier accepted by the mappings search parser."
             ),
-            examples=["source.provider"],
+            examples=["source.authority"],
         ),
     ]
     type: Annotated[
@@ -618,7 +618,7 @@ class FieldCapabilityModel(msgspec.Struct):
         list[str],
         msgspec.Meta(
             description="Alternate field names accepted by the query parser.",
-            examples=[["provider"]],
+            examples=[["authority"]],
         ),
     ] = msgspec.field(default_factory=list)
     values: (
@@ -636,7 +636,7 @@ class FieldCapabilityModel(msgspec.Struct):
             str,
             msgspec.Meta(
                 description="Human-readable description of the query field.",
-                examples=["Filter by source provider namespace."],
+                examples=["Filter by source authority namespace."],
             ),
         ]
         | None
@@ -649,7 +649,7 @@ class QueryCapabilitiesResponse(msgspec.Struct):
         msgspec.Meta(
             description="Field capability metadata for building mappings search UIs.",
             examples=[
-                [{"key": "source.provider", "type": "string", "operators": ["eq"]}]
+                [{"key": "source.authority", "type": "string", "operators": ["eq"]}]
             ],
         ),
     ]

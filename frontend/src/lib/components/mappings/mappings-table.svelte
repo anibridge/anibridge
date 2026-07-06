@@ -5,7 +5,7 @@
     import MappingCard from "$lib/components/mappings/mapping-card.svelte";
     import type { Mapping, MappingEdge } from "$lib/types/api";
     import { preferredTitle } from "$lib/utils/anilist";
-    import { externalProviderUrl } from "$lib/utils/provider-links";
+    import { externalAuthorityUrl } from "$lib/utils/authority-links";
 
     export interface Props {
         items: Mapping[];
@@ -69,8 +69,8 @@
         onNavigateToQuery?.({ query: text });
     }
 
-    function providerFromColumn(columnId: string): string | null {
-        return columnId.startsWith("provider:") ? columnId.slice(9) : null;
+    function authorityFromColumn(columnId: string): string | null {
+        return columnId.startsWith("authority:") ? columnId.slice(9) : null;
     }
 
     function formatDestinationRange(value: string | null | undefined): string {
@@ -79,7 +79,16 @@
     }
 
     function edgeKey(edge: MappingEdge) {
-        return `${edge.target_provider}:${edge.target_entry_id}:${edge.target_scope ?? ""}:${edge.source_range}:${formatDestinationRange(edge.destination_range)}`;
+        return `${edge.target_authority}:${edge.target_value}:${edge.target_scope ?? ""}:${edge.source_range}:${formatDestinationRange(edge.destination_range)}`;
+    }
+
+    function targetMappingQuery(edge: MappingEdge): string {
+        const terms = [
+            `target.authority:${edge.target_authority}`,
+            `target.value:${edge.target_value}`,
+        ];
+        if (edge.target_scope) terms.push(`target.scope:${edge.target_scope}`);
+        return terms.join(" ");
     }
 </script>
 
@@ -212,38 +221,38 @@
                                             </div>
                                         </div>
                                     </div>
-                                {:else if providerFromColumn(column.id)}
-                                    {@const provider = providerFromColumn(column.id)!}
+                                {:else if authorityFromColumn(column.id)}
+                                    {@const authority = authorityFromColumn(column.id)!}
                                     {@const edges = m.edges.filter(
-                                        (e) => e.target_provider === provider,
+                                        (e) => e.target_authority === authority,
                                     )}
-                                    {#if m.provider === provider}
+                                    {#if m.authority === authority}
                                         <MappingCard
                                             tone="source"
-                                            entryId={m.entry_id}
+                                            value={m.value}
                                             scope={m.scope}
                                             label="Source"
-                                            url={externalProviderUrl(
-                                                provider,
-                                                m.entry_id,
+                                            url={externalAuthorityUrl(
+                                                authority,
+                                                m.value,
                                                 m.scope,
                                             )}
                                             onNavigate={() =>
                                                 navigate(
-                                                    `source.provider:${provider} source.id:${m.entry_id}`,
+                                                    `source.authority:${authority} source.value:${m.value}`,
                                                 )} />
                                     {:else if edges.length}
                                         <div
                                             class="flex flex-nowrap items-center gap-2 overflow-x-auto"
                                             style="white-space: nowrap;"
-                                            title={`Targets mapped from ${provider}`}>
+                                            title={`Targets mapped from ${authority}`}>
                                             {#each edges as edge (edgeKey(edge))}
                                                 <MappingCard
-                                                    entryId={edge.target_entry_id}
+                                                    value={edge.target_value}
                                                     scope={edge.target_scope}
-                                                    url={externalProviderUrl(
-                                                        edge.target_provider,
-                                                        edge.target_entry_id,
+                                                    url={externalAuthorityUrl(
+                                                        edge.target_authority,
+                                                        edge.target_value,
                                                         edge.target_scope,
                                                     )}
                                                     meta={[
@@ -251,7 +260,7 @@
                                                     ]}
                                                     onNavigate={() =>
                                                         navigate(
-                                                            `source.provider:${edge.target_provider} source.id:${edge.target_entry_id}`,
+                                                            targetMappingQuery(edge),
                                                         )} />
                                             {/each}
                                         </div>

@@ -1,4 +1,4 @@
-"""Mappings service for provider-range mapping graph (v3)."""
+"""Mappings service for authority-range mapping graph (v3)."""
 
 import asyncio
 import calendar
@@ -53,8 +53,8 @@ log = get_logger(__name__)
 class EdgeView(msgspec.Struct, frozen=True):
     """Flattened view of an outgoing mapping edge."""
 
-    target_provider: str
-    target_entry_id: str
+    target_authority: str
+    target_value: str
     target_scope: str | None
     source_range: str
     destination_range: str | None
@@ -64,8 +64,8 @@ class EdgeView(msgspec.Struct, frozen=True):
 class MappingItem(msgspec.Struct, frozen=True):
     """Flattened mapping entry with outgoing edges."""
 
-    provider: str
-    entry_id: str
+    authority: str
+    value: str
     edges: list[EdgeView]
     custom: bool
     sources: list[str]
@@ -584,8 +584,8 @@ class MappingsService:
             rows = (
                 ctx.session.execute(
                     select(AnimapEntry).where(
-                        AnimapEntry.provider == "anilist",
-                        AnimapEntry.entry_id.in_(tuple(str(aid) for aid in ids)),
+                        AnimapEntry.authority == "anilist",
+                        AnimapEntry.value.in_(tuple(str(aid) for aid in ids)),
                     )
                 )
                 .scalars()
@@ -694,9 +694,9 @@ class MappingsService:
                 continue
             edge_views.append(
                 EdgeView(
-                    target_provider=target.provider,
-                    target_entry_id=target.entry_id,
-                    target_scope=target.entry_scope,
+                    target_authority=target.authority,
+                    target_value=target.value,
+                    target_scope=target.scope,
                     source_range=edge.source_range,
                     destination_range=edge.destination_range,
                     sources=edge_sources,
@@ -711,12 +711,10 @@ class MappingsService:
 
         anilist_id = self._resolve_anilist_id(entry, entry_by_id, edges)
         return MappingItem(
-            descriptor=descriptor_key(
-                (entry.provider, entry.entry_id, entry.entry_scope)
-            ),
-            provider=entry.provider,
-            entry_id=entry.entry_id,
-            scope=entry.entry_scope,
+            descriptor=descriptor_key((entry.authority, entry.value, entry.scope)),
+            authority=entry.authority,
+            value=entry.value,
+            scope=entry.scope,
             edges=edge_views,
             custom=custom,
             sources=seen_sources,
@@ -737,13 +735,13 @@ class MappingsService:
             except TypeError, ValueError:
                 return None
 
-        if entry.provider == "anilist":
-            return _to_int(entry.entry_id)
+        if entry.authority == "anilist":
+            return _to_int(entry.value)
 
         for edge in edges:
             target = entry_by_id.get(edge.destination_entry_id)
-            if target and target.provider == "anilist":
-                aid = _to_int(target.entry_id)
+            if target and target.authority == "anilist":
+                aid = _to_int(target.value)
                 if aid is not None:
                     return aid
 
@@ -1039,7 +1037,7 @@ class MappingsService:
 
             entries = (
                 ctx.session.execute(
-                    base_stmt.order_by(AnimapEntry.provider, AnimapEntry.entry_id)
+                    base_stmt.order_by(AnimapEntry.authority, AnimapEntry.value)
                     .offset((page - 1) * per_page)
                     .limit(per_page)
                 )
@@ -1060,18 +1058,18 @@ class MappingsService:
     async def get_mapping(self, descriptor: str) -> dict[str, Any]:
         """Return a single mapping entry by descriptor."""
         parsed = parse_mapping_descriptor(descriptor)
-        provider, entry_id, scope = parsed
+        authority, value, scope = parsed
         with db() as ctx:
             scope_clause = (
-                AnimapEntry.entry_scope.is_(None)
+                AnimapEntry.scope.is_(None)
                 if scope is None
-                else AnimapEntry.entry_scope == scope
+                else AnimapEntry.scope == scope
             )
             entry = (
                 ctx.session.execute(
                     select(AnimapEntry).where(
-                        AnimapEntry.provider == provider,
-                        AnimapEntry.entry_id == entry_id,
+                        AnimapEntry.authority == authority,
+                        AnimapEntry.value == value,
                         scope_clause,
                     )
                 )

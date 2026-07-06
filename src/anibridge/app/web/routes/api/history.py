@@ -60,6 +60,7 @@ async def get_history(
     outcome: Annotated[str | None, QueryParameter()] = None,
     source_namespace: Annotated[str | None, QueryParameter()] = None,
     target_namespace: Annotated[str | None, QueryParameter()] = None,
+    resource_kind: Annotated[str | None, QueryParameter()] = None,
 ) -> GetHistoryResponse:
     """Get paginated timeline for profile."""
     return await get_history_service().get_page(
@@ -70,41 +71,58 @@ async def get_history(
         outcome=outcome,
         source_namespace=source_namespace,
         target_namespace=target_namespace,
+        resource_kind=resource_kind,
         include_stats=include_stats,
     )
 
 
-@delete(path="/{profile:str}/{item_id:int}", status_code=200)
-async def delete_history(
+@delete(path="/{profile:str}/groups/{group_id:int}", status_code=200)
+async def delete_history_group(
     profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
+    group_id: Annotated[int, PathParameter()],
 ) -> OkResponse:
-    """Delete a history item."""
-    await get_history_service().delete_item(profile, item_id)
+    """Delete a history group."""
+    await get_history_service().delete_group(profile, group_id)
     return OkResponse()
 
 
-@post(path="/{profile:str}/{item_id:int}/retry", status_code=200)
-async def retry_history(
+@delete(path="/{profile:str}/operations/{operation_id:int}", status_code=200)
+async def delete_history_operation(
     profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
+    operation_id: Annotated[int, PathParameter()],
+) -> OkResponse:
+    """Delete a history operation."""
+    await get_history_service().delete_operation(profile, operation_id)
+    return OkResponse()
+
+
+@post(path="/{profile:str}/groups/{group_id:int}/retry", status_code=200)
+async def retry_history_group(
+    profile: Annotated[str, PathParameter()],
+    group_id: Annotated[int, PathParameter()],
 ) -> RetryResponse:
-    """Retry a failed or missing history item."""
-    await get_history_service().retry_item(profile, item_id)
+    """Retry a failed or missing history group."""
+    await get_history_service().retry_group(profile, group_id)
     return RetryResponse()
 
 
-@post(path="/{profile:str}/{item_id:int}/undo", status_code=200)
-async def undo_history(
+@post(path="/{profile:str}/operations/{operation_id:int}/undo", status_code=200)
+async def undo_history_operation(
     profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
+    operation_id: Annotated[int, PathParameter()],
 ) -> UndoResponse:
-    """Undo a synced or deleted history item."""
-    await get_history_service().undo_item(profile, item_id)
+    """Undo a synced or deleted record operation."""
+    await get_history_service().undo_operation(profile, operation_id)
     return UndoResponse()
 
 
 router = Router(
     path="/history",
-    route_handlers=[get_history, delete_history, retry_history, undo_history],
+    route_handlers=[
+        get_history,
+        delete_history_group,
+        delete_history_operation,
+        retry_history_group,
+        undo_history_operation,
+    ],
 )

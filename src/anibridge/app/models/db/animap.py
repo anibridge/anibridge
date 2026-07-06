@@ -1,4 +1,4 @@
-"""Models for provider-range mapping graph."""
+"""Models for authority-range mapping graph."""
 
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import ForeignKey, Index, UniqueConstraint
@@ -10,24 +10,24 @@ __all__ = ["AnimapEntry", "AnimapMapping", "AnimapProvenance"]
 
 
 class AnimapEntry(Base):
-    """Model representing a unique entry from a provider."""
+    """Model representing a unique entry from a authority."""
 
     __tablename__ = "animap_entry"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    provider: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    entry_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    entry_scope: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    authority: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    value: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    scope: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     __table_args__ = (
-        UniqueConstraint("provider", "entry_id", "entry_scope"),
-        Index("ix_animap_entry_provider_entry_id", "provider", "entry_id"),
+        UniqueConstraint("authority", "value", "scope"),
+        Index("ix_animap_entry_authority_value", "authority", "value"),
     )
 
 
 class AnimapMapping(Base):
-    """Model representing a mapping between two provider entries."""
+    """Model representing a mapping between two authority entries."""
 
     __tablename__ = "animap_mapping"
 

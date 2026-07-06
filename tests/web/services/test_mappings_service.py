@@ -1,4 +1,4 @@
-"""Tests for v3 mappings service (provider-range graph)."""
+"""Tests for v3 mappings service (authority-range graph)."""
 
 import asyncio
 from contextlib import contextmanager
@@ -50,8 +50,8 @@ def _fresh_tables():
 
 def _seed_graph():
     with db() as ctx:
-        a = AnimapEntry(provider="anilist", entry_id="1", entry_scope=None)
-        b = AnimapEntry(provider="tmdb", entry_id="10", entry_scope=None)
+        a = AnimapEntry(authority="anilist", value="1", scope=None)
+        b = AnimapEntry(authority="tmdb", value="10", scope=None)
         ctx.session.add_all([a, b])
         ctx.session.flush()
         mapping = AnimapMapping(
@@ -92,7 +92,7 @@ async def test_list_mappings_returns_edges_and_sources() -> None:
         assert total == 2
         descriptors = {item["descriptor"] for item in items}
         assert "anilist:1" in descriptors
-        assert any(edge["target_provider"] == "tmdb" for edge in items[0]["edges"])
+        assert any(edge["target_authority"] == "tmdb" for edge in items[0]["edges"])
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_get_mapping_filters_by_descriptor() -> None:
         _seed_graph()
         item = await service.get_mapping("anilist:1")
         assert item["descriptor"] == "anilist:1"
-        assert item["edges"][0]["target_provider"] == "tmdb"
+        assert item["edges"][0]["target_authority"] == "tmdb"
 
 
 @pytest.mark.asyncio
@@ -114,9 +114,11 @@ async def test_custom_only_filters_items() -> None:
         _seed_graph()
         # Add upstream provenance to second mapping to mark non-custom
         with db() as ctx:
-            tmdb_entry = ctx.session.query(AnimapEntry).filter_by(provider="tmdb").one()
+            tmdb_entry = (
+                ctx.session.query(AnimapEntry).filter_by(authority="tmdb").one()
+            )
             anilist_entry = (
-                ctx.session.query(AnimapEntry).filter_by(provider="anilist").one()
+                ctx.session.query(AnimapEntry).filter_by(authority="anilist").one()
             )
             mapping = AnimapMapping(
                 source_entry_id=tmdb_entry.id,
@@ -143,12 +145,10 @@ async def test_custom_only_applies_before_pagination() -> None:
     service = MappingsService()
     with _fresh_tables():
         with db() as ctx:
-            upstream_entry = AnimapEntry(provider="aaa", entry_id="1", entry_scope=None)
-            upstream_target = AnimapEntry(
-                provider="dest", entry_id="1", entry_scope=None
-            )
-            custom_entry = AnimapEntry(provider="zzz", entry_id="1", entry_scope=None)
-            custom_target = AnimapEntry(provider="dest", entry_id="2", entry_scope=None)
+            upstream_entry = AnimapEntry(authority="aaa", value="1", scope=None)
+            upstream_target = AnimapEntry(authority="dest", value="1", scope=None)
+            custom_entry = AnimapEntry(authority="zzz", value="1", scope=None)
+            custom_target = AnimapEntry(authority="dest", value="2", scope=None)
             ctx.session.add_all(
                 [upstream_entry, upstream_target, custom_entry, custom_target]
             )
@@ -187,7 +187,7 @@ async def test_custom_only_applies_before_pagination() -> None:
         assert total == 1
         assert len(items) == 1
         assert items[0]["descriptor"] == (
-            f"{custom_entry.provider}:{custom_entry.entry_id}"
+            f"{custom_entry.authority}:{custom_entry.value}"
         )
 
 
@@ -200,10 +200,8 @@ async def test_filter_custom_entry_ids_batches() -> None:
         with db() as ctx:
             entries: list[AnimapEntry] = []
             for idx in range(total_entries):
-                entry = AnimapEntry(
-                    provider=f"p{idx:04d}", entry_id=str(idx), entry_scope=None
-                )
-                target = AnimapEntry(provider="t", entry_id=str(idx), entry_scope=None)
+                entry = AnimapEntry(authority=f"p{idx:04d}", value=str(idx), scope=None)
+                target = AnimapEntry(authority="t", value=str(idx), scope=None)
                 ctx.session.add_all([entry, target])
                 entries.append(entry)
             ctx.session.flush()
@@ -212,7 +210,7 @@ async def test_filter_custom_entry_ids_batches() -> None:
             for entry in entries:
                 target = (
                     ctx.session.query(AnimapEntry)
-                    .filter_by(provider="t", entry_id=entry.entry_id)
+                    .filter_by(authority="t", value=entry.value)
                     .one()
                 )
                 mapping = AnimapMapping(
@@ -247,14 +245,10 @@ async def test_search_by_descriptor_string() -> None:
     service = MappingsService()
     with _fresh_tables():
         with db() as ctx:
-            plain = AnimapEntry(provider="tmdb", entry_id="10", entry_scope=None)
-            scoped = AnimapEntry(provider="tmdb", entry_id="11", entry_scope="s1")
-            target_plain = AnimapEntry(
-                provider="anilist", entry_id="1", entry_scope=None
-            )
-            target_scoped = AnimapEntry(
-                provider="anilist", entry_id="2", entry_scope="s1"
-            )
+            plain = AnimapEntry(authority="tmdb", value="10", scope=None)
+            scoped = AnimapEntry(authority="tmdb", value="11", scope="s1")
+            target_plain = AnimapEntry(authority="anilist", value="1", scope=None)
+            target_scoped = AnimapEntry(authority="anilist", value="2", scope="s1")
             ctx.session.add_all([plain, scoped, target_plain, target_scoped])
             ctx.session.flush()
 
@@ -389,7 +383,7 @@ def test_build_anilist_numeric_id_filters_support_multiple_values() -> None:
 def test_collect_anilist_and_groups() -> None:
     """AniList key terms are grouped when directly AND-ed."""
     service = MappingsService()
-    node = parse_query("anilist.id:1 anilist.format:TV source.provider:tmdb")
+    node = parse_query("anilist.id:1 anilist.format:TV source.authority:tmdb")
     groups = service._collect_anilist_and_groups(node)
 
     assert len(groups) == 1
@@ -401,9 +395,9 @@ def test_filter_entry_and_edge_helpers() -> None:
     """Helper filters respect wildcards, nulls, and edge attributes."""
     service = MappingsService()
     with _fresh_tables(), db() as ctx:
-        entry_a = AnimapEntry(provider="anilist", entry_id="abc", entry_scope=None)
-        entry_b = AnimapEntry(provider="anilist", entry_id="xyz", entry_scope="s1")
-        target = AnimapEntry(provider="tmdb", entry_id="10", entry_scope=None)
+        entry_a = AnimapEntry(authority="anilist", value="abc", scope=None)
+        entry_b = AnimapEntry(authority="anilist", value="xyz", scope="s1")
+        target = AnimapEntry(authority="tmdb", value="10", scope=None)
         ctx.session.add_all([entry_a, entry_b, target])
         ctx.session.flush()
 
@@ -422,23 +416,21 @@ def test_filter_entry_and_edge_helpers() -> None:
         ctx.session.add_all([mapping_a, mapping_b])
         ctx.session.commit()
 
-        wildcard_ids = service._filter_entry_column(ctx, AnimapEntry.entry_id, "a*")
+        wildcard_ids = service._filter_entry_column(ctx, AnimapEntry.value, "a*")
         assert wildcard_ids == {entry_a.id}
 
-        null_scope_ids = service._filter_entry_column(
-            ctx, AnimapEntry.entry_scope, None
-        )
+        null_scope_ids = service._filter_entry_column(ctx, AnimapEntry.scope, None)
         assert null_scope_ids == {entry_a.id, target.id}
 
         values_scope_ids = service._filter_entry_column(
-            ctx, AnimapEntry.entry_scope, None, ("s1", None)
+            ctx, AnimapEntry.scope, None, ("s1", None)
         )
         assert values_scope_ids == {entry_a.id, entry_b.id, target.id}
 
-        edge_ids = service._filter_edge_target(ctx, "provider", "tmdb")
+        edge_ids = service._filter_edge_target(ctx, "authority", "tmdb")
         assert edge_ids == {entry_a.id, entry_b.id}
 
-        edge_null_scope = service._filter_edge_target(ctx, "entry_scope", None)
+        edge_null_scope = service._filter_edge_target(ctx, "scope", None)
         assert edge_null_scope == {entry_a.id, entry_b.id}
 
         edge_range_ids = service._filter_edge_range(ctx, "destination_range", None)
@@ -449,13 +441,13 @@ def test_resolve_db_term_in_values_and_nulls() -> None:
     """DB term resolution handles IN lists and null literals."""
     service = MappingsService()
     with _fresh_tables(), db() as ctx:
-        entry_a = AnimapEntry(provider="anilist", entry_id="1", entry_scope=None)
-        entry_b = AnimapEntry(provider="tmdb", entry_id="2", entry_scope="s1")
+        entry_a = AnimapEntry(authority="anilist", value="1", scope=None)
+        entry_b = AnimapEntry(authority="tmdb", value="2", scope="s1")
         ctx.session.add_all([entry_a, entry_b])
         ctx.session.commit()
 
         in_term = KeyTerm(
-            key="source.provider",
+            key="source.authority",
             value="anilist,tmdb",
             values=("anilist", "tmdb"),
         )
@@ -493,8 +485,8 @@ async def test_attach_anilist_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
 
     items = [
         MappingItem(
-            provider="anilist",
-            entry_id="1",
+            authority="anilist",
+            value="1",
             scope=None,
             edges=[],
             custom=True,
@@ -625,7 +617,7 @@ def test_build_anilist_term_filters_reject_invalid_specs() -> None:
             _make_spec(
                 kind=QueryFieldKind.DB_SCALAR,
                 type=QueryFieldType.STRING,
-                anilist_field="provider",
+                anilist_field="authority",
             ),
             "tmdb",
         )
@@ -800,8 +792,8 @@ def test_filter_helpers_support_wildcards_and_empty_inputs() -> None:
     """DB helpers should support wildcard destination matching and empty sets."""
     service = MappingsService()
     with _fresh_tables(), db() as ctx:
-        source = AnimapEntry(provider="imdb", entry_id="src", entry_scope=None)
-        dest = AnimapEntry(provider="tmdb", entry_id="target-1", entry_scope="s1")
+        source = AnimapEntry(authority="imdb", value="src", scope=None)
+        dest = AnimapEntry(authority="tmdb", value="target-1", scope="s1")
         ctx.session.add_all([source, dest])
         ctx.session.flush()
         ctx.session.add(
@@ -814,7 +806,7 @@ def test_filter_helpers_support_wildcards_and_empty_inputs() -> None:
         )
         ctx.session.commit()
 
-        assert service._filter_edge_target(ctx, "provider", "tm*") == {source.id}
+        assert service._filter_edge_target(ctx, "authority", "tm*") == {source.id}
         assert service._filter_edge_range(ctx, "source_range", "1*") == {source.id}
         assert service._filter_edge_range(ctx, "destination_range", "1-*") == {
             source.id
@@ -908,9 +900,9 @@ def test_build_item_and_resolve_anilist_id_handle_missing_targets() -> None:
     """Items should skip missing targets and ignore invalid AniList identifiers."""
     service = MappingsService()
     service.upstream_url = "upstream"
-    entry = AnimapEntry(id=1, provider="tmdb", entry_id="10", entry_scope=None)
+    entry = AnimapEntry(id=1, authority="tmdb", value="10", scope=None)
     invalid_target = AnimapEntry(
-        id=2, provider="anilist", entry_id="not-a-number", entry_scope=None
+        id=2, authority="anilist", value="not-a-number", scope=None
     )
     edge = AnimapMapping(
         id=1,
@@ -932,7 +924,7 @@ def test_build_item_and_resolve_anilist_id_handle_missing_targets() -> None:
     assert service._resolve_anilist_id(entry, {2: invalid_target}, [edge]) is None
     assert (
         service._resolve_anilist_id(
-            AnimapEntry(id=3, provider="anilist", entry_id="bad", entry_scope=None),
+            AnimapEntry(id=3, authority="anilist", value="bad", scope=None),
             {},
             [],
         )
@@ -947,8 +939,8 @@ async def test_attach_anilist_metadata_short_circuits_and_propagates_cancel(
     """AniList enrichment should no-op without IDs and re-raise cancellation."""
     service = MappingsService()
     item = MappingItem(
-        provider="tmdb",
-        entry_id="10",
+        authority="tmdb",
+        value="10",
         scope=None,
         edges=[],
         custom=False,
@@ -969,8 +961,8 @@ async def test_attach_anilist_metadata_short_circuits_and_propagates_cancel(
         lambda: DummyState(),
     )
     cancelled_item = MappingItem(
-        provider="tmdb",
-        entry_id="10",
+        authority="tmdb",
+        value="10",
         scope=None,
         edges=[],
         custom=False,
@@ -988,10 +980,10 @@ async def test_fetch_build_helpers_handle_empty_and_custom_only(
 ) -> None:
     """Helper builders should short-circuit on empty inputs and custom filtering."""
     service = MappingsService()
-    entry = AnimapEntry(id=1, provider="tmdb", entry_id="1", entry_scope=None)
+    entry = AnimapEntry(id=1, authority="tmdb", value="1", scope=None)
     item = MappingItem(
-        provider="tmdb",
-        entry_id="1",
+        authority="tmdb",
+        value="1",
         scope=None,
         edges=[],
         custom=False,
@@ -1016,7 +1008,7 @@ async def test_evaluate_query_uses_cached_results_and_custom_filter(
     """Query evaluation should reuse AniList term results and custom-only filtering."""
     service = MappingsService()
     ani_term = KeyTerm("anilist.id", "1")
-    db_term = KeyTerm("source.provider", "tmdb")
+    db_term = KeyTerm("source.authority", "tmdb")
     node = object()
 
     class DummyState:

@@ -2,584 +2,547 @@
     import { onMount } from "svelte";
 
     import {
-        ArrowUp,
-        Check,
-        Circle,
-        CircleCheck,
-        CircleX,
-        Infinity as InfinityIcon,
+        CircleSlash,
+        CloudDownload,
+        History,
         LoaderCircle,
-        RotateCcw,
-        SearchX,
-        Trash2,
+        RefreshCcw,
+        RotateCw,
+        Wrench,
     } from "@lucide/svelte";
-    import { SvelteSet, SvelteURLSearchParams } from "svelte/reactivity";
+    import { Meter } from "bits-ui";
+    import { SvelteURLSearchParams } from "svelte/reactivity";
+    import { fade } from "svelte/transition";
 
-    import TimelineGlobalPinsManager from "$lib/components/timeline/timeline-global-pins-manager.svelte";
-    import TimelineHeader from "$lib/components/timeline/timeline-header.svelte";
-    import TimelineItem from "$lib/components/timeline/timeline-item.svelte";
+    import { page } from "$app/state";
+    import TimelineGroupCard from "$lib/components/timeline/timeline-group-card.svelte";
     import TimelineOutcomeFilters from "$lib/components/timeline/timeline-outcome-filters.svelte";
-    import type { ItemDiffUi } from "$lib/components/timeline/types";
-    import { displaySnapshotValues } from "$lib/components/timeline/utils";
+    import { OUTCOME_META, type OutcomeMeta } from "$lib/components/timeline/types";
     import type {
-        CurrentSync,
         GetHistoryResponse,
-        HistoryItem,
+        HistoryGroup,
+        HistoryOperation,
+        ProfileStatus,
         StatusResponse,
     } from "$lib/types/api";
-    import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
+    import { apiFetch, buildWebSocketUrl, isAbortError } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
-    import { refLabel, targetIdentifier } from "$lib/utils/provider-ref";
+    import {
+        progressCount,
+        progressPercent,
+        progressStage,
+        progressSubject,
+    } from "$lib/utils/sync-progress";
 
-    const { params } = $props<{ params: { profile: string } }>();
+    const profile = $derived(page.params.profile ?? "");
 
-    let items: HistoryItem[] = $state([]);
+    let groups: HistoryGroup[] = $state([]);
     let stats: Record<string, number> = $state({});
-    let loadingInitial = $state(true);
-    let loadingMore = $state(false);
-    let loadingNew = $state(false);
-    let limit = $state(25);
+    let profiles: StatusResponse["profiles"] = $state({});
+    let loading = $state(true);
+    let loadingOlder = $state(false);
+    let refreshing = $state(false);
+    let acting = $state(false);
     let hasMore = $state(false);
     let nextBeforeId: number | null = $state(null);
-    let latestId: number | null = $state(null);
-    let outcomeFilter: string | null = $state("synced");
-    let showJump = $state(false);
-    let newItemsCount = $state(0);
-    let ws: WebSocket | null = null;
-    let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let wsShouldReconnect = true;
+    let latestGroupId: number | null = $state(null);
+    let activeOutcome: string | null = $state(null);
+    let lastRefreshed: number | null = $state(null);
+
+    let currentAbort: AbortController | null = null;
     let statusWs: WebSocket | null = null;
-    let knownIds = new SvelteSet<number>();
-    let sentinel: HTMLDivElement | null = $state(null);
-    let openDiff: Record<number, boolean> = $state({});
-    let currentSync: CurrentSync | null = $state(null);
-    let isProfileRunning = $state(false);
-    let isReinitializing = $state(false);
+    let historyWs: WebSocket | null = null;
+    let statusReconnect: ReturnType<typeof setTimeout> | null = null;
+    let historyReconnect: ReturnType<typeof setTimeout> | null = null;
+    let mounted = false;
+    let destroyed = false;
+    let activeProfile = "";
 
-    let openPins: Record<number, boolean> = $state({});
-    let pinDraftCounts: Record<number, number> = $state({});
-    let pinBusy: Record<number, boolean> = $state({});
+    const profileStatus = $derived<ProfileStatus | null>(profiles[profile] ?? null);
+    const currentSync = $derived(profileStatus?.status?.current_sync ?? null);
+    const isProfileRunning = $derived(currentSync?.state === "running");
+    const outcomeFilterMeta = $derived(buildOutcomeFilterMeta(stats));
 
-    let diffUi: Record<number, ItemDiffUi> = $state({});
+    const hasRunningSync = () => currentSync?.state === "running";
+    const percent = () => progressPercent(currentSync) ?? 0;
+    const isDeterminate = () => progressPercent(currentSync) !== null;
 
-    function ensureDiffUi(id: number): ItemDiffUi {
-        return (diffUi[id] ??= { tab: "changes", filter: "", showUnchanged: false });
-    }
-
-    function toggleDiff(id: number) {
-        openDiff[id] = !openDiff[id];
-        ensureDiffUi(id);
-    }
-
-    interface OutcomeMeta {
-        label: string;
-        color: string;
-        icon: typeof Circle;
-        order: number;
-    }
-    const OUTCOME_META: Record<string, OutcomeMeta> = {
-        synced: {
-            label: "Synced",
-            color: "bg-emerald-600/80",
-            icon: CircleCheck,
-            order: 0,
-        },
-        failed: { label: "Failed", color: "bg-red-600/80", icon: CircleX, order: 1 },
-        not_found: {
-            label: "Not Found",
-            color: "bg-amber-500/80",
-            icon: SearchX,
-            order: 2,
-        },
-        deleted: { label: "Deleted", color: "bg-rose-600/80", icon: Trash2, order: 3 },
-        undone: { label: "Undone", color: "bg-sky-600/80", icon: RotateCcw, order: 4 },
-    };
-
-    function metaFor(o: string) {
-        return (
-            OUTCOME_META[o] ?? {
-                label: o,
-                color: "bg-slate-600/70",
-                icon: Circle,
-                order: 999,
-            }
+    function buildOutcomeFilterMeta(sourceStats: Record<string, number>) {
+        const entries = [
+            ...Object.keys(OUTCOME_META),
+            ...Object.keys(sourceStats),
+        ].filter((key, index, keys) => keys.indexOf(key) === index);
+        return Object.fromEntries(
+            entries
+                .map(
+                    (key) =>
+                        [key, OUTCOME_META[key] ?? fallbackOutcomeMeta(key)] as const,
+                )
+                .sort((a, b) => a[1].order - b[1].order),
         );
     }
 
-    const buildQuery = (opts?: {
-        beforeId?: number | null;
-        afterId?: number | null;
-        includeStats?: boolean;
-        limitOverride?: number;
-    }) => {
-        const u = new SvelteURLSearchParams({
-            limit: String(opts?.limitOverride ?? limit),
-        });
-        if (typeof opts?.beforeId === "number") {
-            u.set("before_id", String(opts.beforeId));
-        }
-        if (typeof opts?.afterId === "number") {
-            u.set("after_id", String(opts.afterId));
-        }
-        if (outcomeFilter) u.set("outcome", outcomeFilter);
-        if (opts?.includeStats) u.set("include_stats", "true");
-        return `/api/history/${params.profile}?${u}`;
-    };
-
-    const resetWsReconnectTimer = () => {
-        if (!wsReconnectTimer) return;
-        clearTimeout(wsReconnectTimer);
-        wsReconnectTimer = null;
-    };
-
-    function mergeNewest(itemsToPrepend: HistoryItem[]): number {
-        let added = 0;
-        const deduped: HistoryItem[] = [];
-        for (const item of itemsToPrepend) {
-            if (knownIds.has(item.id)) continue;
-            knownIds.add(item.id);
-            deduped.push(item);
-            added++;
-        }
-        if (deduped.length) items = [...deduped, ...items];
-        return added;
+    function fallbackOutcomeMeta(key: string): OutcomeMeta {
+        return { ...OUTCOME_META.skipped, label: key.replaceAll("_", " "), order: 900 };
     }
 
-    function displayTitle(item: HistoryItem) {
-        return (
-            item.target_media?.title ??
-            item.source_media?.title ??
-            (item.target_namespace && item.target_ref
-                ? `${item.target_namespace}:${refLabel(item.target_ref)}`
-                : null) ??
-            (item.source_namespace && item.source_ref
-                ? `${item.source_namespace}:${refLabel(item.source_ref)}`
-                : null) ??
-            "Unknown title"
-        );
+    function historyPath() {
+        return `/api/history/${encodeURIComponent(profile)}`;
     }
 
-    function coverImage(item: HistoryItem) {
-        return item.target_media?.poster_url ?? item.source_media?.poster_url ?? null;
+    function historyParams(includeStats = true) {
+        const params = new SvelteURLSearchParams({ limit: "25" });
+        if (includeStats) params.set("include_stats", "true");
+        if (activeOutcome) params.set("outcome", activeOutcome);
+        return params;
     }
 
-    async function deleteHistory(item: HistoryItem) {
-        if (!confirm("Delete this history entry?")) return;
+    function mergeGroups(nextGroups: HistoryGroup[], existing: HistoryGroup[]) {
+        const merged: HistoryGroup[] = [];
+        for (const group of [...nextGroups, ...existing]) {
+            if (!merged.some((item) => item.id === group.id)) merged.push(group);
+        }
+        return merged;
+    }
+
+    function formatTimeAgo(ts: number | null) {
+        if (!ts) return "never";
+        const seconds = Math.floor((Date.now() - ts) / 1000);
+        if (seconds < 45) return "just now";
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        return `${Math.floor(hours / 24)}d ago`;
+    }
+
+    async function loadStatus() {
         try {
-            const res = await apiFetch(`/api/history/${params.profile}/${item.id}`, {
-                method: "DELETE",
+            const response = await apiFetch("/api/status", undefined, { silent: true });
+            if (!response.ok) return;
+            const data = (await response.json()) as StatusResponse;
+            profiles = data.profiles;
+        } catch (error) {
+            console.error("Failed to load profile status", error);
+        }
+    }
+
+    async function loadHistory(mode: "replace" | "older" | "newer" = "replace") {
+        if (!profile) return;
+        const controller = new AbortController();
+        if (mode === "replace") {
+            currentAbort?.abort();
+            currentAbort = controller;
+            loading = groups.length === 0;
+            refreshing = groups.length > 0;
+        } else if (mode === "older") {
+            if (!nextBeforeId) return;
+            loadingOlder = true;
+        }
+
+        const params = historyParams(mode !== "older");
+        if (mode === "older" && nextBeforeId)
+            params.set("before_id", String(nextBeforeId));
+        if (mode === "newer" && latestGroupId)
+            params.set("after_id", String(latestGroupId));
+
+        try {
+            const response = await apiFetch(`${historyPath()}?${params.toString()}`, {
+                signal: controller.signal,
             });
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            const data = await res.json();
-            // Remove locally
-            items = items.filter((i) => i.id !== item.id);
-            knownIds.delete(item.id);
-            // Adjust stats
-            const oc = data.outcome || item.outcome;
-            if (oc) stats[oc] = Math.max(0, (stats[oc] || 1) - 1);
-            toast("History entry deleted", "success");
-        } catch (e) {
-            toast("Delete failed", "error");
-            console.error(e);
-        }
-    }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = (await response.json()) as GetHistoryResponse;
 
-    function canUndoHistory(item: HistoryItem): boolean {
-        return item.outcome === "synced" || item.outcome === "deleted";
-    }
-
-    async function undoHistory(item: HistoryItem) {
-        if (!confirm("Undo this history entry?")) return;
-        try {
-            const res = await apiFetch(
-                `/api/history/${params.profile}/${item.id}/undo`,
-                { method: "POST" },
-            );
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            toast("Undo queued", "success");
-        } catch (e) {
-            toast("Undo failed", "error");
-            console.error(e);
-        }
-    }
-
-    function canShowDiff(item: HistoryItem): boolean {
-        return !!(
-            item &&
-            (item.before_state || item.after_state) &&
-            item.outcome === "synced"
-        );
-    }
-
-    function diffCountFor(item: HistoryItem): number {
-        let count = 0;
-        const before = displaySnapshotValues(item.before_state);
-        const after = displaySnapshotValues(item.after_state);
-        const keys = new Set<string>([...Object.keys(before), ...Object.keys(after)]);
-        for (const k of keys) {
-            if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) {
-                count++;
+            if (mode === "older") {
+                groups = mergeGroups(groups, data.groups ?? []);
+            } else if (mode === "newer") {
+                groups = mergeGroups(data.groups ?? [], groups);
+            } else {
+                groups = data.groups ?? [];
             }
-        }
-        return count;
-    }
 
-    function applyPins(namespace: string, key: string, fields: string[]) {
-        items = items.map((entry) => {
-            const identifier = targetIdentifier(entry);
-            return identifier?.namespace === namespace && identifier?.key === key
-                ? { ...entry, pinned_fields: fields.length ? [...fields] : null }
-                : entry;
-        });
-    }
-
-    function pinCountFor(item: HistoryItem): number {
-        const draft = pinDraftCounts[item.id];
-        if (typeof draft === "number") return draft;
-        return Array.isArray(item.pinned_fields) ? item.pinned_fields.length : 0;
-    }
-
-    function handlePinsDraft(item: HistoryItem, fields: string[]) {
-        pinDraftCounts[item.id] = fields.length;
-    }
-
-    function handlePinsSaved(item: HistoryItem, fields: string[]) {
-        const identifier = targetIdentifier(item);
-        if (identifier) applyPins(identifier.namespace, identifier.key, fields);
-        pinDraftCounts[item.id] = fields.length;
-    }
-
-    function handlePinsBusy(item: HistoryItem, value: boolean) {
-        pinBusy[item.id] = value;
-    }
-
-    function togglePinsPanel(item: HistoryItem) {
-        const identifier = targetIdentifier(item);
-        if (!identifier) {
-            toast("Pins require a target record", "warn");
-            return;
-        }
-        const next = !openPins[item.id];
-        openPins[item.id] = next;
-        if (next) {
-            pinDraftCounts[item.id] = Array.isArray(item.pinned_fields)
-                ? item.pinned_fields.length
-                : 0;
-        } else {
-            delete pinDraftCounts[item.id];
-            delete pinBusy[item.id];
-        }
-    }
-
-    let isNearTop = $state(true);
-
-    function handleScroll() {
-        isNearTop = window.scrollY < 120;
-        if (isNearTop) newItemsCount = 0;
-        showJump = !isNearTop && (newItemsCount > 0 || window.scrollY > 400);
-    }
-
-    async function refreshProfileStatus() {
-        try {
-            const data = await apiJson<StatusResponse>("/api/status");
-            const profile = data.profiles?.[params.profile];
-            const current = profile?.status?.current_sync ?? null;
-            currentSync = current;
-            isProfileRunning = current?.state === "running";
-        } catch (e) {
-            console.error("Failed to refresh profile status", e);
-        }
-    }
-
-    async function loadFirst() {
-        loadingInitial = true;
-        try {
-            const r = await apiFetch(buildQuery({ includeStats: true }));
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const d = (await r.json()) as GetHistoryResponse;
-            items = d.items || [];
-            stats = d.stats || {};
-            limit = d.limit || 25;
-            hasMore = !!d.has_more;
-            latestId = d.latest_id ?? items[0]?.id ?? null;
-            nextBeforeId =
-                d.next_before_id ??
-                (hasMore && items.length ? items[items.length - 1].id : null);
-            knownIds = new SvelteSet(items.map((i) => i.id));
-            openPins = {};
-            pinDraftCounts = {};
-            pinBusy = {};
-            newItemsCount = 0;
-        } catch (e) {
-            console.error(e);
+            hasMore = data.has_more;
+            nextBeforeId = data.next_before_id ?? null;
+            latestGroupId = data.latest_group_id ?? latestGroupId;
+            if (data.stats) stats = data.stats;
+            lastRefreshed = Date.now();
+        } catch (error) {
+            if (isAbortError(error)) return;
+            console.error("Failed to load timeline", error);
+            toast("Failed to load timeline", "error");
         } finally {
-            loadingInitial = false;
+            if (currentAbort === controller) currentAbort = null;
+            loading = false;
+            refreshing = false;
+            loadingOlder = false;
         }
     }
 
-    async function loadMore() {
-        if (loadingMore || !hasMore || nextBeforeId === null) return;
-        loadingMore = true;
-        try {
-            const r = await apiFetch(
-                buildQuery({ beforeId: nextBeforeId, includeStats: false }),
-            );
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const d = (await r.json()) as GetHistoryResponse;
-            const newOnes = (d.items || []).filter(
-                (i: HistoryItem) => !knownIds.has(i.id),
-            );
-            items = [...items, ...newOnes];
-            hasMore = !!d.has_more;
-            nextBeforeId = d.next_before_id ?? null;
-            newOnes.forEach((i: HistoryItem) => knownIds.add(i.id));
-        } catch (e) {
-            console.error(e);
-        } finally {
-            loadingMore = false;
-        }
+    async function setOutcomeFilter(key: string | null) {
+        activeOutcome = key && activeOutcome !== key ? key : null;
+        await resetTimeline();
     }
 
-    async function loadNewer() {
-        if (loadingNew) return;
-        const currentTopId = items[0]?.id;
-        if (!currentTopId) return;
-
-        loadingNew = true;
-        try {
-            const r = await apiFetch(
-                buildQuery({
-                    afterId: currentTopId,
-                    includeStats: true,
-                    limitOverride: 250,
-                }),
-            );
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const d = (await r.json()) as GetHistoryResponse;
-            const added = mergeNewest(d.items || []);
-            if (added && !isNearTop) newItemsCount += added;
-            if (d.stats) stats = d.stats;
-            if (typeof d.latest_id === "number") latestId = d.latest_id;
-            handleScroll();
-        } catch (e) {
-            console.error(e);
-        } finally {
-            loadingNew = false;
-        }
+    async function resetTimeline() {
+        groups = [];
+        nextBeforeId = null;
+        latestGroupId = null;
+        await loadHistory("replace");
+        openHistoryWs();
     }
 
-    function toggleOutcomeFilter(k: string) {
-        outcomeFilter = outcomeFilter === k ? null : k;
-        loadFirst();
-        initWs();
-    }
-
-    function initWs() {
-        try {
-            ws?.close();
-        } catch {}
-        resetWsReconnectTimer();
-
-        const query = new SvelteURLSearchParams();
-        if (outcomeFilter) query.set("outcome", outcomeFilter);
-        const querySuffix = query.toString() ? `?${query}` : "";
-        ws = new WebSocket(
-            buildWebSocketUrl(`/ws/history/${params.profile}${querySuffix}`),
+    async function syncProfile(trigger: "manual" | "poll") {
+        const response = await apiFetch(
+            `/api/sync/profile/${encodeURIComponent(profile)}?trigger=${trigger}`,
+            { method: "POST" },
+            {
+                successMessage:
+                    trigger === "poll"
+                        ? `Triggered poll sync for profile ${profile}`
+                        : `Triggered full sync for profile ${profile}`,
+            },
         );
-        ws.onmessage = (ev) => {
-            try {
-                const d = JSON.parse(ev.data);
-                if (typeof d.latest_id !== "number") return;
-                if (latestId === null) {
-                    latestId = d.latest_id;
-                    void loadFirst();
-                    return;
-                }
-                if (d.latest_id <= latestId) return;
-                latestId = d.latest_id;
-                void loadNewer();
-            } catch {}
-        };
-        ws.onclose = () => {
-            if (!wsShouldReconnect) return;
-            wsReconnectTimer = setTimeout(initWs, 2000);
-        };
-    }
-
-    function initStatusWs() {
-        try {
-            statusWs?.close();
-        } catch {}
-        statusWs = new WebSocket(buildWebSocketUrl("/ws/status"));
-        statusWs.onmessage = (ev) => {
-            try {
-                const data = JSON.parse(ev.data);
-                const prof = data?.profiles?.[params.profile];
-                const cs = prof?.status?.current_sync;
-                currentSync = cs ?? null;
-                isProfileRunning = prof?.status?.current_sync?.state === "running";
-            } catch {}
-        };
-        statusWs.onclose = () => {
-            setTimeout(initStatusWs, 2000);
-        };
-    }
-
-    function jumpToLatest() {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-        setTimeout(() => {
-            newItemsCount = 0;
-            handleScroll();
-        }, 400);
-    }
-
-    async function triggerSync(trigger: "manual" | "poll") {
-        try {
-            await apiFetch(
-                `/api/sync/profile/${params.profile}?trigger=${trigger}`,
-                { method: "POST" },
-                {
-                    successMessage:
-                        trigger === "poll"
-                            ? `Triggered poll sync for profile ${params.profile}`
-                            : `Triggered full sync for profile ${params.profile}`,
-                },
-            );
-        } catch {
-            toast("Sync failed", "error");
-        }
+        if (response.ok) await loadStatus();
     }
 
     async function reinitializeProfile() {
-        if (isReinitializing) return;
         if (
             !confirm(
-                `Reinitialize profile ${params.profile}?\n\nThis will recreate its providers and restart its scheduler.`,
+                `Reinitialize profile ${profile}?\n\nThis will recreate its providers and restart its scheduler.`,
             )
         ) {
             return;
         }
-
-        isReinitializing = true;
+        acting = true;
         try {
             const response = await apiFetch(
-                `/api/sync/profile/${params.profile}/reinitialize`,
+                `/api/sync/profile/${encodeURIComponent(profile)}/reinitialize`,
                 { method: "POST" },
-                { successMessage: `Reinitialized profile ${params.profile}` },
+                { successMessage: `Reinitialized profile ${profile}` },
             );
-            if (!response.ok) return;
-            await refreshProfileStatus();
-        } catch (e) {
-            console.error("Failed to reinitialize profile", e);
+            if (response.ok) await loadStatus();
         } finally {
-            isReinitializing = false;
+            acting = false;
         }
     }
 
-    onMount(() => {
-        wsShouldReconnect = true;
-        loadFirst();
-        refreshProfileStatus();
-        initWs();
-        initStatusWs();
-        const io = new IntersectionObserver((entries) => {
-            for (const e of entries) if (e.isIntersecting) loadMore();
-        });
-        if (sentinel) io.observe(sentinel);
-        addEventListener("scroll", handleScroll, { passive: true });
-        return () => {
-            wsShouldReconnect = false;
+    async function retryGroup(group: HistoryGroup) {
+        acting = true;
+        try {
+            const response = await apiFetch(
+                `${historyPath()}/groups/${group.id}/retry`,
+                { method: "POST" },
+                { successMessage: "Retry queued" },
+            );
+            if (response.ok) await loadStatus();
+        } finally {
+            acting = false;
+        }
+    }
+
+    async function deleteGroup(group: HistoryGroup) {
+        if (!confirm(`Delete timeline group #${group.id}?`)) return;
+        acting = true;
+        try {
+            const response = await apiFetch(
+                `${historyPath()}/groups/${group.id}`,
+                { method: "DELETE" },
+                { successMessage: "Deleted timeline group" },
+            );
+            if (response.ok) groups = groups.filter((item) => item.id !== group.id);
+        } finally {
+            acting = false;
+        }
+    }
+
+    async function undoOperation(operation: HistoryOperation) {
+        if (!confirm(`Undo operation #${operation.id}?`)) return;
+        acting = true;
+        try {
+            const response = await apiFetch(
+                `${historyPath()}/operations/${operation.id}/undo`,
+                { method: "POST" },
+                { successMessage: "Undo queued" },
+            );
+            if (response.ok) await loadStatus();
+        } finally {
+            acting = false;
+        }
+    }
+
+    async function deleteOperation(operation: HistoryOperation) {
+        if (!confirm(`Delete operation #${operation.id}?`)) return;
+        acting = true;
+        try {
+            const response = await apiFetch(
+                `${historyPath()}/operations/${operation.id}`,
+                { method: "DELETE" },
+                { successMessage: "Deleted timeline operation" },
+            );
+            if (response.ok) await loadHistory("replace");
+        } finally {
+            acting = false;
+        }
+    }
+
+    function openStatusWs() {
+        if (destroyed) return;
+        statusWs?.close();
+        if (statusReconnect) clearTimeout(statusReconnect);
+        statusWs = new WebSocket(buildWebSocketUrl("/ws/status"));
+        statusWs.onmessage = (event) => {
             try {
-                ws?.close();
-                statusWs?.close();
+                const data = JSON.parse(event.data) as Partial<StatusResponse>;
+                if (data.profiles) profiles = data.profiles;
             } catch {}
-            resetWsReconnectTimer();
-            removeEventListener("scroll", handleScroll);
-            io.disconnect();
         };
+        statusWs.onclose = () => {
+            if (!destroyed) statusReconnect = setTimeout(openStatusWs, 2500);
+        };
+    }
+
+    function openHistoryWs() {
+        if (destroyed || !profile) return;
+        historyWs?.close();
+        if (historyReconnect) clearTimeout(historyReconnect);
+        const params = new SvelteURLSearchParams();
+        if (activeOutcome) params.set("outcome", activeOutcome);
+        const suffix = params.toString() ? `?${params.toString()}` : "";
+        historyWs = new WebSocket(
+            buildWebSocketUrl(`/ws/history/${encodeURIComponent(profile)}${suffix}`),
+        );
+        historyWs.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data) as {
+                    latest_group_id?: number | null;
+                };
+                const nextLatest = data.latest_group_id ?? null;
+                if (nextLatest && latestGroupId && nextLatest > latestGroupId) {
+                    void loadHistory("newer");
+                } else if (nextLatest && !latestGroupId) {
+                    void loadHistory("replace");
+                }
+            } catch {}
+        };
+        historyWs.onclose = () => {
+            if (!destroyed) historyReconnect = setTimeout(openHistoryWs, 2500);
+        };
+    }
+
+    onMount(() => {
+        mounted = true;
+        activeProfile = profile;
+        void loadStatus();
+        void loadHistory("replace");
+        openStatusWs();
+        openHistoryWs();
+
+        return () => {
+            destroyed = true;
+            currentAbort?.abort();
+            statusWs?.close();
+            historyWs?.close();
+            if (statusReconnect) clearTimeout(statusReconnect);
+            if (historyReconnect) clearTimeout(historyReconnect);
+        };
+    });
+
+    $effect(() => {
+        if (!mounted || profile === activeProfile) return;
+        activeProfile = profile;
+        activeOutcome = null;
+        groups = [];
+        nextBeforeId = null;
+        latestGroupId = null;
+        void loadStatus();
+        void loadHistory("replace");
+        openHistoryWs();
     });
 </script>
 
 <div class="space-y-6">
-    <TimelineHeader
-        profile={params.profile}
-        {currentSync}
-        {isProfileRunning}
-        {isReinitializing}
-        onFullSync={() => triggerSync("manual")}
-        onPollSync={() => triggerSync("poll")}
-        onReinitialize={reinitializeProfile}
-        onRefresh={loadFirst} />
-    <div class="-mt-1">
-        <TimelineGlobalPinsManager profile={params.profile} />
-    </div>
-    <TimelineOutcomeFilters
-        meta={OUTCOME_META}
-        {stats}
-        active={outcomeFilter}
-        onToggle={toggleOutcomeFilter}
-        onClear={() => ((outcomeFilter = null), loadFirst(), initWs())} />
-
-    <div
-        class="flex items-center gap-2 text-[11px] text-slate-500"
-        hidden={!items.length}>
-        <span class="inline-flex items-center gap-1"
-            ><InfinityIcon class="inline h-4 w-4" /> Scroll to load older history</span>
-        {#if loadingMore}
-            <span class="inline-flex items-center gap-1 text-sky-300"
-                ><LoaderCircle class="inline h-4 w-4 animate-spin" /> Loading…</span>
-        {/if}
-        {#if !loadingMore && !hasMore}
-            <span class="inline-flex items-center gap-1 text-emerald-400"
-                ><Check class="inline h-4 w-4" /> All loaded</span>
-        {/if}
-    </div>
-    <div
-        class="space-y-4"
-        class:hidden={!items.length && !loadingInitial}>
-        {#each items as item (item.id)}
-            {@const meta = metaFor(item.outcome)}
-            <TimelineItem
-                profile={params.profile}
-                {item}
-                {meta}
-                {displayTitle}
-                {coverImage}
-                {undoHistory}
-                {canUndoHistory}
-                {deleteHistory}
-                {canShowDiff}
-                {toggleDiff}
-                openDiff={openDiff[item.id] || false}
-                {ensureDiffUi}
-                diffCount={diffCountFor(item)}
-                hasPins={Boolean(targetIdentifier(item))}
-                togglePins={togglePinsPanel}
-                openPins={openPins[item.id] || false}
-                pinButtonLoading={pinBusy[item.id] || false}
-                pinCount={pinCountFor(item)}
-                onPinsDraft={handlePinsDraft}
-                onPinsSaved={handlePinsSaved}
-                onPinsBusy={handlePinsBusy} />
-        {/each}
-    </div>
-    {#if !items.length && !loadingInitial}
-        <p class="text-sm text-slate-500">No history yet.</p>
-    {/if}
-    <div bind:this={sentinel}></div>
-    {#if showJump}
-        <div class="fixed right-6 bottom-6 z-40">
-            <button
-                onclick={jumpToLatest}
-                class="pointer-events-auto flex items-center gap-2 rounded-md border border-sky-500/60 bg-linear-to-r from-sky-600 to-sky-500 py-2 pr-3 pl-3 text-sm font-medium text-white shadow-md shadow-slate-950/40 backdrop-blur-md hover:from-sky-500 hover:to-sky-400">
-                <ArrowUp class="inline h-4 w-4" />
-                <span class="hidden sm:inline">Latest</span>
-                {#if newItemsCount > 0}
-                    <span
-                        class="inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-white/20 bg-slate-900/70 px-1 text-[10px] leading-none font-semibold text-white shadow ring-1 ring-sky-300/40"
-                        >{newItemsCount}</span>
-                {/if}
-            </button>
+    <div class="space-y-2">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="space-y-1 sm:flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                    <History class="inline h-4 w-4 text-slate-300" />
+                    <h2 class="text-lg font-semibold">Sync Timeline</h2>
+                    <span class="text-xs text-slate-500">
+                        {profile}
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">
+                    Review sync history, inspect changes, and replay failed work.
+                </p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-[11px] sm:justify-end">
+                <button
+                    onclick={reinitializeProfile}
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 font-medium text-amber-200 shadow-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none disabled:cursor-wait disabled:opacity-70 sm:px-3 sm:py-1.5"
+                    disabled={acting}
+                    ><Wrench
+                        class={`inline h-4 w-4 text-[14px] ${acting ? "animate-spin" : ""}`} />
+                    {acting ? "Reinitializing..." : "Reinitialize"}</button>
+                <button
+                    onclick={() => syncProfile("manual")}
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 font-medium text-emerald-200 shadow-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5"
+                    disabled={isProfileRunning || acting}
+                    ><RefreshCcw class="inline h-4 w-4 text-[14px]" /> Full Scan</button>
+                <button
+                    onclick={() => syncProfile("poll")}
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 font-medium text-sky-200 shadow-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5"
+                    disabled={isProfileRunning || acting}
+                    ><CloudDownload class="inline h-4 w-4 text-[14px]" /> Poll Scan</button>
+                <button
+                    onclick={() => loadHistory("replace")}
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border border-slate-600/60 bg-slate-700/40 px-2 py-1 font-medium text-slate-200 shadow-sm transition-colors hover:bg-slate-600/50 focus:ring-2 focus:ring-slate-500/40 focus:outline-none sm:px-3 sm:py-1.5"
+                    ><RotateCw class="inline h-4 w-4 text-[14px]" /> Refresh</button>
+            </div>
         </div>
-    {/if}
+        {#if hasRunningSync()}
+            <div class="mt-2 space-y-2">
+                <div class="flex items-center justify-between text-[11px] text-slate-400">
+                    <div class="truncate">
+                        {#if progressSubject(currentSync)}
+                            <span class="text-slate-300"
+                                >{progressSubject(currentSync)}</span>
+                            <span class="mx-1">•</span>
+                        {/if}
+                        <span class="tracking-wide uppercase"
+                            >{progressStage(currentSync)}</span>
+                    </div>
+                    <div>
+                        {progressCount(currentSync)}
+                    </div>
+                </div>
+                {#key currentSync?.started_at}
+                    {#if isDeterminate()}
+                        <Meter.Root
+                            value={percent()}
+                            min={0}
+                            max={1}
+                            class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                            <div
+                                class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
+                                style="transform: translateX(-{100 - 100 * percent()}%)">
+                            </div>
+                        </Meter.Root>
+                    {:else}
+                        <div class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                            <div
+                                class="sync-progress-indeterminate h-full w-1/3 bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400">
+                            </div>
+                        </div>
+                    {/if}
+                {/key}
+            </div>
+        {/if}
+    </div>
+
+    <section class="space-y-3">
+        <TimelineOutcomeFilters
+            meta={outcomeFilterMeta}
+            {stats}
+            active={activeOutcome}
+            onToggle={(key) => setOutcomeFilter(key)}
+            onClear={() => setOutcomeFilter(null)} />
+        <div
+            class="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            <span>updated {formatTimeAgo(lastRefreshed)}</span>
+            {#if refreshing}
+                <span class="inline-flex items-center gap-1 text-sky-300">
+                    <LoaderCircle class="h-3 w-3 animate-spin" /> refreshing
+                </span>
+            {/if}
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {#if loading && groups.length === 0}
+            {#each [1, 2, 3] as item (item)}
+                <div
+                    in:fade={{ duration: 150 }}
+                    class="animate-pulse rounded-md border border-slate-800/60 bg-slate-900/40 p-4">
+                    <div class="flex items-center gap-2">
+                        <div class="h-5 w-20 rounded bg-slate-800/80"></div>
+                        <div class="h-3 w-36 rounded bg-slate-800/60"></div>
+                    </div>
+                    <div class="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_1fr]">
+                        <div class="flex h-32 gap-3 rounded-md bg-slate-800/40 p-2.5">
+                            <div class="h-full w-19 rounded-md bg-slate-700/50"></div>
+                            <div class="flex-1 space-y-2 py-2">
+                                <div class="h-3 w-20 rounded bg-slate-700/50"></div>
+                                <div class="h-4 w-2/3 rounded bg-slate-700/50"></div>
+                                <div class="h-3 w-1/2 rounded bg-slate-700/40"></div>
+                            </div>
+                        </div>
+                        <div class="hidden h-24 w-4 rounded bg-slate-900 lg:block">
+                        </div>
+                        <div class="flex h-32 gap-3 rounded-md bg-slate-800/40 p-2.5">
+                            <div class="h-full w-19 rounded-md bg-slate-700/50"></div>
+                            <div class="flex-1 space-y-2 py-2">
+                                <div class="h-3 w-20 rounded bg-slate-700/50"></div>
+                                <div class="h-4 w-2/3 rounded bg-slate-700/50"></div>
+                                <div class="h-3 w-1/2 rounded bg-slate-700/40"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {/each}
+        {:else if groups.length === 0}
+            <div
+                in:fade={{ duration: 150 }}
+                class="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700/70 bg-slate-900/30 p-8 text-center">
+                <CircleSlash class="h-8 w-8 text-slate-500" />
+                <div class="mt-3 text-sm font-medium text-slate-300">
+                    No timeline entries
+                </div>
+                <p class="mt-1 max-w-md text-xs text-slate-500">
+                    This profile has no history matching the active filters yet.
+                </p>
+            </div>
+        {:else}
+            {#each groups as group (group.id)}
+                <TimelineGroupCard
+                    {group}
+                    disabled={acting}
+                    onRetry={retryGroup}
+                    onDeleteGroup={deleteGroup}
+                    onUndoOperation={undoOperation}
+                    onDeleteOperation={deleteOperation} />
+            {/each}
+        {/if}
+
+        {#if hasMore}
+            <div class="flex justify-center">
+                <button
+                    type="button"
+                    class="inline-flex items-center gap-2 rounded-md border border-slate-700/70 bg-slate-800/60 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60"
+                    onclick={() => loadHistory("older")}
+                    disabled={loadingOlder}>
+                    {#if loadingOlder}<LoaderCircle class="h-4 w-4 animate-spin" />{/if}
+                    Load older
+                </button>
+            </div>
+        {/if}
+    </section>
 </div>
+
+<style>
+    .sync-progress-indeterminate {
+        animation: sync-progress-indeterminate 1.2s ease-in-out infinite;
+    }
+
+    @keyframes sync-progress-indeterminate {
+        0% {
+            transform: translateX(-120%);
+        }
+        100% {
+            transform: translateX(320%);
+        }
+    }
+</style>

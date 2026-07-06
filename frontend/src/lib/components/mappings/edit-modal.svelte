@@ -38,11 +38,11 @@
 
     type EditableEntry = {
         key: string;
-        provider: string;
-        entry_id: string;
+        authority: string;
+        value: string;
         scope: string;
-        provider_placeholder: string;
-        entry_id_placeholder: string;
+        authority_placeholder: string;
+        value_placeholder: string;
         scope_placeholder: string;
         origin: "upstream" | "custom" | "mixed" | "deleted";
         deleted: boolean;
@@ -54,9 +54,9 @@
     const DESCRIPTOR_RE = /^[^:\s]+:[^:\s]+(?::[^:\s]+)?$/;
 
     const fieldInfo = {
-        provider:
-            "Provider that the override belongs to (e.g. 'anilist', 'tvdb_show', 'tmdb_movie').",
-        entryId: "Entry identifier from the provider that the override targets.",
+        authority:
+            "Authority that the override belongs to (e.g. 'anilist', 'tvdb_show', 'tmdb_movie').",
+        value: "Descriptor value from the authority that the override targets.",
         scope: "Optional scope to apply the override for (e.g. 's1').",
     } as const;
 
@@ -66,7 +66,7 @@
             "Destination number or range to map to (e.g. '1', '1-12', '1-6|2').",
     };
 
-    type DescriptorState = { provider: string; entryId: string; scope: string };
+    type DescriptorState = { authority: string; value: string; scope: string };
 
     type DescriptorField = {
         field: keyof DescriptorState;
@@ -77,16 +77,16 @@
 
     const descriptorInputs: DescriptorField[] = [
         {
-            field: "provider",
-            placeholder: "Provider",
-            aria: "Descriptor provider",
-            info: fieldInfo.provider,
+            field: "authority",
+            placeholder: "Authority",
+            aria: "Descriptor authority",
+            info: fieldInfo.authority,
         },
         {
-            field: "entryId",
-            placeholder: "ID",
-            aria: "Descriptor entry id",
-            info: fieldInfo.entryId,
+            field: "value",
+            placeholder: "Value",
+            aria: "Descriptor value",
+            info: fieldInfo.value,
         },
         {
             field: "scope",
@@ -96,12 +96,12 @@
         },
     ];
 
-    const EMPTY_DESCRIPTOR: DescriptorState = { provider: "", entryId: "", scope: "" };
+    const EMPTY_DESCRIPTOR: DescriptorState = { authority: "", value: "", scope: "" };
 
-    type EntryFieldKey = "provider" | "entry_id" | "scope";
+    type EntryFieldKey = "authority" | "value" | "scope";
     type EntryPlaceholderKey =
-        | "provider_placeholder"
-        | "entry_id_placeholder"
+        | "authority_placeholder"
+        | "value_placeholder"
         | "scope_placeholder";
 
     type EntryField = {
@@ -114,18 +114,18 @@
 
     const entryFields: EntryField[] = [
         {
-            key: "provider",
-            placeholder: "provider_placeholder",
-            aria: "Target provider",
-            info: fieldInfo.provider,
-            defaultLabel: "Provider",
+            key: "authority",
+            placeholder: "authority_placeholder",
+            aria: "Target authority",
+            info: fieldInfo.authority,
+            defaultLabel: "Authority",
         },
         {
-            key: "entry_id",
-            placeholder: "entry_id_placeholder",
-            aria: "Target entry ID",
-            info: fieldInfo.entryId,
-            defaultLabel: "Entry ID",
+            key: "value",
+            placeholder: "value_placeholder",
+            aria: "Target value",
+            info: fieldInfo.value,
+            defaultLabel: "Value",
         },
         {
             key: "scope",
@@ -143,34 +143,34 @@
     let error = $state<string | null>(null);
 
     function buildDescriptor(
-        provider: string,
-        entryId: string,
+        authority: string,
+        value: string,
         scope?: string | null,
     ): string {
-        const base = `${provider}:${entryId}`;
+        const base = `${authority}:${value}`;
         const cleanedScope = (scope ?? "").trim();
         return cleanedScope ? `${base}:${cleanedScope}` : base;
     }
 
     function descriptorFromState(): string {
-        const provider = descriptor.provider.trim();
-        const entryId = descriptor.entryId.trim();
+        const authority = descriptor.authority.trim();
+        const value = descriptor.value.trim();
         const scope = descriptor.scope.trim();
-        if (!provider && !entryId && !scope) {
+        if (!authority && !value && !scope) {
             return "";
         }
-        if (!provider || !entryId) {
+        if (!authority || !value) {
             return "";
         }
-        return buildDescriptor(provider, entryId, scope);
+        return buildDescriptor(authority, value, scope);
     }
 
     function setDescriptorFields(
-        provider: string,
-        entryId: string,
+        authority: string,
+        value: string,
         scope: string | null,
     ) {
-        descriptor = { provider, entryId, scope: scope ?? "" };
+        descriptor = { authority, value, scope: scope ?? "" };
     }
 
     function canLoadDescriptor(): boolean {
@@ -183,11 +183,11 @@
             const isCustomEntry = entry.origin !== "upstream";
             return {
                 key: entry.descriptor,
-                provider: isCustomEntry ? entry.provider : "",
-                entry_id: isCustomEntry ? entry.entry_id : "",
+                authority: isCustomEntry ? entry.authority : "",
+                value: isCustomEntry ? entry.value : "",
                 scope: isCustomEntry ? (entry.scope ?? "") : "",
-                provider_placeholder: entry.provider,
-                entry_id_placeholder: entry.entry_id,
+                authority_placeholder: entry.authority,
+                value_placeholder: entry.value,
                 scope_placeholder: entry.scope ?? "",
                 origin: entry.origin,
                 deleted: entry.deleted ?? false,
@@ -209,7 +209,7 @@
 
     function hydrateDetail(data: MappingDetail) {
         entries = toEditableEntries(data);
-        setDescriptorFields(data.provider, data.entry_id, data.scope ?? "");
+        setDescriptorFields(data.authority, data.value, data.scope ?? "");
     }
 
     function makeKey() {
@@ -221,11 +221,11 @@
             ...entries,
             {
                 key: makeKey(),
-                provider: "",
-                entry_id: "",
+                authority: "",
+                value: "",
                 scope: "",
-                provider_placeholder: "",
-                entry_id_placeholder: "",
+                authority_placeholder: "",
+                value_placeholder: "",
                 scope_placeholder: "",
                 origin: "custom",
                 deleted: false,
@@ -371,8 +371,8 @@
             }
             return {
                 ...entry,
-                provider: "",
-                entry_id: "",
+                authority: "",
+                value: "",
                 scope: "",
                 deleted: false,
                 origin: entry.origin === "deleted" ? "upstream" : entry.origin,
@@ -386,33 +386,30 @@
     function buildPayload(): MappingOverridePayload | null {
         const descriptor = descriptorFromState();
         if (!descriptor || !DESCRIPTOR_RE.test(descriptor)) {
-            error = "Descriptor must be provider:entry[:scope]";
+            error = "Descriptor must be authority:entry[:scope]";
             return null;
         }
 
         const payloadTargets: TargetPayload[] = [];
 
         for (const entry of entries) {
-            const provider = (
-                entry.provider.trim() || entry.provider_placeholder
+            const authority = (
+                entry.authority.trim() || entry.authority_placeholder
             ).trim();
-            const entryId = (
-                entry.entry_id.trim() || entry.entry_id_placeholder
-            ).trim();
+            const value = (entry.value.trim() || entry.value_placeholder).trim();
             const scope = (entry.scope.trim() || entry.scope_placeholder).trim();
-            if (!provider || !entryId) continue;
+            if (!authority || !value) continue;
 
-            const originalProvider =
-                entry.provider_placeholder.trim() || entry.provider.trim();
-            const originalEntryId =
-                entry.entry_id_placeholder.trim() || entry.entry_id.trim();
+            const originalAuthority =
+                entry.authority_placeholder.trim() || entry.authority.trim();
+            const originalValue = entry.value_placeholder.trim() || entry.value.trim();
             const originalScope = entry.scope_placeholder.trim() || entry.scope.trim();
             const originalDescriptor =
                 entry.original_descriptor ||
-                (originalProvider && originalEntryId
-                    ? buildDescriptor(originalProvider, originalEntryId, originalScope)
+                (originalAuthority && originalValue
+                    ? buildDescriptor(originalAuthority, originalValue, originalScope)
                     : "");
-            const newDescriptor = buildDescriptor(provider, entryId, scope);
+            const newDescriptor = buildDescriptor(authority, value, scope);
             const descriptorChanged =
                 newDescriptor !== originalDescriptor && !!originalDescriptor;
 
@@ -430,8 +427,8 @@
 
             if (entry.deleted) {
                 payloadTargets.push({
-                    provider: originalProvider || provider,
-                    entry_id: originalEntryId || entryId,
+                    authority: originalAuthority || authority,
+                    value: originalValue || value,
                     scope: originalScope || scope || null,
                     ranges: [],
                     deleted: true,
@@ -485,8 +482,8 @@
 
             if (descriptorChanged) {
                 payloadTargets.push({
-                    provider: originalProvider,
-                    entry_id: originalEntryId,
+                    authority: originalAuthority,
+                    value: originalValue,
                     scope: originalScope || null,
                     ranges: [],
                     deleted: true,
@@ -495,8 +492,8 @@
 
             if (ranges.length === 0) continue;
             payloadTargets.push({
-                provider,
-                entry_id: entryId,
+                authority,
+                value,
                 scope: scope || null,
                 ranges,
                 deleted: false,
@@ -580,8 +577,8 @@
         descriptor =
             mode === "edit"
                 ? {
-                      provider: mapping?.provider ?? "",
-                      entryId: mapping?.entry_id ?? "",
+                      authority: mapping?.authority ?? "",
+                      value: mapping?.value ?? "",
                       scope: mapping?.scope ?? "",
                   }
                 : { ...EMPTY_DESCRIPTOR };
@@ -685,8 +682,8 @@
                                     : "text-slate-300"
                             }`}>
                             {buildDescriptor(
-                                entry.provider || entry.provider_placeholder || "?",
-                                entry.entry_id || entry.entry_id_placeholder || "?",
+                                entry.authority || entry.authority_placeholder || "?",
+                                entry.value || entry.value_placeholder || "?",
                                 entry.scope || entry.scope_placeholder || "",
                             )}
                         </span>

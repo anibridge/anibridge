@@ -26,7 +26,7 @@ from anibridge.app.core.sync.targeting import TargetResolver
 class _FakeAnimapClient:
     """Mapping client double with no cross-provider edges."""
 
-    def resolve_edges(self, descriptors, *, target_providers=None):
+    def resolve_edges(self, descriptors, *, target_authorities=None):
         return ()
 
 
@@ -37,8 +37,8 @@ class _EdgeAnimapClient:
         self.edges = edges
         self.calls: list[tuple[object, object]] = []
 
-    def resolve_edges(self, descriptors, *, target_providers=None):
-        self.calls.append((descriptors, target_providers))
+    def resolve_edges(self, descriptors, *, target_authorities=None):
+        self.calls.append((descriptors, target_authorities))
         return self.edges
 
 

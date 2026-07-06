@@ -70,7 +70,7 @@ from anibridge.app.core.sync.stats import (
 from anibridge.app.core.sync.targeting import ResolvedTarget, TargetResolver
 from anibridge.app.logging import get_logger
 from anibridge.app.models.db.pin import Pin
-from anibridge.app.models.db.sync_history import SyncOutcome
+from anibridge.app.models.db.sync_history import SyncOperationAction, SyncOutcome
 
 __all__ = ["SyncClient"]
 
@@ -111,6 +111,7 @@ class _TargetWork(msgspec.Struct, frozen=True):
     target_surface: str
     mappings: Sequence[MappingRange]
     label: SyncLabel
+    source_descriptor: ExternalId | None = None
 
     @property
     def key(self) -> TargetRecordKey:
@@ -335,6 +336,7 @@ class SyncClient:
                     pinned_fields=pinned_fields.get(work.key, ()),
                     mappings=work.mappings,
                     label=work.label,
+                    source_descriptor=work.source_descriptor,
                 )
                 if isinstance(planned, SyncOutcome):
                     self._record_best_outcome(
@@ -474,6 +476,7 @@ class SyncClient:
                     projected_record=replace(first.projected_record, values=values),
                     target_ref=first.target_ref,
                     target_surface=first.target_surface,
+                    source_descriptor=first.source_descriptor,
                     mappings=tuple(dict.fromkeys(mappings)),
                     label=self._merged_label(labels),
                 )
@@ -630,6 +633,7 @@ class SyncClient:
                     ),
                     target_ref=target_ref,
                     target_surface=target_surface,
+                    source_descriptor=match.source_id,
                     mappings=self._mappings_for_match(match),
                     label=work_label,
                 )
@@ -665,6 +669,7 @@ class SyncClient:
         target_ref: Ref,
         target_kind: str,
         label: SyncLabel,
+        source_descriptor: ExternalId | None = None,
         pinned_fields: Sequence[RecordField] = (),
         mappings: Sequence[MappingRange] = (),
     ) -> PreparedUpdate | SyncOutcome:
@@ -704,46 +709,27 @@ class SyncClient:
             label=label,
             mappings=mappings,
         )
-        if planned == SyncOutcome.SKIPPED:
-            log.info(
-                "[%s] Skipping %s %s because it is already up to date%s",
-                self.profile_name,
-                label.node_kind,
-                label.source,
-                self._target_suffix(label),
-            )
-            self._history.queue_failure_history_cleanup(
-                source_ref=source_record.ref,
-                target_ref=target_ref,
-            )
-        return planned
-
-    async def _apply_update(
-        self,
-        plan: RecordPlan,
-        *,
-        source_record: Record,
-        diff_str: str,
-        label: SyncLabel,
-    ) -> SyncOutcome:
-        """Queue or apply a record update."""
-        update = PreparedUpdate(
-            plan=plan,
-            source_record=source_record,
-            diff_str=diff_str,
-            label=label,
+        if isinstance(planned, SyncOutcome):
+            if planned == SyncOutcome.SKIPPED:
+                log.info(
+                    "[%s] Skipping %s %s because it is already up to date%s",
+                    self.profile_name,
+                    label.node_kind,
+                    label.source,
+                    self._target_suffix(label),
+                )
+                self._history.queue_failure_history_cleanup(
+                    source_ref=source_record.ref,
+                    target_ref=target_ref,
+                )
+            return planned
+        return PreparedUpdate(
+            plan=planned.plan,
+            source_record=planned.source_record,
+            diff_str=planned.diff_str,
+            label=planned.label,
+            source_descriptor=source_descriptor,
         )
-        if self.dry_run:
-            return await self._record_update_dry_run(update)
-
-        try:
-            await self._write([plan.write], resource_label="record")
-            return await self._record_update_success(update)
-        except Exception as exc:
-            outcome = await self._record_update_write_error(update, exc)
-            if outcome == SyncOutcome.SYNCED:
-                return outcome
-            raise
 
     async def _apply_updates(
         self,
@@ -883,6 +869,7 @@ class SyncClient:
             snapshots=(update.plan.before, update.plan.after),
             outcome=SyncOutcome.SYNCED,
             info=update.plan.diagnostics.as_info(),
+            external_id=update.source_descriptor,
             ephemeral=self.dry_run,
         )
         return SyncOutcome.SYNCED
@@ -903,6 +890,7 @@ class SyncClient:
             snapshots=(update.plan.before, update.plan.after),
             outcome=SyncOutcome.SYNCED,
             info=update.plan.diagnostics.as_info(),
+            external_id=update.source_descriptor,
             ephemeral=self.dry_run,
         )
         return SyncOutcome.SYNCED
@@ -934,6 +922,7 @@ class SyncClient:
                     "write_error_type": type(exc).__name__,
                     "write_error": str(exc),
                 },
+                external_id=update.source_descriptor,
                 ephemeral=self.dry_run,
             )
             return SyncOutcome.SYNCED
@@ -956,6 +945,7 @@ class SyncClient:
                 **update.plan.diagnostics.as_info(),
                 "error_type": type(exc).__name__,
             },
+            external_id=update.source_descriptor,
             ephemeral=self.dry_run,
         )
         return SyncOutcome.FAILED
@@ -986,6 +976,7 @@ class SyncClient:
     def flush_failure_history_cleanup(self) -> None:
         """Flush queued failure-history cleanup operations."""
         self._history.flush_failure_history_cleanup()
+        self._history.complete_run()
 
     async def _delete_record(
         self,
@@ -1058,6 +1049,7 @@ class SyncClient:
             return SyncOutcome.SKIPPED
 
         writes: list[Write] = []
+        operations: list[tuple[Event, Ref, SyncOperationAction, str, str | None]] = []
         append_count = 0
         delete_count = 0
         for source_kind, target_kind in self._event_pairs:
@@ -1117,6 +1109,15 @@ class SyncClient:
                         metadata=event.metadata,
                     )
                 )
+                operations.append(
+                    (
+                        event,
+                        target_ref,
+                        SyncOperationAction.UPSERT,
+                        target_kind,
+                        dedupe_key,
+                    )
+                )
                 append_count += 1
 
             if can_delete:
@@ -1130,6 +1131,15 @@ class SyncClient:
                     if identity in projected_event_identities:
                         continue
                     writes.append(self._delete_event_for(event))
+                    operations.append(
+                        (
+                            event,
+                            event.ref,
+                            SyncOperationAction.DELETE,
+                            event.kind,
+                            event.dedupe_key,
+                        )
+                    )
                     delete_count += 1
 
         if not writes:
@@ -1145,9 +1155,62 @@ class SyncClient:
                 work.label.node_kind,
                 self._source_with_target(work.label),
             )
+            for event, target_ref, action, target_kind, dedupe_key in operations:
+                await self._history.record_event_operation(
+                    source_ref=event.ref
+                    if action == SyncOperationAction.UPSERT
+                    else work.projected_record.ref,
+                    target_ref=target_ref,
+                    action=action,
+                    outcome=SyncOutcome.SYNCED,
+                    event_kind=target_kind,
+                    event_at=event.at,
+                    dedupe_key=dedupe_key,
+                    resource_key=event.key,
+                    info={
+                        "dry_run": "true",
+                        "source_event_kind": event.kind,
+                        "operation": "event_sync",
+                    },
+                    ephemeral=self.dry_run,
+                )
             return SyncOutcome.SYNCED
 
-        await self._write(writes, resource_label="event")
+        results = await self._write_batch(writes, resource_label="event")
+        failed_result: WriteResult | None = None
+        for (event, target_ref, action, target_kind, dedupe_key), result in zip(
+            operations,
+            results,
+            strict=True,
+        ):
+            outcome = SyncOutcome.SYNCED if result.ok else SyncOutcome.FAILED
+            if not result.ok and failed_result is None:
+                failed_result = result
+            await self._history.record_event_operation(
+                source_ref=event.ref
+                if action == SyncOperationAction.UPSERT
+                else work.projected_record.ref,
+                target_ref=result.ref or target_ref,
+                action=action,
+                outcome=outcome,
+                event_kind=target_kind,
+                event_at=event.at,
+                dedupe_key=dedupe_key,
+                resource_key=result.key or event.key,
+                error_message=result.error,
+                info={
+                    "source_event_kind": event.kind,
+                    "operation": "event_sync",
+                    "write_result_action": result.action,
+                    "write_result_resource": result.resource,
+                    "write_result_code": result.code,
+                    "write_result_error": result.error,
+                    "write_result_revision": result.revision,
+                },
+                ephemeral=self.dry_run,
+            )
+        if failed_result is not None:
+            raise self._write_result_exception(failed_result, "event")
         log.success(
             "[%s] Synced %s activity event changes (%s appended, %s deleted) for %s %s",
             self.profile_name,

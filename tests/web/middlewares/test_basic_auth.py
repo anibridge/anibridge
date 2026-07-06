@@ -1,6 +1,7 @@
 """Tests for HTTP Basic Authentication middleware and integration."""
 
 import base64
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -20,7 +21,14 @@ from pytest import MonkeyPatch
 
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import AnibridgeConfig, BasicAuthConfig, WebConfig
-from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
+from anibridge.app.models.db.sync_history import (
+    SyncHistoryGroup,
+    SyncHistoryOperation,
+    SyncHistoryRun,
+    SyncOperationAction,
+    SyncOutcome,
+    SyncResourceKind,
+)
 from anibridge.app.web import app as app_module
 from anibridge.app.web.middlewares import basic_auth as basic_auth_module
 from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
@@ -435,29 +443,58 @@ def test_create_app_lifespan_purges_ephemeral_history_on_startup(
 ) -> None:
     """Starting the app should delete ephemeral history rows."""
     with db() as ctx:
-        ctx.session.query(SyncHistory).delete()
-        ctx.session.add_all(
-            [
-                SyncHistory(
+        ctx.session.query(SyncHistoryOperation).delete()
+        ctx.session.query(SyncHistoryGroup).delete()
+        ctx.session.query(SyncHistoryRun).delete()
+        for index, (key, ephemeral) in enumerate(
+            (("persisted", False), ("ephemeral", True)),
+            start=1,
+        ):
+            timestamp = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index)
+            run = SyncHistoryRun(
+                profile_name="profile",
+                source_namespace="lib",
+                target_namespace="alist",
+                outcome=SyncOutcome.SYNCED,
+                ephemeral=ephemeral,
+                started_at=timestamp,
+                completed_at=timestamp,
+            )
+            ctx.session.add(run)
+            ctx.session.flush()
+            group = SyncHistoryGroup(
+                run_id=run.id,
+                profile_name="profile",
+                source_namespace="lib",
+                source_parent_ref={"key": key, "path": []},
+                target_namespace="alist",
+                target_parent_ref={"key": key, "path": []},
+                outcome=SyncOutcome.SYNCED,
+                operation_count=1,
+                record_count=1,
+                event_count=0,
+                node_count=0,
+                error_count=0,
+                ephemeral=ephemeral,
+                timestamp=timestamp,
+            )
+            ctx.session.add(group)
+            ctx.session.flush()
+            ctx.session.add(
+                SyncHistoryOperation(
+                    group_id=group.id,
                     profile_name="profile",
+                    resource_kind=SyncResourceKind.RECORD,
+                    action=SyncOperationAction.UPSERT,
                     source_namespace="lib",
-                    source_ref={"key": "persisted", "path": []},
+                    source_ref={"key": key, "path": []},
                     target_namespace="alist",
-                    target_ref={"key": "persisted", "path": []},
+                    target_ref={"key": key, "path": []},
                     outcome=SyncOutcome.SYNCED,
-                    ephemeral=False,
-                ),
-                SyncHistory(
-                    profile_name="profile",
-                    source_namespace="lib",
-                    source_ref={"key": "ephemeral", "path": []},
-                    target_namespace="alist",
-                    target_ref={"key": "ephemeral", "path": []},
-                    outcome=SyncOutcome.SYNCED,
-                    ephemeral=True,
-                ),
-            ]
-        )
+                    ephemeral=ephemeral,
+                    timestamp=timestamp,
+                )
+            )
         ctx.session.commit()
 
     index_file = tmp_path / "index.html"
@@ -480,7 +517,9 @@ def test_create_app_lifespan_purges_ephemeral_history_on_startup(
 
     with db() as ctx:
         rows = (
-            ctx.session.query(SyncHistory).order_by(SyncHistory.source_ref.asc()).all()
+            ctx.session.query(SyncHistoryOperation)
+            .order_by(SyncHistoryOperation.source_ref.asc())
+            .all()
         )
         assert len(rows) == 1
         assert rows[0].source_ref["key"] == "persisted"

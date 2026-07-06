@@ -1,4 +1,5 @@
 <script lang="ts">
+    /* eslint-disable svelte/no-navigation-without-resolve */
     import {
         ExternalLink,
         LoaderCircle,
@@ -348,6 +349,7 @@
                                     href={pin.media.external_url}
                                     target="_blank"
                                     rel="noreferrer"
+                                    data-sveltekit-reload
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
                                     aria-label="Open target"
                                     title="Open target">

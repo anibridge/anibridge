@@ -4,10 +4,7 @@
     import { ArrowRight, LoaderCircle, Search } from "@lucide/svelte";
     import { Popover } from "bits-ui";
 
-    import {
-        loadCapabilities,
-        type FieldCapability,
-    } from "$lib/components/mappings/capabilities-cache";
+    import { loadCapabilities, type FieldCapability } from "./capabilities-cache";
 
     interface Props {
         value?: string;

@@ -13,11 +13,7 @@ export type MediaFormat =
     | "ONE_SHOT";
 
 export type MediaStatus =
-    | "FINISHED"
-    | "RELEASING"
-    | "NOT_YET_RELEASED"
-    | "CANCELLED"
-    | "HIATUS";
+    "FINISHED" | "RELEASING" | "NOT_YET_RELEASED" | "CANCELLED" | "HIATUS";
 
 export type MediaSeason = "WINTER" | "SPRING" | "SUMMER" | "FALL";
 

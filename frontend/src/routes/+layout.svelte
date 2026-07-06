@@ -45,9 +45,7 @@
             const d = await r.json();
             if (d.version) version = d.version;
             if (d.git_hash) gitHash = d.git_hash;
-        } catch {
-            // toast("Failed to load meta", "warn"); // keep silent by default
-        }
+        } catch {}
     }
 
     function openWs() {
@@ -81,7 +79,7 @@
         <ToastHost />
         <a
             href="#main"
-            class="sr-only bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-lg focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md"
+            class="sr-only bg-(--color-accent) px-3 py-2 text-sm font-medium text-white shadow-lg focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md"
             >Skip to content</a>
         <!-- Mobile backdrop -->
         {#if sidebarOpen}
@@ -99,7 +97,7 @@
         {/if}
         <!-- Sidebar -->
         <aside
-            class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-slate-800 bg-slate-950/95 px-3 pt-4 pb-6 shadow-xl shadow-slate-950/50 backdrop-blur transition-transform duration-300 ease-out lg:translate-x-0"
+            class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-(--color-border) bg-(--color-bg)/95 px-3 pt-4 pb-6 shadow-lg backdrop-blur transition-transform duration-300 ease-out lg:translate-x-0"
             class:translate-x-0={sidebarOpen}>
             <div class="mb-4 flex items-center gap-3 px-2">
                 <img
@@ -158,14 +156,15 @@
                     class="nav-link {active('/about') ? 'nav-link-active' : ''}"
                     aria-current={active("/about") ? "page" : undefined}
                     ><Activity class="inline h-4 w-4" /><span>About</span></a>
-                <div class="mt-auto border-t border-slate-800/60 pt-4">
-                    <p class="px-3 text-[11px] text-slate-500">
+                <div class="mt-auto border-t border-(--color-border)/60 pt-4">
+                    <p class="px-3 text-[11px] text-(--color-dimmed)">
                         © {new Date().getFullYear()}
                         <a
                             href="https://anibridge.eliasbenb.dev"
                             target="_blank"
                             rel="noopener"
-                            class="transition-colors hover:text-slate-200">AniBridge</a>
+                            class="transition-colors hover:text-(--color-foreground)"
+                            >AniBridge</a>
                     </p>
                 </div>
             </nav>
@@ -174,10 +173,10 @@
         <div class="flex min-h-dvh w-full flex-col lg:pl-64">
             <!-- Top bar -->
             <header
-                class="sticky top-0 z-20 flex h-14 w-full items-center gap-3 border-b border-slate-800/80 bg-slate-950/80 px-4 pb-[env(safe-area-inset-top)] backdrop-blur supports-backdrop-filter:bg-slate-950/65">
+                class="sticky top-0 z-20 flex h-14 w-full items-center gap-3 border-b border-(--color-border)/80 bg-(--color-bg)/80 px-4 pb-[env(safe-area-inset-top)] backdrop-blur supports-backdrop-filter:bg-(--color-bg)/65">
                 <button
                     type="button"
-                    class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-700/70 bg-slate-800/70 text-slate-300 hover:bg-slate-700/70 hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none lg:hidden"
+                    class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-(--color-border) bg-(--color-surface)/70 text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none lg:hidden"
                     aria-label="Toggle navigation"
                     onclick={() => (sidebarOpen = !sidebarOpen)}>
                     {#if sidebarOpen}
@@ -187,7 +186,7 @@
                     {/if}
                 </button>
                 <div
-                    class="ml-auto hidden items-center gap-2 rounded-md border border-slate-700/60 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-400 sm:flex"
+                    class="ml-auto hidden items-center gap-2 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-3 py-1.5 text-xs text-(--color-muted-foreground) sm:flex"
                     aria-live="polite"
                     title={isWsOpen ? "Live connection established" : "Offline"}>
                     <span class="relative flex h-2 w-2">
@@ -209,7 +208,7 @@
             </main>
             <!-- Footer -->
             <footer
-                class="mt-auto border-t border-slate-800/80 bg-slate-950/70 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] text-[11px] text-slate-500 backdrop-blur">
+                class="mt-auto border-t border-(--color-border)/80 bg-(--color-bg-alt)/80 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] text-[11px] text-(--color-dimmed) backdrop-blur">
                 <div class="flex flex-row items-center justify-between gap-2">
                     <div class="flex flex-wrap items-center gap-3">
                         <a

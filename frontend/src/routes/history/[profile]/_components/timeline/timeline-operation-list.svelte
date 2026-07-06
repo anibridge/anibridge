@@ -2,14 +2,14 @@
     import { Check, ChevronDown } from "@lucide/svelte";
     import { Checkbox, Collapsible } from "bits-ui";
 
-    import TimelineActionMenu from "$lib/components/timeline/timeline-action-menu.svelte";
-    import { outcomeMeta, resourceMeta } from "$lib/components/timeline/types";
     import type {
         HistoryGroup,
         HistoryOperation,
         RecordSnapshotValue,
     } from "$lib/types/api";
     import { qualifiedRefLabel } from "$lib/utils/provider-ref";
+    import TimelineActionMenu from "./timeline-action-menu.svelte";
+    import { outcomeMeta, resourceMeta } from "./types";
 
     interface Props {
         group: HistoryGroup;

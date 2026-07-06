@@ -17,9 +17,9 @@
     import { fade } from "svelte/transition";
 
     import { page } from "$app/state";
-    import TimelineGroupCard from "$lib/components/timeline/timeline-group-card.svelte";
-    import TimelineOutcomeFilters from "$lib/components/timeline/timeline-outcome-filters.svelte";
-    import { OUTCOME_META, type OutcomeMeta } from "$lib/components/timeline/types";
+    import EmptyState from "$lib/components/empty-state.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
+    import Skeleton from "$lib/components/skeleton.svelte";
     import type {
         GetHistoryResponse,
         HistoryGroup,
@@ -35,6 +35,9 @@
         progressStage,
         progressSubject,
     } from "$lib/utils/sync-progress";
+    import TimelineGroupCard from "./_components/timeline/timeline-group-card.svelte";
+    import TimelineOutcomeFilters from "./_components/timeline/timeline-outcome-filters.svelte";
+    import { OUTCOME_META, type OutcomeMeta } from "./_components/timeline/types";
 
     const profile = $derived(page.params.profile ?? "");
 
@@ -300,7 +303,7 @@
     async function openPinManager() {
         if (!PinManagerComponent) {
             PinManagerComponent = (
-                await import("$lib/components/pins/pin-manager.svelte")
+                await import("./_components/pins/pin-manager.svelte")
             ).default;
         }
         pinManagerOpen = true;
@@ -416,94 +419,81 @@
 </script>
 
 <div class="space-y-6">
-    <div class="space-y-2">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div class="space-y-1 sm:flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                    <History class="inline h-4 w-4 text-slate-300" />
-                    <h2 class="text-lg font-semibold">Sync History</h2>
-                    <span class="text-xs text-slate-500">
-                        {profile}
-                    </span>
-                </div>
-                <p class="text-xs text-slate-400">
-                    Review sync history, inspect changes, and replay failed work.
-                </p>
-            </div>
-            <div class="flex flex-wrap items-center gap-2 text-[11px] sm:justify-end">
-                <button
-                    onclick={reinitializeProfile}
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 font-medium text-amber-200 shadow-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none disabled:cursor-wait disabled:opacity-70 sm:px-3 sm:py-1.5"
-                    disabled={acting}
-                    ><Wrench
-                        class={`inline h-4 w-4 text-[14px] ${acting ? "animate-spin" : ""}`} />
-                    {acting ? "Reinitializing..." : "Reinitialize"}</button>
-                <button
-                    onclick={() => syncProfile("manual")}
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 font-medium text-emerald-200 shadow-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5"
-                    disabled={isProfileRunning || acting}
-                    ><RefreshCcw class="inline h-4 w-4 text-[14px]" /> Full Scan</button>
-                <button
-                    onclick={() => syncProfile("poll")}
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 font-medium text-sky-200 shadow-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5"
-                    disabled={isProfileRunning || acting}
-                    ><CloudDownload class="inline h-4 w-4 text-[14px]" /> Poll Scan</button>
-                <button
-                    onclick={() => void openPinManager()}
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-slate-700/70 bg-slate-900/60 px-2 py-1 font-medium text-slate-300 shadow-sm transition-colors hover:bg-slate-800 hover:text-slate-100 focus:ring-2 focus:ring-slate-500/40 focus:outline-none sm:px-3 sm:py-1.5"
-                    ><Pin class="inline h-4 w-4 text-[14px]" /> Pins</button>
-                <button
-                    onclick={() => loadHistory("replace")}
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-slate-600/60 bg-slate-700/40 px-2 py-1 font-medium text-slate-200 shadow-sm transition-colors hover:bg-slate-600/50 focus:ring-2 focus:ring-slate-500/40 focus:outline-none sm:px-3 sm:py-1.5"
-                    ><RotateCw class="inline h-4 w-4 text-[14px]" /> Refresh</button>
-            </div>
-        </div>
-        {#if hasRunningSync()}
-            <div class="mt-2 space-y-2">
-                <div
-                    class="flex items-center justify-between text-[11px] text-slate-400">
-                    <div class="truncate">
-                        {#if progressSubject(currentSync)}
-                            <span class="text-slate-300"
-                                >{progressSubject(currentSync)}</span>
-                            <span class="mx-1">•</span>
-                        {/if}
-                        <span class="tracking-wide uppercase"
-                            >{progressStage(currentSync)}</span>
-                    </div>
-                    <div>
-                        {progressCount(currentSync)}
-                    </div>
-                </div>
-                {#key currentSync?.started_at}
-                    {#if isDeterminate()}
-                        <Meter.Root
-                            value={percent()}
-                            min={0}
-                            max={1}
-                            class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
-                            <div
-                                class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
-                                style="transform: translateX(-{100 -
-                                    100 * percent()}%)">
-                            </div>
-                        </Meter.Root>
-                    {:else}
-                        <div class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
-                            <div
-                                class="sync-progress-indeterminate h-full w-1/3 bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400">
-                            </div>
-                        </div>
+    <PageHeader
+        icon={History}
+        title="Sync History"
+        description="Review sync history, inspect changes, and replay failed work.">
+        {#snippet actions()}
+            <button
+                onclick={reinitializeProfile}
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 text-xs font-medium text-amber-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none disabled:cursor-wait disabled:opacity-70 sm:px-3 sm:py-1.5 sm:text-sm"
+                disabled={acting}
+                ><Wrench
+                    class={`inline h-4 w-4 text-[14px] ${acting ? "animate-spin" : ""}`} />
+                {acting ? "Reinitializing..." : "Reinitialize"}</button>
+            <button
+                onclick={() => syncProfile("manual")}
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-xs font-medium text-emerald-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5 sm:text-sm"
+                disabled={isProfileRunning || acting}
+                ><RefreshCcw class="inline h-4 w-4 text-[14px]" /> Full Scan</button>
+            <button
+                onclick={() => syncProfile("poll")}
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-xs font-medium text-sky-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5 sm:text-sm"
+                disabled={isProfileRunning || acting}
+                ><CloudDownload class="inline h-4 w-4 text-[14px]" /> Poll Scan</button>
+            <button
+                onclick={() => void openPinManager()}
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-2 py-1 text-xs font-medium text-(--color-muted-foreground) shadow-sm backdrop-blur-sm transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
+                ><Pin class="inline h-4 w-4 text-[14px]" /> Pins</button>
+            <button
+                onclick={() => loadHistory("replace")}
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/70 px-2 py-1 text-xs font-medium text-(--color-muted-foreground) shadow-sm backdrop-blur-sm transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
+                ><RotateCw class="inline h-4 w-4 text-[14px]" /> Refresh</button>
+        {/snippet}
+    </PageHeader>
+    {#if hasRunningSync()}
+        <div class="mt-2 space-y-2">
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+                <div class="truncate">
+                    {#if progressSubject(currentSync)}
+                        <span class="text-slate-300"
+                            >{progressSubject(currentSync)}</span>
+                        <span class="mx-1">•</span>
                     {/if}
-                {/key}
+                    <span class="tracking-wide uppercase"
+                        >{progressStage(currentSync)}</span>
+                </div>
+                <div>
+                    {progressCount(currentSync)}
+                </div>
             </div>
-        {/if}
-    </div>
+            {#key currentSync?.started_at}
+                {#if isDeterminate()}
+                    <Meter.Root
+                        value={percent()}
+                        min={0}
+                        max={1}
+                        class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                        <div
+                            class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
+                            style="transform: translateX(-{100 - 100 * percent()}%)">
+                        </div>
+                    </Meter.Root>
+                {:else}
+                    <div class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                        <div
+                            class="sync-progress-indeterminate h-full w-1/3 bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400">
+                        </div>
+                    </div>
+                {/if}
+            {/key}
+        </div>
+    {/if}
 
     <section class="space-y-3">
         <TimelineOutcomeFilters
@@ -527,45 +517,15 @@
             {#each [1, 2, 3] as item (item)}
                 <div
                     in:fade={{ duration: 150 }}
-                    class="animate-pulse rounded-md border border-slate-800/60 bg-slate-900/40 p-4">
-                    <div class="flex items-center gap-2">
-                        <div class="h-5 w-20 rounded bg-slate-800/80"></div>
-                        <div class="h-3 w-36 rounded bg-slate-800/60"></div>
-                    </div>
-                    <div class="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_1fr]">
-                        <div class="flex h-32 gap-3 rounded-md bg-slate-800/40 p-2.5">
-                            <div class="h-full w-19 rounded-md bg-slate-700/50"></div>
-                            <div class="flex-1 space-y-2 py-2">
-                                <div class="h-3 w-20 rounded bg-slate-700/50"></div>
-                                <div class="h-4 w-2/3 rounded bg-slate-700/50"></div>
-                                <div class="h-3 w-1/2 rounded bg-slate-700/40"></div>
-                            </div>
-                        </div>
-                        <div class="hidden h-24 w-4 rounded bg-slate-900 lg:block">
-                        </div>
-                        <div class="flex h-32 gap-3 rounded-md bg-slate-800/40 p-2.5">
-                            <div class="h-full w-19 rounded-md bg-slate-700/50"></div>
-                            <div class="flex-1 space-y-2 py-2">
-                                <div class="h-3 w-20 rounded bg-slate-700/50"></div>
-                                <div class="h-4 w-2/3 rounded bg-slate-700/50"></div>
-                                <div class="h-3 w-1/2 rounded bg-slate-700/40"></div>
-                            </div>
-                        </div>
-                    </div>
+                    class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+                    <Skeleton lines={5} />
                 </div>
             {/each}
         {:else if groups.length === 0}
-            <div
-                in:fade={{ duration: 150 }}
-                class="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700/70 bg-slate-900/30 p-8 text-center">
-                <CircleSlash class="h-8 w-8 text-slate-500" />
-                <div class="mt-3 text-sm font-medium text-slate-300">
-                    No history entries
-                </div>
-                <p class="mt-1 max-w-md text-xs text-slate-500">
-                    This profile has no history matching the active filters yet.
-                </p>
-            </div>
+            <EmptyState
+                icon={CircleSlash}
+                title="No history entries"
+                description="This profile has no history matching the active filters yet." />
         {:else}
             {#each groups as group (group.id)}
                 <TimelineGroupCard
@@ -583,7 +543,7 @@
             <div class="flex justify-center">
                 <button
                     type="button"
-                    class="inline-flex items-center gap-2 rounded-md border border-slate-700/70 bg-slate-800/60 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60"
+                    class="inline-flex items-center gap-2 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-4 py-2 text-sm font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) disabled:cursor-wait disabled:opacity-60"
                     onclick={() => loadHistory("older")}
                     disabled={loadingOlder}>
                     {#if loadingOlder}<LoaderCircle class="h-4 w-4 animate-spin" />{/if}

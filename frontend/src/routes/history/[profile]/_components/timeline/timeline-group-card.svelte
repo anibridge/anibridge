@@ -4,9 +4,6 @@
     import { ArrowRight, ExternalLink, Map } from "@lucide/svelte";
 
     import { resolve } from "$app/paths";
-    import TimelineActionMenu from "$lib/components/timeline/timeline-action-menu.svelte";
-    import TimelineOperationList from "$lib/components/timeline/timeline-operation-list.svelte";
-    import { outcomeMeta } from "$lib/components/timeline/types";
     import type {
         HistoryGroup,
         HistoryOperation,
@@ -17,6 +14,9 @@
         refLabel,
         targetIdentifier,
     } from "$lib/utils/provider-ref";
+    import TimelineActionMenu from "./timeline-action-menu.svelte";
+    import TimelineOperationList from "./timeline-operation-list.svelte";
+    import { outcomeMeta } from "./types";
 
     interface Props {
         group: HistoryGroup;

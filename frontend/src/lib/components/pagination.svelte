@@ -73,7 +73,7 @@
             <button
                 onclick={prev}
                 disabled={disabled || page === 1}
-                class="rounded-md bg-slate-800 px-3 py-1.5 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                class="rounded-md bg-slate-800 px-3 py-2 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >Prev</button>
             <div class="flex items-center gap-1 rounded-md bg-slate-800/60 px-2 py-1">
                 Page
@@ -82,14 +82,14 @@
                     min="1"
                     max={pages}
                     bind:value={page}
-                    class="h-6 w-12 [appearance:textfield] rounded-md border border-slate-700 bg-slate-900 px-1 text-center text-xs font-semibold [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    class="h-8 w-14 [appearance:textfield] rounded-md border border-slate-700 bg-slate-900 px-1 text-center text-xs font-semibold [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     onchange={onPageInput} />
                 / {pages}
             </div>
             <button
                 onclick={next}
                 disabled={disabled || page === pages}
-                class="rounded-md bg-slate-800 px-3 py-1.5 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                class="rounded-md bg-slate-800 px-3 py-2 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >Next</button>
         {/if}
         {#if showPerPage}

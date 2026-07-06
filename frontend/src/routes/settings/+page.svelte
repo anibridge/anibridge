@@ -7,21 +7,15 @@
         Languages,
         LoaderCircle,
         RefreshCw,
+        RotateCw,
         Save,
         Settings as SettingsIcon,
         TriangleAlert,
+        Undo2,
     } from "@lucide/svelte";
     import { Tabs } from "bits-ui";
 
-    import YamlEditor from "$lib/components/code-editor/yaml-editor.svelte";
-    import {
-        deepClone,
-        humanizeKey,
-        removeAtPath,
-        setAtPath,
-        stableStringify,
-    } from "$lib/components/config/schema-form";
-    import SchemaFormNode from "$lib/components/config/schema-form-node.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
     import type {
         ConfigDocumentResponse,
         ConfigDocumentUpdateRequest,
@@ -35,6 +29,15 @@
     } from "$lib/utils/anilist";
     import { apiFetch, apiJson, buildAppPath } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import YamlEditor from "./_components/code-editor/yaml-editor.svelte";
+    import {
+        deepClone,
+        humanizeKey,
+        removeAtPath,
+        setAtPath,
+        stableStringify,
+    } from "./_components/config/schema-form";
+    import SchemaFormNode from "./_components/config/schema-form-node.svelte";
 
     let loading = $state(true);
     let saving = $state(false);
@@ -66,8 +69,7 @@
     );
     const globalSettingsSchema = $derived(
         (topLevelSchemaProperties.global_config as
-            | Record<string, unknown>
-            | undefined) ?? null,
+            Record<string, unknown> | undefined) ?? null,
     );
     const profilesSchema = $derived(
         (topLevelSchemaProperties.profiles as Record<string, unknown> | undefined) ??
@@ -385,77 +387,65 @@
     }
 </script>
 
-<div class="space-y-3">
-    <div class="space-y-2">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div class="space-y-1 sm:flex-1">
-                <div class="flex items-center gap-2">
-                    <SettingsIcon class="h-4 w-4 text-slate-300" />
-                    <h2 class="text-lg font-semibold text-slate-100">Configuration</h2>
-                </div>
-                <p class="text-xs text-slate-400">Edit your AniBridge configuration.</p>
-            </div>
-            <div class="flex flex-wrap gap-2 text-xs">
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-slate-100 transition-colors hover:bg-slate-800/60"
-                    onclick={loadConfig}
-                    disabled={loading || saving || restarting}>
-                    <RefreshCw class="h-3.5 w-3.5" /> Reload
-                </button>
-                <a
-                    href="https://anibridge.eliasbenb.dev"
-                    target="_blank"
-                    rel="noreferrer"
-                    class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-slate-100 transition-colors hover:bg-slate-800/60">
-                    <Info class="h-3.5 w-3.5" /> Docs
-                </a>
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-slate-100 transition-colors hover:bg-slate-800/60 disabled:opacity-50"
-                    onclick={revertChanges}
-                    disabled={loading ||
-                        saving ||
-                        restarting ||
-                        configAccessBlocked ||
-                        !hasChanges}>
-                    Revert
-                </button>
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-amber-500 bg-amber-600 px-4 py-1.5 font-semibold text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
-                    onclick={restartServer}
-                    disabled={loading || saving || restarting}>
-                    <RefreshCw
-                        class={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`} />
-                    {restarting ? "Restarting…" : "Restart Server"}
-                </button>
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border border-blue-500 bg-blue-600 px-4 py-1.5 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
-                    onclick={handleSave}
-                    disabled={loading ||
-                        saving ||
-                        restarting ||
-                        configAccessBlocked ||
-                        !hasChanges}>
-                    <Save class="h-3.5 w-3.5" />
-                    {saving ? "Saving…" : "Save"}
-                </button>
-            </div>
-        </div>
-    </div>
+<div class="space-y-6">
+    <PageHeader
+        icon={SettingsIcon}
+        title="Configuration"
+        description="Edit your AniBridge configuration.">
+        {#snippet actions()}
+            <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={loadConfig}
+                disabled={loading || saving || restarting}>
+                <RefreshCw class="h-3 w-3 sm:h-4 sm:w-4" /> Reload
+            </button>
+            <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm disabled:opacity-50"
+                onclick={revertChanges}
+                disabled={loading ||
+                    saving ||
+                    restarting ||
+                    configAccessBlocked ||
+                    !hasChanges}>
+                <Undo2 class="h-3 w-3 sm:h-4 sm:w-4" /> Revert
+            </button>
+            <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-2 py-1 text-xs font-medium text-(--color-muted-foreground) shadow-sm backdrop-blur-sm transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm disabled:opacity-50"
+                onclick={restartServer}
+                disabled={loading || saving || restarting}>
+                <RotateCw
+                    class={`h-3 w-3 sm:h-4 sm:w-4 ${restarting ? "animate-spin" : ""}`} />
+                {restarting ? "Restarting…" : "Restart"}
+            </button>
+            <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border border-(--color-accent) bg-(--color-accent) px-2 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-(--color-accent-muted) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm disabled:opacity-50"
+                onclick={handleSave}
+                disabled={loading ||
+                    saving ||
+                    restarting ||
+                    configAccessBlocked ||
+                    !hasChanges}>
+                <Save class="h-3 w-3 sm:h-4 sm:w-4" />
+                {saving ? "Saving…" : "Save"}
+            </button>
+        {/snippet}
+    </PageHeader>
 
     {#if loadError}
         <div
-            class="flex items-center gap-2 rounded-md border border-rose-900/60 bg-rose-950/60 px-3 py-2 text-xs text-rose-100">
-            <TriangleAlert class="h-3.5 w-3.5" /> Failed to load configuration: {loadError}
+            class="flex items-center gap-2 rounded-md border border-(--color-danger)/30 bg-(--color-danger)/10 px-3 py-2 text-xs text-(--color-accent-foreground)">
+            <TriangleAlert class="h-3.5 w-3.5 text-(--color-danger)" /> Failed to load configuration:
+            {loadError}
         </div>
     {/if}
 
     {#if configAccessBlocked}
         <div
-            class="rounded-md border border-amber-900/70 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
+            class="rounded-md border border-(--color-warning)/40 bg-(--color-warning)/10 px-3 py-2 text-xs text-amber-100">
             <p class="font-medium">Configuration editor is blocked.</p>
             <p class="mt-1 text-amber-200/90">
                 Configure <code class="rounded-md bg-amber-900/40 px-1"
@@ -470,15 +460,15 @@
 
     {#if saveError}
         <div
-            class="flex items-center gap-2 rounded-md border border-rose-900/60 bg-rose-950/60 px-3 py-2 text-xs text-rose-100">
-            <TriangleAlert class="h-3.5 w-3.5" />
+            class="flex items-center gap-2 rounded-md border border-(--color-danger)/30 bg-(--color-danger)/10 px-3 py-2 text-xs text-(--color-accent-foreground)">
+            <TriangleAlert class="h-3.5 w-3.5 text-(--color-danger)" />
             {saveError}
         </div>
     {/if}
 
     {#if restarting || restartNotice}
         <div
-            class="flex items-center gap-2 rounded-md border border-amber-900/70 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
+            class="flex items-center gap-2 rounded-md border border-(--color-warning)/40 bg-(--color-warning)/10 px-3 py-2 text-xs text-amber-100">
             <LoaderCircle class={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`} />
             {restartNotice ?? "Restarting AniBridge..."}
         </div>
@@ -489,42 +479,41 @@
             value={activeTab}
             onValueChange={switchTab}
             class="space-y-4">
-            <Tabs.List
-                class="inline-flex items-center gap-1 rounded-md border border-slate-800/70 bg-slate-950/50 p-1">
+            <Tabs.List class="flex items-center gap-2">
                 <Tabs.Trigger
                     value="ui"
-                    class="inline-flex h-9 items-center gap-1 rounded-md px-4 text-xs font-medium text-slate-400 transition-colors hover:text-slate-200 data-[state=active]:bg-slate-800/80 data-[state=active]:text-slate-100">
+                    class="inline-flex h-9 items-center gap-1 rounded-md px-4 text-xs font-medium text-(--color-muted-foreground) transition-colors hover:text-(--color-foreground) data-[state=active]:bg-(--color-surface-alt)/80 data-[state=active]:text-(--color-foreground)">
                     <SettingsIcon class="h-4 w-4" /> UI
                 </Tabs.Trigger>
                 <Tabs.Trigger
                     value="yaml"
-                    class="inline-flex h-9 items-center gap-1 rounded-md px-4 text-xs font-medium text-slate-400 transition-colors hover:text-slate-200 data-[state=active]:bg-slate-800/80 data-[state=active]:text-slate-100">
+                    class="inline-flex h-9 items-center gap-1 rounded-md px-4 text-xs font-medium text-(--color-muted-foreground) transition-colors hover:text-(--color-foreground) data-[state=active]:bg-(--color-surface-alt)/80 data-[state=active]:text-(--color-foreground)">
                     <FileCodeCorner class="h-4 w-4" /> YAML
                 </Tabs.Trigger>
             </Tabs.List>
         </Tabs.Root>
 
         <div
-            class="rounded-md border border-sky-900/70 bg-sky-950/30 p-4 text-xs text-sky-100">
+            class="rounded-md border border-(--color-accent)/20 bg-(--color-accent)/10 p-4 text-xs text-(--color-accent-foreground)">
             <div class="flex items-start gap-3">
-                <Info class="mt-0.5 h-4 w-4 shrink-0 text-sky-300" />
+                <Info class="mt-0.5 h-4 w-4 shrink-0 text-(--color-accent)" />
                 <div class="min-w-0 space-y-1.5">
                     <p>
                         <span class="font-semibold text-sky-100"
                             >Configuration file:</span>
                         <code
-                            class="ml-2 rounded-md bg-sky-950/60 px-1.5 py-0.5 text-[11px] text-sky-50">
+                            class="ml-2 rounded-md bg-(--color-accent-muted)/30 px-1.5 py-0.5 text-[11px] text-(--color-accent-foreground)">
                             {configPath || "(not set)"}
                         </code>
                     </p>
-                    <p class="text-sky-200/80">
+                    <p class="text-(--color-muted-foreground)">
                         {#if fileExists}
                             The existing file will be overwritten when you save.
                         {:else}
                             A new configuration file will be created when you save.
                         {/if}
                     </p>
-                    <p class="text-[11px] text-sky-200/80">
+                    <p class="text-[11px] text-(--color-muted-foreground)">
                         {#if uiSettingsError}
                             Guided UI is unavailable until the YAML parses cleanly.
                         {:else if !configSchema}
@@ -533,12 +522,21 @@
                         {#if hasChanges}
                             <span
                                 class={uiSettingsError || !configSchema
-                                    ? "ml-2 text-blue-200"
-                                    : "text-blue-200"}>
+                                    ? "ml-2 text-(--color-accent)"
+                                    : "text-(--color-accent)"}>
                                 Unsaved {activeTab === "yaml" ? "YAML" : "UI"}
                                 changes.
                             </span>
                         {/if}
+                    </p>
+                    <p class="text-[11px]">
+                        <a
+                            href="https://anibridge.eliasbenb.dev"
+                            target="_blank"
+                            rel="noreferrer"
+                            class="inline-flex items-center gap-1 text-(--color-dimmed) transition-colors hover:text-(--color-muted-foreground)">
+                            <Info class="h-3 w-3" /> Documentation
+                        </a>
                     </p>
                 </div>
             </div>
@@ -547,13 +545,13 @@
         {#if activeTab === "ui"}
             {#if uiSettingsError}
                 <div
-                    class="flex items-center gap-2 rounded-md border border-amber-900/70 bg-amber-950/50 px-3 py-2 text-xs text-amber-100">
+                    class="flex items-center gap-2 rounded-md border border-(--color-warning)/40 bg-(--color-warning)/10 px-3 py-2 text-xs text-amber-100">
                     <TriangleAlert class="h-3.5 w-3.5" />
                     Guided UI is unavailable until the YAML parses cleanly: {uiSettingsError}
                 </div>
             {:else if loading}
                 <div
-                    class="flex items-center justify-center gap-2 rounded-md border border-slate-800 bg-slate-950/70 py-32 text-xs text-slate-400 shadow-inner">
+                    class="flex items-center justify-center gap-2 rounded-md border border-slate-800 bg-slate-950/70 py-32 text-xs text-(--color-muted-foreground) shadow-inner">
                     <LoaderCircle class="h-4 w-4 animate-spin" /> Loading configuration…
                 </div>
             {:else if configSchema}
@@ -566,26 +564,28 @@
                         <Tabs.List class="grid gap-2 sm:grid-cols-3">
                             <Tabs.Trigger
                                 value="app"
-                                class="flex rounded-md border border-slate-800/70 bg-slate-950/40 p-3 text-left transition-colors hover:border-slate-700/80 hover:bg-slate-900/70 data-[state=active]:border-blue-500/40 data-[state=active]:bg-slate-900 data-[state=active]:shadow-sm">
+                                class="flex rounded-md border border-(--color-border) bg-(--color-surface)/40 p-3 text-left transition-colors hover:border-(--color-border-muted) hover:bg-(--color-surface-alt)/70 data-[state=active]:border-(--color-accent)/40 data-[state=active]:bg-(--color-surface-alt) data-[state=active]:shadow-sm">
                                 <div class="space-y-1">
-                                    <div class="text-xs font-semibold text-slate-100">
+                                    <div
+                                        class="text-xs font-semibold text-(--color-foreground)">
                                         App Settings
                                     </div>
                                     <p
-                                        class="text-[11px] leading-relaxed text-slate-400">
+                                        class="text-[11px] leading-relaxed text-(--color-muted-foreground)">
                                         App-wide settings.
                                     </p>
                                 </div>
                             </Tabs.Trigger>
                             <Tabs.Trigger
                                 value="global"
-                                class="flex rounded-md border border-slate-800/70 bg-slate-950/40 p-3 text-left transition-colors hover:border-slate-700/80 hover:bg-slate-900/70 data-[state=active]:border-blue-500/40 data-[state=active]:bg-slate-900 data-[state=active]:shadow-sm">
+                                class="flex rounded-md border border-(--color-border) bg-(--color-surface)/40 p-3 text-left transition-colors hover:border-(--color-border-muted) hover:bg-(--color-surface-alt)/70 data-[state=active]:border-(--color-accent)/40 data-[state=active]:bg-(--color-surface-alt) data-[state=active]:shadow-sm">
                                 <div class="space-y-1">
-                                    <div class="text-xs font-semibold text-slate-100">
+                                    <div
+                                        class="text-xs font-semibold text-(--color-foreground)">
                                         Global Settings
                                     </div>
                                     <p
-                                        class="text-[11px] leading-relaxed text-slate-400">
+                                        class="text-[11px] leading-relaxed text-(--color-muted-foreground)">
                                         Shared defaults inherited by every configured
                                         profile.
                                     </p>
@@ -593,13 +593,14 @@
                             </Tabs.Trigger>
                             <Tabs.Trigger
                                 value="profiles"
-                                class="flex rounded-md border border-slate-800/70 bg-slate-950/40 p-3 text-left transition-colors hover:border-slate-700/80 hover:bg-slate-900/70 data-[state=active]:border-blue-500/40 data-[state=active]:bg-slate-900 data-[state=active]:shadow-sm">
+                                class="flex rounded-md border border-(--color-border) bg-(--color-surface)/40 p-3 text-left transition-colors hover:border-(--color-border-muted) hover:bg-(--color-surface-alt)/70 data-[state=active]:border-(--color-accent)/40 data-[state=active]:bg-(--color-surface-alt) data-[state=active]:shadow-sm">
                                 <div class="space-y-1">
-                                    <div class="text-xs font-semibold text-slate-100">
+                                    <div
+                                        class="text-xs font-semibold text-(--color-foreground)">
                                         Profile Settings
                                     </div>
                                     <p
-                                        class="text-[11px] leading-relaxed text-slate-400">
+                                        class="text-[11px] leading-relaxed text-(--color-muted-foreground)">
                                         Provider connections and per-profile sync
                                         behavior.
                                     </p>
@@ -613,7 +614,7 @@
                             class="space-y-4 rounded-md border border-slate-800/70 bg-slate-950/40 p-4">
                             {#if appSettingEntries.length === 0}
                                 <div
-                                    class="rounded-md border border-slate-800/70 bg-slate-950/50 px-3 py-4 text-xs text-slate-400">
+                                    class="rounded-md border border-slate-800/70 bg-slate-950/50 px-3 py-4 text-xs text-(--color-muted-foreground)">
                                     No app-level settings are available in the current
                                     schema.
                                 </div>
@@ -649,7 +650,7 @@
                                     onDelete={deleteUiValue} />
                             {:else}
                                 <div
-                                    class="rounded-md border border-slate-800/70 bg-slate-950/50 px-3 py-4 text-xs text-slate-400">
+                                    class="rounded-md border border-slate-800/70 bg-slate-950/50 px-3 py-4 text-xs text-(--color-muted-foreground)">
                                     Global settings are not defined in the current
                                     schema.
                                 </div>
@@ -670,7 +671,7 @@
                                     onDelete={deleteUiValue} />
                             {:else}
                                 <div
-                                    class="rounded-md border border-slate-800/70 bg-slate-950/50 px-3 py-4 text-xs text-slate-400">
+                                    class="rounded-md border border-slate-800/70 bg-slate-950/50 px-3 py-4 text-xs text-(--color-muted-foreground)">
                                     Profile settings are not defined in the current
                                     schema.
                                 </div>
@@ -684,12 +685,12 @@
                 class="rounded-md border border-slate-800 bg-slate-950/70 p-2 shadow-inner">
                 {#if loading}
                     <div
-                        class="flex items-center justify-center gap-2 py-32 text-xs text-slate-400">
+                        class="flex items-center justify-center gap-2 py-32 text-xs text-(--color-muted-foreground)">
                         <LoaderCircle class="h-4 w-4 animate-spin" /> Loading configuration…
                     </div>
                 {:else}
                     <div
-                        class="h-[60vh] overflow-hidden rounded-md border border-slate-900/80">
+                        class="h-[60vh] overflow-hidden rounded-md border border-(--color-border)">
                         <YamlEditor
                             bind:value={editorValue}
                             theme="dark"
@@ -703,7 +704,7 @@
         {/if}
 
         {#if hasChanges}
-            <p class="text-[11px] text-slate-400">
+            <p class="text-[11px] text-(--color-muted-foreground)">
                 Unsaved changes detected in the {activeTab === "yaml" ? "YAML" : "UI"} editor.
             </p>
         {/if}
@@ -711,10 +712,11 @@
 
     <div class="space-y-2">
         <h4
-            class="flex items-center gap-2 text-sm font-medium tracking-wide text-slate-200">
-            <Languages class="inline h-4 w-4 text-slate-400" /> AniList Title Language
+            class="flex items-center gap-2 text-sm font-medium tracking-wide text-(--color-foreground)">
+            <Languages class="inline h-4 w-4 text-(--color-muted-foreground)" /> AniList Title
+            Language
         </h4>
-        <p class="text-[11px] leading-relaxed text-slate-500">
+        <p class="text-[11px] leading-relaxed text-(--color-dimmed)">
             Choose which title language to prefer on the mappings page. Stored only in
             this browser.
         </p>
@@ -723,13 +725,13 @@
                 <button
                     type="button"
                     onclick={() => setLang(opt)}
-                    class={`rounded-md border px-3 py-1.5 text-[11px] font-medium ${$anilistTitleLang === opt ? "border-blue-500 bg-blue-600 text-white" : "border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-700/60"}`}
+                    class={`rounded-md border px-3 py-1.5 text-[11px] font-medium ${$anilistTitleLang === opt ? "border-(--color-accent) bg-(--color-accent) text-white" : "border-(--color-border) bg-(--color-surface)/60 text-(--color-muted-foreground) hover:bg-(--color-surface-alt) hover:text-(--color-foreground)"}`}
                     >{opt[0].toUpperCase() + opt.slice(1)}</button>
             {/each}
         </div>
-        <p class="text-[10px] text-slate-500">
+        <p class="text-[10px] text-(--color-dimmed)">
             Current preference:
-            <span class="font-medium text-slate-300">
+            <span class="font-medium text-(--color-muted-foreground)">
                 {$anilistTitleLang === "userPreferred"
                     ? "AniList Preferred"
                     : $anilistTitleLang}

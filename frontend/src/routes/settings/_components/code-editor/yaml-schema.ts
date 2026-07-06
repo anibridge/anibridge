@@ -9,11 +9,7 @@ import { stringify } from "yaml";
 export type SchemaObject = Record<string, unknown>;
 export type SchemaExtraBehavior = "allow" | "ignore" | "forbid";
 export type SchemaPropertyBehavior =
-    | "defined"
-    | "allowed-extra"
-    | "ignored-extra"
-    | "forbidden-extra"
-    | "unknown";
+    "defined" | "allowed-extra" | "ignored-extra" | "forbidden-extra" | "unknown";
 
 const EXTRA_BEHAVIOR_KEY = "x-anibridge-extraBehavior";
 

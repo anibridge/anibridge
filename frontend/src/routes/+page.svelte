@@ -14,6 +14,9 @@
 
     import { goto } from "$app/navigation";
     import { resolve } from "$app/paths";
+    import EmptyState from "$lib/components/empty-state.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
+    import Skeleton from "$lib/components/skeleton.svelte";
     import type { ProfileStatus, StatusResponse } from "$lib/types/api";
     import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
@@ -27,7 +30,6 @@
 
     let profiles: StatusResponse["profiles"] = $state({});
     let isLoading = $state(true);
-    let lastRefreshed: number | null = $state(null);
     let ws: WebSocket | null = $state(null);
     let reinitializingProfiles: Record<string, boolean> = $state({});
 
@@ -56,9 +58,9 @@
 
     function profileCardClass(profileDisabled: boolean): string {
         if (profileDisabled) {
-            return "group rounded-md border border-slate-800/80 bg-slate-900/50 p-4 text-left transition-colors focus:ring-2 focus:ring-sky-600/40 focus:outline-none cursor-not-allowed";
+            return "group rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none cursor-not-allowed";
         }
-        return "group rounded-md border border-slate-800/80 bg-slate-900/50 p-4 text-left transition-colors focus:ring-2 focus:ring-sky-600/40 focus:outline-none cursor-pointer hover:bg-slate-900/70";
+        return "group rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none cursor-pointer hover:bg-(--color-bg-alt)/70 hover:border-(--color-border)";
     }
 
     function anyRunning(): boolean {
@@ -87,7 +89,6 @@
             const d = await apiJson<StatusResponse>("/api/status");
             profiles = d.profiles;
             isLoading = false;
-            lastRefreshed = Date.now();
         } catch (e) {
             console.error("Failed to load status", e);
             toast("Failed to load status", "error");
@@ -105,7 +106,6 @@
                 if (data.profiles) {
                     profiles = data.profiles;
                     isLoading = false;
-                    lastRefreshed = Date.now();
                 }
             } catch {}
         };
@@ -194,76 +194,57 @@
 </script>
 
 <div class="space-y-6">
-    <div class="space-y-2">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div class="space-y-1 sm:flex-1">
-                <div class="flex items-center gap-2">
-                    <Users class="inline h-4 w-4 text-slate-300" />
-                    <h2 class="text-lg font-semibold">Profiles</h2>
-                    <span class="hidden text-xs text-slate-500 sm:inline"
-                        >{Object.keys(profiles).length} total {#if lastRefreshed}•
-                            updated {formatTimeAgo(
-                                new Date(lastRefreshed).toISOString(),
-                            )}{/if}</span>
-                </div>
-                <p class="text-xs text-slate-400">Browse your configured profiles.</p>
-            </div>
-            <div class="flex flex-wrap gap-2 sm:justify-end">
-                <button
-                    class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 text-xs font-medium text-amber-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={syncDatabase}>
-                    <DatabaseBackup class="inline h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Sync Database</span>
-                </button>
-                <button
-                    class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-xs font-medium text-emerald-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={() => syncAll("manual")}
-                    disabled={anyRunning()}
-                    title={anyRunning()
-                        ? "A sync is currently running. Please wait."
-                        : "Trigger a full sync for all profiles"}>
-                    <RefreshCcw class="inline h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Full Scan All</span>
-                </button>
-                <button
-                    class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-xs font-medium text-sky-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={() => syncAll("poll")}
-                    disabled={anyRunning()}
-                    title={anyRunning()
-                        ? "A sync is currently running. Please wait."
-                        : "Trigger a poll sync for all profiles"}>
-                    <CloudDownload class="inline h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Poll Scan All</span>
-                </button>
-            </div>
-        </div>
-    </div>
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,42rem),1fr))] gap-4">
+    <PageHeader
+        icon={Users}
+        title="Profiles"
+        description="Browse your configured profiles.">
+        {#snippet actions()}
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 text-xs font-medium text-amber-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={syncDatabase}>
+                <DatabaseBackup class="inline h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Sync Database</span>
+            </button>
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-xs font-medium text-emerald-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={() => syncAll("manual")}
+                disabled={anyRunning()}
+                title={anyRunning()
+                    ? "A sync is currently running. Please wait."
+                    : "Trigger a full sync for all profiles"}>
+                <RefreshCcw class="inline h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Full Scan All</span>
+            </button>
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-xs font-medium text-sky-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={() => syncAll("poll")}
+                disabled={anyRunning()}
+                title={anyRunning()
+                    ? "A sync is currently running. Please wait."
+                    : "Trigger a poll sync for all profiles"}>
+                <CloudDownload class="inline h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Poll Scan All</span>
+            </button>
+        {/snippet}
+    </PageHeader>
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,36rem),1fr))] gap-4">
         {#if isLoading && Object.keys(profiles).length === 0}
             {#each [1, 2, 3] as i (i)}
                 <div
                     in:fade={{ duration: 150 }}
-                    class="animate-pulse rounded-md border border-slate-800/60 bg-slate-900/40 p-4">
-                    <div class="h-4 w-1/3 rounded-md bg-slate-700/60"></div>
-                    <div class="mt-3 h-3 w-1/2 rounded-md bg-slate-800/60"></div>
-                    <div class="mt-3 flex gap-2">
-                        <div class="h-6 w-20 rounded-md bg-slate-800/60"></div>
-                        <div class="h-6 w-24 rounded-md bg-slate-800/60"></div>
-                        <div class="h-6 w-16 rounded-md bg-slate-800/60"></div>
-                    </div>
+                    class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+                    <Skeleton lines={3} />
                 </div>
             {/each}
         {/if}
         {#if !isLoading && Object.keys(profiles).length === 0}
             <a
                 href={resolve("/settings")}
-                in:fade={{ duration: 150 }}
-                class="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700/70 bg-slate-900/30 p-6 text-center transition hover:border-slate-500 hover:bg-slate-900/50">
-                <div class="text-sm text-slate-400">
-                    The application is either still initializing or no profiles are
-                    configured yet. Get started by adding a profile in your
-                    configuration
-                </div>
+                in:fade={{ duration: 150 }}>
+                <EmptyState
+                    icon={Users}
+                    title="No profiles configured"
+                    description="Get started by adding a profile in your configuration." />
             </a>
         {/if}
         {#each profileEntries() as [name, p] (name)}

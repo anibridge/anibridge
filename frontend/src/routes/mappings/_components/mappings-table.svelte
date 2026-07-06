@@ -1,11 +1,11 @@
 <script lang="ts">
     import { Tooltip } from "bits-ui";
 
-    import type { ColumnConfig } from "$lib/components/mappings/columns";
-    import MappingCard from "$lib/components/mappings/mapping-card.svelte";
     import type { Mapping, MappingEdge } from "$lib/types/api";
     import { preferredTitle } from "$lib/utils/anilist";
     import { externalAuthorityUrl } from "$lib/utils/authority-links";
+    import type { ColumnConfig } from "./columns";
+    import MappingCard from "./mapping-card.svelte";
 
     export interface Props {
         items: Mapping[];
@@ -97,12 +97,12 @@
     onmouseup={onMouseUp} />
 
 <div class="flex-1 overflow-auto">
-    <div class="relative min-w-250 sm:min-w-0">
+    <div class="relative min-w-0">
         <table
             class="w-full align-middle text-xs"
             style="table-layout: fixed;">
             <thead
-                class="sticky top-0 z-10 bg-linear-to-b from-slate-900/70 to-slate-900/40 text-slate-300">
+                class="sticky top-0 z-10 bg-(--color-surface-alt)/60 text-[11px] tracking-wide text-(--color-dimmed) uppercase">
                 <tr class="divide-x divide-slate-800/70 whitespace-nowrap">
                     {#each visibleColumns as column, i (column.id)}
                         <th

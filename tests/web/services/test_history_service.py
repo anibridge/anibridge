@@ -235,7 +235,7 @@ def _seed_history_row(
                 Pin(
                     profile_name=payload["profile_name"],
                     target_namespace=payload["target_namespace"],
-                    target_parent_ref=_ref_payload(payload["target_ref"]["key"]),
+                    target_parent_ref=_ref_payload(str(payload["target_ref"]["key"])),
                 )
             )
         ctx.session.commit()

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { Funnel, X } from "@lucide/svelte";
 
-    import type { OutcomeMeta } from "$lib/components/timeline/types";
+    import type { OutcomeMeta } from "./types";
 
     interface Props {
         meta: Record<string, OutcomeMeta>;

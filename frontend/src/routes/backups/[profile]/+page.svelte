@@ -2,8 +2,11 @@
     import { onMount } from "svelte";
 
     import { ArchiveRestore, Eye, LoaderCircle, RefreshCcw } from "@lucide/svelte";
+    import { fade } from "svelte/transition";
 
     import JsonCodeBlock from "$lib/components/json-code-block.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
+    import Skeleton from "$lib/components/skeleton.svelte";
     import type { BackupMeta } from "$lib/types/api";
     import Modal from "$lib/ui/modal.svelte";
     import { apiJson } from "$lib/utils/api";
@@ -99,28 +102,34 @@
 </script>
 
 <div class="space-y-6">
-    <div class="flex flex-wrap items-center gap-2">
-        <ArchiveRestore class="inline h-4 w-4 text-slate-300" />
-        <h2 class="text-lg font-semibold">Backups</h2>
-        <span class="text-xs text-slate-500">profile: <i>{params.profile}</i></span>
-        <div class="ml-auto flex items-center gap-2 text-[11px]">
+    <PageHeader
+        icon={ArchiveRestore}
+        title="Backups"
+        description={`Profile: ${params.profile}`}>
+        {#snippet actions()}
             <button
                 onclick={load}
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md border border-slate-600/60 bg-slate-700/40 px-2 py-1 font-medium text-slate-200 hover:bg-slate-600/50">
+                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/70 px-2 py-1 font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                 <RefreshCcw class="inline h-4 w-4 text-[14px]" /> Refresh
             </button>
-        </div>
-    </div>
+        {/snippet}
+    </PageHeader>
 
-    {#if !loading && !backups.length}
+    {#if loading}
+        <div
+            in:fade={{ duration: 150 }}
+            class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+            <Skeleton lines={6} />
+        </div>
+    {:else if !backups.length}
         <p class="text-sm text-slate-500">No backups found.</p>
     {:else}
         <div
             class="overflow-x-auto rounded-md border border-slate-800 bg-slate-900/60 shadow-sm backdrop-blur-sm">
-            <table class="w-full text-sm">
+            <table class="w-full text-[11px]">
                 <thead
-                    class="bg-slate-800/60 text-left text-[11px] tracking-wide text-slate-400 uppercase">
+                    class="bg-(--color-surface-alt)/60 text-left text-[11px] tracking-wide text-(--color-dimmed) uppercase">
                     <tr>
                         <th class="px-3 py-2 font-medium">Filename</th>
                         <th class="px-3 py-2 font-medium">Created</th>
@@ -198,7 +207,7 @@
             {#snippet footerChildren()}
                 <div>
                     <button
-                        class="rounded-md border border-slate-600/60 bg-slate-700/40 px-3 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600/50"
+                        class="rounded-md border border-(--color-border) bg-(--color-surface)/70 px-3 py-1 text-[11px] font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)"
                         onclick={() => setPreviewOpen(false)}>
                         Close
                     </button>

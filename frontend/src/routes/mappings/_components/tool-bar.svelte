@@ -2,7 +2,7 @@
     import { Check, FolderTree, Plus } from "@lucide/svelte";
     import { twMerge } from "tailwind-merge";
 
-    import BooruSearch from "$lib/components/mappings/booru-search.svelte";
+    import BooruSearch from "./booru-search.svelte";
 
     interface Props {
         class?: string;
@@ -80,7 +80,7 @@
                     ry="2"></rect
                 ></svg>
         {/if}
-        <span>Custom Only</span>
+        <span>Custom</span>
     </button>
     <button
         title="Manage Includes"
@@ -152,7 +152,7 @@
                             ry="2"></rect
                         ></svg>
                 {/if}
-                <span>Custom Only</span>
+                <span>Custom</span>
             </button>
         </div>
         <button

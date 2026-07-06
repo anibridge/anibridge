@@ -223,8 +223,8 @@
 
     const wrapperClass = $derived(
         depth === 0
-            ? "space-y-4"
-            : "space-y-4 rounded-md border border-slate-800/70 bg-slate-950/40 p-4",
+            ? "space-y-3"
+            : "space-y-3 rounded-md border border-slate-800/70 bg-slate-950/50 p-4",
     );
 
     const addButtonClass =
@@ -382,7 +382,7 @@
                 objectValue[key],
             )}
             <div
-                class="space-y-3 rounded-md border border-slate-800/70 bg-slate-950/40 p-4">
+                class="space-y-2.5 rounded-md border border-slate-800/70 bg-slate-950/50 p-4">
                 <div
                     class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div class="flex min-w-0 items-center gap-2">
@@ -519,7 +519,7 @@
                     {@const itemUnionOptions = getAnyOfOptions(itemSchema, rootSchema)}
                     {@const itemUnionIndex = getUnionIndex(itemUnionOptions, item)}
                     <div
-                        class="min-w-0 flex-1 space-y-3 rounded-md border border-slate-800/70 bg-slate-950/40 p-4 sm:min-w-[18rem]">
+                        class="min-w-0 flex-1 space-y-2.5 rounded-md border border-slate-800/70 bg-slate-950/50 p-4 sm:min-w-[18rem]">
                         <div
                             class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div class="flex min-w-0 items-center gap-2">
@@ -571,7 +571,7 @@
             <div
                 class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div
-                    class="flex min-w-0 flex-wrap items-center gap-2 text-xs font-medium tracking-wide text-slate-200">
+                    class="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
                     <span class="truncate">{title}</span>
                     {@render renderHeaderDetails(title, description, required)}
                 </div>
@@ -605,7 +605,7 @@
                 <input
                     type="checkbox"
                     checked={Boolean(value ?? resolvedSchema.default ?? false)}
-                    class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500"
+                    class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-(--color-accent)"
                     onchange={(event) =>
                         onChange(
                             path,
@@ -615,7 +615,7 @@
             </label>
         {:else if isEnum}
             <select
-                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-blue-500"
+                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-(--color-accent-muted)"
                 value={String(value ?? resolvedSchema.default ?? enumOptions[0] ?? "")}
                 onchange={(event) =>
                     onChange(path, (event.currentTarget as HTMLSelectElement).value)}>
@@ -626,7 +626,7 @@
         {:else if isNumeric}
             <input
                 type="number"
-                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-blue-500"
+                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-(--color-accent-muted)"
                 value={String(value ?? resolvedSchema.default ?? "")}
                 placeholder={resolvedSchema.default !== undefined
                     ? String(resolvedSchema.default)
@@ -643,7 +643,7 @@
         {:else}
             <input
                 type={resolvedSchema.format === "password" ? "password" : "text"}
-                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-blue-500"
+                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-(--color-accent-muted)"
                 value={String(value ?? resolvedSchema.default ?? "")}
                 placeholder={resolvedSchema.default !== undefined
                     ? String(resolvedSchema.default)

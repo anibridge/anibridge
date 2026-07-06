@@ -100,9 +100,7 @@
 
     type EntryFieldKey = "authority" | "value" | "scope";
     type EntryPlaceholderKey =
-        | "authority_placeholder"
-        | "value_placeholder"
-        | "scope_placeholder";
+        "authority_placeholder" | "value_placeholder" | "scope_placeholder";
 
     type EntryField = {
         key: EntryFieldKey;

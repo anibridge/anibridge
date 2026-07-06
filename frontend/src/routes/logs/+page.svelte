@@ -16,6 +16,7 @@
     } from "@lucide/svelte";
     import { Tabs } from "bits-ui";
 
+    import PageHeader from "$lib/components/page-header.svelte";
     import type { LogEntry, LogFile } from "$lib/types/api";
     import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
@@ -181,39 +182,15 @@
         }
     }
 
-    function downloadLive() {
-        if (!logs.length) return;
+    function downloadLog(entries: LogEntry[], filename: string) {
+        if (!entries.length) return;
         const blob = new Blob(
-            [logs.map((l) => `[${l.level}] ${l.message}`).join("\n")],
+            [entries.map((l) => `[${l.level}] ${l.message}`).join("\n")],
             { type: "text/plain" },
         );
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download =
-            "logs-" +
-            new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19) +
-            ".txt";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-            URL.revokeObjectURL(a.href);
-            a.remove();
-        }, 100);
-    }
-
-    function downloadHistory() {
-        if (!historyEntries.length) return;
-        const blob = new Blob(
-            [historyEntries.map((l) => `[${l.level}] ${l.message}`).join("\n")],
-            { type: "text/plain" },
-        );
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download =
-            (currentFile ? currentFile.name.replace(/\.log.*/, "") : "history") +
-            "-excerpt-" +
-            new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19) +
-            ".txt";
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
@@ -319,6 +296,10 @@
 </script>
 
 <div class="space-y-6">
+    <PageHeader
+        icon={Activity}
+        title="Logs"
+        description="View live log streams and browse log file history." />
     <!-- Toolbar -->
     <div class="space-y-2 border-b border-slate-800/70 py-2 text-sm font-medium">
         <!-- Tabs -->
@@ -377,7 +358,7 @@
                             aria-label="Clear search"
                             type="button"
                             onclick={() => ((search = ""), applyFilter())}
-                            class="absolute top-1/2 right-1 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="absolute top-1/2 right-1 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                             <X class="h-3.5 w-3.5 text-[14px]" />
                         </button>
                     {/if}
@@ -425,7 +406,7 @@
                             aria-label="Clear live logs"
                             title="Clear live logs"
                             onclick={clearLive}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                             <Trash2 class="inline h-4 w-4" />
                         </button>
                         <button
@@ -435,7 +416,7 @@
                                 ? "Auto-scroll enabled"
                                 : "Auto-scroll paused"}
                             onclick={() => ((autoScroll = !autoScroll), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                             {#if autoScroll}
                                 <ChevronsDown class="inline h-4 w-4" />
                             {:else}
@@ -447,7 +428,7 @@
                             aria-label="Toggle wrap"
                             title={wrap ? "Disable wrap" : "Enable wrap"}
                             onclick={() => ((wrap = !wrap), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                             {#if wrap}
                                 <TextWrap class="inline h-4 w-4" />
                             {:else}
@@ -458,8 +439,17 @@
                             type="button"
                             aria-label="Download live logs"
                             title="Download live logs"
-                            onclick={downloadLive}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            onclick={() =>
+                                downloadLog(
+                                    logs,
+                                    "logs-" +
+                                        new Date()
+                                            .toISOString()
+                                            .replace(/[:T]/g, "-")
+                                            .slice(0, 19) +
+                                        ".txt",
+                                )}
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                             <Download class="inline h-4 w-4" />
                         </button>
                     </div>
@@ -542,7 +532,7 @@
                             aria-label="Toggle wrap"
                             title={wrap ? "Disable wrap" : "Enable wrap"}
                             onclick={() => ((wrap = !wrap), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
                             {#if wrap}
                                 <TextWrap class="inline h-4 w-4" />
                             {:else}
@@ -553,14 +543,26 @@
                             type="button"
                             aria-label="Refresh"
                             onclick={() => currentFile && loadFile(currentFile, true)}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)"
                             ><RefreshCw class="inline h-4 w-4" /></button>
                         <button
                             type="button"
                             aria-label="Download file excerpt"
                             disabled={!historyEntries.length}
-                            onclick={downloadHistory}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+                            onclick={() =>
+                                downloadLog(
+                                    historyEntries,
+                                    (currentFile
+                                        ? currentFile.name.replace(/\.log.*/, "")
+                                        : "history") +
+                                        "-excerpt-" +
+                                        new Date()
+                                            .toISOString()
+                                            .replace(/[:T]/g, "-")
+                                            .slice(0, 19) +
+                                        ".txt",
+                                )}
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) disabled:opacity-40"
                             ><Download class="inline h-4 w-4" /></button>
                     </div>
                 </div>
@@ -579,7 +581,7 @@
                                     <button
                                         type="button"
                                         aria-label="Close file list"
-                                        class="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 sm:hidden"
+                                        class="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) sm:hidden"
                                         onclick={() => (showFiles = false)}>
                                         <X class="h-3.5 w-3.5" />
                                     </button>

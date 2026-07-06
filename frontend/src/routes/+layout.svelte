@@ -121,10 +121,10 @@
             <nav class="flex flex-1 flex-col gap-1 text-sm font-medium">
                 <a
                     href={resolve("/")}
-                    class="nav-link {active('/', true) || active('/timeline')
+                    class="nav-link {active('/', true) || active('/history')
                         ? 'nav-link-active'
                         : ''}"
-                    aria-current={active("/", true) || active("/timeline")
+                    aria-current={active("/", true) || active("/history")
                         ? "page"
                         : undefined}
                     ><LayoutDashboard class="inline h-4 w-4" /><span>Dashboard</span

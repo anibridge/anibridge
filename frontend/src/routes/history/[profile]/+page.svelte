@@ -168,8 +168,8 @@
             lastRefreshed = Date.now();
         } catch (error) {
             if (isAbortError(error)) return;
-            console.error("Failed to load timeline", error);
-            toast("Failed to load timeline", "error");
+            console.error("Failed to load history", error);
+            toast("Failed to load history", "error");
         } finally {
             if (currentAbort === controller) currentAbort = null;
             loading = false;
@@ -180,10 +180,10 @@
 
     async function setOutcomeFilter(key: string | null) {
         activeOutcome = key && activeOutcome !== key ? key : null;
-        await resetTimeline();
+        await resetHistory();
     }
 
-    async function resetTimeline() {
+    async function resetHistory() {
         groups = [];
         nextBeforeId = null;
         latestGroupId = null;
@@ -241,13 +241,13 @@
     }
 
     async function deleteGroup(group: HistoryGroup) {
-        if (!confirm(`Delete timeline group #${group.id}?`)) return;
+        if (!confirm(`Delete history group #${group.id}?`)) return;
         acting = true;
         try {
             const response = await apiFetch(
                 `${historyPath()}/groups/${group.id}`,
                 { method: "DELETE" },
-                { successMessage: "Deleted timeline group" },
+                { successMessage: "Deleted history group" },
             );
             if (response.ok) groups = groups.filter((item) => item.id !== group.id);
         } finally {
@@ -277,7 +277,7 @@
             const response = await apiFetch(
                 `${historyPath()}/operations/${operation.id}`,
                 { method: "DELETE" },
-                { successMessage: "Deleted timeline operation" },
+                { successMessage: "Deleted history operation" },
             );
             if (response.ok) await loadHistory("replace");
         } finally {
@@ -366,7 +366,7 @@
             <div class="space-y-1 sm:flex-1">
                 <div class="flex flex-wrap items-center gap-2">
                     <History class="inline h-4 w-4 text-slate-300" />
-                    <h2 class="text-lg font-semibold">Sync Timeline</h2>
+                    <h2 class="text-lg font-semibold">Sync History</h2>
                     <span class="text-xs text-slate-500">
                         {profile}
                     </span>
@@ -405,7 +405,8 @@
         </div>
         {#if hasRunningSync()}
             <div class="mt-2 space-y-2">
-                <div class="flex items-center justify-between text-[11px] text-slate-400">
+                <div
+                    class="flex items-center justify-between text-[11px] text-slate-400">
                     <div class="truncate">
                         {#if progressSubject(currentSync)}
                             <span class="text-slate-300"
@@ -428,7 +429,8 @@
                             class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
                             <div
                                 class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
-                                style="transform: translateX(-{100 - 100 * percent()}%)">
+                                style="transform: translateX(-{100 -
+                                    100 * percent()}%)">
                             </div>
                         </Meter.Root>
                     {:else}
@@ -448,10 +450,9 @@
             meta={outcomeFilterMeta}
             {stats}
             active={activeOutcome}
-            onToggle={(key) => setOutcomeFilter(key)}
-            onClear={() => setOutcomeFilter(null)} />
-        <div
-            class="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            onToggle={(key: string) => void setOutcomeFilter(key)}
+            onClear={() => void setOutcomeFilter(null)} />
+        <div class="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
             <span>updated {formatTimeAgo(lastRefreshed)}</span>
             {#if refreshing}
                 <span class="inline-flex items-center gap-1 text-sky-300">
@@ -499,7 +500,7 @@
                 class="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700/70 bg-slate-900/30 p-8 text-center">
                 <CircleSlash class="h-8 w-8 text-slate-500" />
                 <div class="mt-3 text-sm font-medium text-slate-300">
-                    No timeline entries
+                    No history entries
                 </div>
                 <p class="mt-1 max-w-md text-xs text-slate-500">
                     This profile has no history matching the active filters yet.

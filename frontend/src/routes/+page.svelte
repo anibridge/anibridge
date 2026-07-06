@@ -177,8 +177,8 @@
         }
     }
 
-    function goTimeline(name: string) {
-        goto(resolve(`/timeline/${name}`));
+    function goHistory(name: string) {
+        goto(resolve(`/history/${name}`));
     }
 
     function accountPair(p: ProfileStatus): string {
@@ -274,11 +274,11 @@
                 type="button"
                 class={profileCardClass(profileDisabled)}
                 onclick={() => {
-                    if (!profileDisabled) goTimeline(name);
+                    if (!profileDisabled) goHistory(name);
                 }}
                 title={profileDisabled
                     ? `${name} is unavailable due to a profile initialization error`
-                    : `Open timeline for ${name}`}>
+                    : `Open history for ${name}`}>
                 <div
                     class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div class:opacity-70={profileDisabled}>
@@ -333,9 +333,9 @@
                             </span>
                         {:else}
                             <a
-                                href={resolve(`/timeline/${name}`)}
+                                href={resolve(`/history/${name}`)}
                                 class="inline-flex items-center gap-1 rounded-md border border-indigo-600/60 bg-indigo-600/30 px-2 py-1 text-[11px] font-medium text-indigo-200 shadow-sm hover:bg-indigo-600/40">
-                                <span>Timeline</span>
+                                <span>History</span>
                                 <ChevronRight class="inline h-3 w-3" />
                             </a>
                             <span

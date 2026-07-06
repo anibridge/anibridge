@@ -303,7 +303,7 @@ def _client(
     )
     client._history = cast(Any, _History())
     if patch_pins:
-        client._fetch_pinned_fields_batch = cast(Any, lambda requests: {})
+        client._fetch_pinned_target_parents = cast(Any, lambda refs: frozenset())
     return client
 
 
@@ -1224,7 +1224,7 @@ async def test_write_event_failure_and_non_supporting_fetches() -> None:
     )
 
 
-def test_fetch_pinned_fields_batch_scores_specific_refs(sync_db) -> None:
+def test_fetch_pinned_target_parents_covers_child_refs(sync_db) -> None:
     client = _client(patch_pins=False)
     with sync_db as ctx:
         ctx.session.add_all(
@@ -1232,32 +1232,17 @@ def test_fetch_pinned_fields_batch_scores_specific_refs(sync_db) -> None:
                 Pin(
                     profile_name="profile",
                     target_namespace="target",
-                    target_ref=ref_to_json(Ref.anchor("target")),
-                    fields=[RecordField.STATUS.value, "unknown"],
-                ),
-                Pin(
-                    profile_name="profile",
-                    target_namespace="target",
-                    target_ref=ref_to_json(Ref.at("target", ("part", 1))),
-                    fields=[RecordField.PROGRESS.value],
+                    target_parent_ref=ref_to_json(Ref.anchor("target")),
                 ),
             ]
         )
         ctx.session.commit()
 
-    pinned = client._fetch_pinned_fields_batch(
-        (
-            (Ref.at("target", ("part", 1)), _RECORD_KIND),
-            (Ref.at("target", ("part", 2)), _RECORD_KIND),
-        )
+    pinned = client._fetch_pinned_target_parents(
+        (Ref.at("target", ("part", 1)), Ref.at("target", ("part", 2)))
     )
 
-    assert pinned[(ref_to_key(Ref.at("target", ("part", 1))), _RECORD_KIND)] == [
-        RecordField.PROGRESS
-    ]
-    assert pinned[(ref_to_key(Ref.at("target", ("part", 2))), _RECORD_KIND)] == [
-        RecordField.STATUS
-    ]
+    assert pinned == frozenset({ref_to_key(Ref.anchor("target"))})
 
 
 @pytest.mark.asyncio

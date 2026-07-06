@@ -55,21 +55,24 @@ def upgrade() -> None:
             new_column_name="target_namespace",
             existing_nullable=False,
         )
-        batch_op.add_column(sa.Column("target_ref", sa.JSON(), nullable=True))
+        batch_op.add_column(sa.Column("target_parent_ref", sa.JSON(), nullable=True))
 
     op.execute(
         """
         UPDATE pin
-        SET target_ref = json_object('key', list_media_key, 'path', json_array())
+        SET target_parent_ref = json_object('key', list_media_key, 'path', json_array())
         """
     )
 
     with op.batch_alter_table("pin", schema=None) as batch_op:
-        batch_op.alter_column("target_ref", existing_type=sa.JSON(), nullable=False)
+        batch_op.alter_column(
+            "target_parent_ref", existing_type=sa.JSON(), nullable=False
+        )
         batch_op.drop_column("list_media_key")
+        batch_op.drop_column("fields")
         batch_op.create_unique_constraint(
-            "uq_pin_profile_target_ref",
-            ["profile_name", "target_namespace", "target_ref"],
+            "uq_pin_profile_target_parent_ref",
+            ["profile_name", "target_namespace", "target_parent_ref"],
         )
         batch_op.create_index(
             batch_op.f("ix_pin_profile_name"), ["profile_name"], unique=False
@@ -557,13 +560,16 @@ def downgrade() -> None:
         batch_op.drop_index("ix_pin_profile_updated_at")
         batch_op.drop_index(batch_op.f("ix_pin_target_namespace"))
         batch_op.drop_index(batch_op.f("ix_pin_profile_name"))
-        batch_op.drop_constraint("uq_pin_profile_target_ref", type_="unique")
+        batch_op.drop_constraint("uq_pin_profile_target_parent_ref", type_="unique")
         batch_op.add_column(sa.Column("list_media_key", sa.String(), nullable=True))
+        batch_op.add_column(sa.Column("fields", sa.JSON(), nullable=True))
 
     op.execute(
         """
         UPDATE pin
-        SET list_media_key = json_extract(target_ref, '$.key')
+        SET
+            list_media_key = json_extract(target_parent_ref, '$.key'),
+            fields = json_array()
         """
     )
 
@@ -571,7 +577,8 @@ def downgrade() -> None:
         batch_op.alter_column(
             "list_media_key", existing_type=sa.String(), nullable=False
         )
-        batch_op.drop_column("target_ref")
+        batch_op.alter_column("fields", existing_type=sa.JSON(), nullable=False)
+        batch_op.drop_column("target_parent_ref")
         batch_op.alter_column(
             "target_namespace",
             existing_type=sa.String(),

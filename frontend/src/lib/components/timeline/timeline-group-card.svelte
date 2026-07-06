@@ -25,6 +25,7 @@
         onDeleteGroup?: (group: HistoryGroup) => void;
         onUndoOperation?: (operation: HistoryOperation) => void;
         onDeleteOperation?: (operation: HistoryOperation) => void;
+        onTogglePin?: (target: HistoryGroup | HistoryOperation) => void;
     }
 
     let {
@@ -34,6 +35,7 @@
         onDeleteGroup,
         onUndoOperation,
         onDeleteOperation,
+        onTogglePin,
     }: Props = $props();
 
     function formatDate(ts: string): string {
@@ -122,7 +124,8 @@
                 {group}
                 {disabled}
                 {onRetry}
-                {onDeleteGroup} />
+                {onDeleteGroup}
+                {onTogglePin} />
         </div>
 
         <div class="grid gap-2 lg:grid-cols-[1fr_auto_1fr] lg:items-stretch">
@@ -147,7 +150,8 @@
                     {/if}
                 </div>
                 <div class="min-w-0 flex-1">
-                    <div class="line-clamp-2 text-sm leading-snug font-medium text-slate-100">
+                    <div
+                        class="line-clamp-2 text-sm leading-snug font-medium text-slate-100">
                         {mediaTitle(
                             group.source_media,
                             refLabel(group.source_parent_ref),
@@ -215,7 +219,8 @@
                     {/if}
                 </div>
                 <div class="min-w-0 flex-1">
-                    <div class="line-clamp-2 text-sm leading-snug font-medium text-slate-100">
+                    <div
+                        class="line-clamp-2 text-sm leading-snug font-medium text-slate-100">
                         {mediaTitle(
                             group.target_media,
                             refLabel(group.target_parent_ref),
@@ -275,5 +280,6 @@
         {group}
         {disabled}
         {onUndoOperation}
-        {onDeleteOperation} />
+        {onDeleteOperation}
+        onTogglePin={onTogglePin ? (target) => onTogglePin(target) : undefined} />
 </article>

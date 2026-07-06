@@ -1,17 +1,15 @@
-"""API routes for managing target record-field pins."""
+"""API routes for managing target parent pins."""
 
 from typing import Annotated
 
 import msgspec
-from anibridge.provider.base import RecordField
 from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import delete, get, put
-from litestar.params import Body, PathParameter, QueryParameter
+from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
 from anibridge.app.web.services.pin_service import (
     PinEntry,
-    PinFieldOption,
     PinSearchResult,
     get_pin_service,
 )
@@ -31,23 +29,10 @@ class PinListResponse(msgspec.Struct):
                     {
                         "profile_name": "default",
                         "target_namespace": "anilist",
-                        "target_ref": {"key": "5114", "path": []},
-                        "fields": ["status"],
+                        "target_parent_ref": {"key": "5114", "path": []},
                     }
                 ]
             ],
-        ),
-    ]
-
-
-class PinOptionsResponse(msgspec.Struct):
-    """Response model for available pin field options."""
-
-    options: Annotated[
-        list[PinFieldOption],
-        msgspec.Meta(
-            description="Selectable sync fields that can be pinned.",
-            examples=[[{"value": "status", "label": "Status"}]],
         ),
     ]
 
@@ -64,19 +49,6 @@ class PinSearchResponse(msgspec.Struct):
     ]
 
 
-class UpdatePinRequest(msgspec.Struct):
-    """Request body for updating pin fields."""
-
-    fields: Annotated[
-        list[str],
-        msgspec.Meta(
-            min_length=1,
-            description="Requested sync fields to pin for the target media item.",
-            examples=[["status", "progress"]],
-        ),
-    ] = msgspec.field(default_factory=list)
-
-
 class OkResponse(msgspec.Struct):
     """Response model for successful operations."""
 
@@ -87,13 +59,6 @@ class OkResponse(msgspec.Struct):
             examples=[True],
         ),
     ] = True
-
-
-@get(path="/fields", sync_to_thread=True)
-def get_pin_fields() -> PinOptionsResponse:
-    """Return selectable pin field metadata."""
-    service = get_pin_service()
-    return PinOptionsResponse(options=service.list_options())
 
 
 @get(path="/{profile:str}")
@@ -127,7 +92,7 @@ async def get_pin(
     media_key: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
-    """Retrieve pin configuration for a specific target anchor ref."""
+    """Retrieve pin state for a specific target parent ref."""
     service = get_pin_service()
     entry = await service.get_pin(profile, media_key, with_media=with_media)
     if not entry:
@@ -137,29 +102,14 @@ async def get_pin(
 
 @put(path="/{profile:str}/{media_key:str}")
 async def upsert_pin(
-    data: Annotated[UpdatePinRequest, Body()],
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
-    """Create or update pin fields for a media item."""
-    allowed_fields = {field.value for field in RecordField}
-    normalized_fields: list[str] = []
-    for raw_field in data.fields:
-        value = str(raw_field).strip().lower()
-        if not value:
-            continue
-        if value not in allowed_fields:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported field '{raw_field}'",
-            )
-        if value not in normalized_fields:
-            normalized_fields.append(value)
-
+    """Create or update a target parent pin."""
     try:
         entry = await get_pin_service().upsert_pin(
-            profile, media_key, normalized_fields, with_media=with_media
+            profile, media_key, with_media=with_media
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -171,7 +121,7 @@ def delete_pin(
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
 ) -> OkResponse:
-    """Delete pin configuration for a target anchor ref."""
+    """Delete pin state for a target parent ref."""
     get_pin_service().delete_pin(profile, media_key)
     return OkResponse()
 
@@ -179,7 +129,6 @@ def delete_pin(
 router = Router(
     path="/pins",
     route_handlers=[
-        get_pin_fields,
         list_pins,
         search_pins,
         get_pin,

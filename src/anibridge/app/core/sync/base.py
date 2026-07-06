@@ -50,6 +50,7 @@ from anibridge.app.core.sync import (
     RefKey,
     ScanPlan,
     ref_from_payload,
+    ref_to_json,
     ref_to_key,
 )
 from anibridge.app.core.sync.history import SyncHistoryManager
@@ -306,19 +307,28 @@ class SyncClient:
 
         outcomes, work_items = await self._resolve_work_items(items)
         record_work_items = self._merge_record_work_items(work_items)
+        pinned_target_parents = self._fetch_pinned_target_parents(
+            work.target_ref for work in work_items
+        )
         target_key_counts = Counter(work.key for work in record_work_items)
         target_records = await self._fetch_target_records_batch(
             (work.target_ref, work.target_surface)
             for work in record_work_items
             if target_key_counts[work.key] == 1
         )
-        pinned_fields = self._fetch_pinned_fields_batch(
-            (work.target_ref, work.target_surface) for work in record_work_items
-        )
 
         updates: list[tuple[_TargetWork, PreparedUpdate]] = []
         for work in record_work_items:
             try:
+                if self._target_parent_key(work.target_ref) in pinned_target_parents:
+                    log.info(
+                        "[%s] Skipping %s %s because target parent %s is pinned",
+                        self.profile_name,
+                        work.label.node_kind,
+                        work.label.source,
+                        work.target_ref.key,
+                    )
+                    continue
                 target_record = (
                     await self._fetch_target_record(
                         work.target_ref,
@@ -333,7 +343,6 @@ class SyncClient:
                     target_record=target_record,
                     target_ref=work.target_ref,
                     target_kind=work.target_surface,
-                    pinned_fields=pinned_fields.get(work.key, ()),
                     mappings=work.mappings,
                     label=work.label,
                     source_descriptor=work.source_descriptor,
@@ -372,7 +381,10 @@ class SyncClient:
 
         for work in work_items:
             try:
-                outcome = await self._sync_events_for_work(work)
+                outcome = await self._sync_events_for_work(
+                    work,
+                    pinned_target_parents=pinned_target_parents,
+                )
             except Exception:
                 log.error(
                     "[%s] Failed to sync events for %s %s with target %s",
@@ -670,7 +682,6 @@ class SyncClient:
         target_kind: str,
         label: SyncLabel,
         source_descriptor: ExternalId | None = None,
-        pinned_fields: Sequence[RecordField] = (),
         mappings: Sequence[MappingRange] = (),
     ) -> PreparedUpdate | SyncOutcome:
         """Plan one source-to-target record mutation without applying updates."""
@@ -705,7 +716,6 @@ class SyncClient:
             target_record=target_record,
             target_ref=target_ref,
             target_kind=target_kind,
-            pinned_fields=pinned_fields,
             label=label,
             mappings=mappings,
         )
@@ -1039,13 +1049,27 @@ class SyncClient:
         )
         return SyncOutcome.DELETED
 
-    async def _sync_events_for_work(self, work: _TargetWork) -> SyncOutcome:
+    async def _sync_events_for_work(
+        self,
+        work: _TargetWork,
+        *,
+        pinned_target_parents: frozenset[RefKey] = frozenset(),
+    ) -> SyncOutcome:
         """Append missing source events to the resolved target ref."""
         if not self._event_pairs:
             return SyncOutcome.SKIPPED
         if not isinstance(self.source_provider, SupportsReads):
             return SyncOutcome.SKIPPED
         if not isinstance(self.target_provider, SupportsWrites):
+            return SyncOutcome.SKIPPED
+        if self._target_parent_key(work.target_ref) in pinned_target_parents:
+            log.info(
+                "[%s] Skipping events for %s %s because target parent %s is pinned",
+                self.profile_name,
+                work.label.node_kind,
+                work.label.source,
+                work.target_ref.key,
+            )
             return SyncOutcome.SKIPPED
 
         writes: list[Write] = []
@@ -1524,17 +1548,21 @@ class SyncClient:
                 fields.update(self._planner.sync_fields_for(source_kind, target_kind))
         return frozenset(fields)
 
-    def _fetch_pinned_fields_batch(
+    @staticmethod
+    def _target_parent_key(ref: Ref) -> RefKey:
+        """Return the target parent key covered by a pin."""
+        return RefKey(key=ref.key)
+
+    def _fetch_pinned_target_parents(
         self,
-        requests: Iterable[tuple[Ref, str]],
-    ) -> dict[TargetRecordKey, list[RecordField]]:
-        """Fetch pinned fields for target records in one page-level query."""
-        wanted = [
-            (ref_to_key(target_ref), record_kind)
-            for target_ref, record_kind in requests
-        ]
+        refs: Iterable[Ref],
+    ) -> frozenset[RefKey]:
+        """Fetch pinned target parent refs in one page-level query."""
+        wanted = tuple({self._target_parent_key(ref) for ref in refs})
         if not wanted:
-            return {}
+            return frozenset()
+
+        ref_json = [ref_to_json(Ref.anchor(ref.key)) for ref in wanted]
 
         with db() as ctx:
             pins = (
@@ -1542,36 +1570,18 @@ class SyncClient:
                 .filter(
                     Pin.profile_name == self.profile_name,
                     Pin.target_namespace == self.target_provider.NAMESPACE,
+                    Pin.target_parent_ref.in_(ref_json),
                 )
                 .all()
             )
 
-        exact_pin_fields: dict[RefKey, list[RecordField]] = {}
-        anchor_pin_fields: dict[str, list[RecordField]] = {}
+        pinned: set[RefKey] = set()
         for pin in pins:
-            pin_ref = ref_from_payload(pin.target_ref)
+            pin_ref = ref_from_payload(pin.target_parent_ref)
             if pin_ref is None:
                 continue
-            pin_ref_key = ref_to_key(pin_ref)
-            pin_fields: list[RecordField] = []
-            for field in pin.fields or []:
-                try:
-                    pin_fields.append(RecordField(field))
-                except ValueError:
-                    continue
-            exact_pin_fields[pin_ref_key] = pin_fields
-            if pin_ref_key.is_anchor:
-                anchor_pin_fields[pin_ref_key.key] = pin_fields
-
-        pinned_fields: dict[TargetRecordKey, list[RecordField]] = {}
-        for target_key in wanted:
-            target_ref_key, _target_kind = target_key
-            fields = exact_pin_fields.get(target_ref_key)
-            if fields is None:
-                fields = anchor_pin_fields.get(target_ref_key.key)
-            if fields is not None:
-                pinned_fields[target_key] = fields
-        return pinned_fields
+            pinned.add(self._target_parent_key(pin_ref))
+        return frozenset(pinned)
 
     def _sync_label(
         self,

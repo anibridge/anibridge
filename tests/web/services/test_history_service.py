@@ -235,8 +235,7 @@ def _seed_history_row(
                 Pin(
                     profile_name=payload["profile_name"],
                     target_namespace=payload["target_namespace"],
-                    target_ref=payload["target_ref"],
-                    fields=["status"],
+                    target_parent_ref=_ref_payload(payload["target_ref"]["key"]),
                 )
             )
         ctx.session.commit()
@@ -270,13 +269,13 @@ async def test_history_service_get_page_enriches_metadata_and_pins(history_env):
     assert operation.after_state is not None
     assert operation.source_surface == "source_state"
     assert operation.target_surface == "target_state"
-    assert operation.pinned_fields == ["status"]
+    assert operation.pinned is True
     assert operation.info == {"source": "test-seed"}
 
 
 @pytest.mark.asyncio
-async def test_history_service_pin_fields_prefer_exact_refs(history_env):
-    """History pin display should prefer exact refs over anchor pins."""
+async def test_history_service_pins_cover_child_refs(history_env):
+    """History pin display should mark child refs by target parent pin."""
     episode_1 = _ref_payload("tgt1", [{"axis": "episode", "value": 1}])
     episode_2 = _ref_payload("tgt1", [{"axis": "episode", "value": 2}])
     _seed_history_row(pin=False, target_ref=episode_1)
@@ -287,14 +286,7 @@ async def test_history_service_pin_fields_prefer_exact_refs(history_env):
                 Pin(
                     profile_name="profile",
                     target_namespace="target",
-                    target_ref=_ref_payload("tgt1"),
-                    fields=["rating"],
-                ),
-                Pin(
-                    profile_name="profile",
-                    target_namespace="target",
-                    target_ref=episode_1,
-                    fields=["notes"],
+                    target_parent_ref=_ref_payload("tgt1"),
                 ),
             ]
         )
@@ -307,13 +299,13 @@ async def test_history_service_pin_fields_prefer_exact_refs(history_env):
         include_target_media=False,
     )
 
-    fields_by_episode = {
-        operation.target_ref.path[0].value: operation.pinned_fields
+    pinned_by_episode = {
+        operation.target_ref.path[0].value: operation.pinned
         for group in page.groups
         for operation in group.operations
         if operation.target_ref is not None
     }
-    assert fields_by_episode == {1: ["notes"], 2: ["rating"]}
+    assert pinned_by_episode == {1: True, 2: True}
 
 
 @pytest.mark.asyncio

@@ -241,7 +241,6 @@ class RecordPlanner:
         target_record: Record | None,
         target_ref: Ref,
         target_kind: str,
-        pinned_fields: Sequence[RecordField],
         label: SyncLabel,
         mappings: Sequence[MappingRange] = (),
     ) -> PreparedUpdate | SyncOutcome:
@@ -254,7 +253,6 @@ class RecordPlanner:
         changed_fields: set[RecordField] = set()
         blocked_fields: list[FieldBlock] = []
         applied_rules: list[AppliedRule] = []
-        pinned = set(pinned_fields)
 
         target_values = target_record.values if target_record else {}
         sync_fields = self.sync_fields_for(source_record.surface, target_kind)
@@ -274,9 +272,6 @@ class RecordPlanner:
         )
 
         for field in sync_fields:
-            if field in pinned:
-                blocked_fields.append(FieldBlock(field, "pinned"))
-                continue
             if gate_reason := self._status_gate(field, final_status):
                 blocked_fields.append(FieldBlock(field, gate_reason))
                 continue

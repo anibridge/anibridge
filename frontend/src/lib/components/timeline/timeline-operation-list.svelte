@@ -16,6 +16,7 @@
         disabled?: boolean;
         onUndoOperation?: (operation: HistoryOperation) => void;
         onDeleteOperation?: (operation: HistoryOperation) => void;
+        onTogglePin?: (target: HistoryOperation) => void;
     }
 
     let {
@@ -23,6 +24,7 @@
         disabled = false,
         onUndoOperation,
         onDeleteOperation,
+        onTogglePin,
     }: Props = $props();
 
     let open = $state(false);
@@ -179,10 +181,10 @@
                                             class="truncate"
                                             title={targetLabel}>{targetLabel}</span>
                                     </span>
-                                    {#if operation.pinned_fields?.length}
+                                    {#if operation.pinned}
                                         <span
                                             class="rounded-md border border-sky-700/50 bg-sky-600/15 px-2 py-0.5 text-[11px] text-sky-200">
-                                            pinned {operation.pinned_fields.length}
+                                            pinned
                                         </span>
                                     {/if}
                                 </div>
@@ -192,7 +194,11 @@
                                 {operation}
                                 {disabled}
                                 {onUndoOperation}
-                                {onDeleteOperation} />
+                                {onDeleteOperation}
+                                onTogglePin={onTogglePin
+                                    ? (target) =>
+                                          onTogglePin(target as HistoryOperation)
+                                    : undefined} />
                         </div>
 
                         {#if operation.error_message}

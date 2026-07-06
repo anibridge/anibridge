@@ -1,11 +1,13 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import type { Component } from "svelte";
 
     import {
         CircleSlash,
         CloudDownload,
         History,
         LoaderCircle,
+        Pin,
         RefreshCcw,
         RotateCw,
         Wrench,
@@ -48,6 +50,12 @@
     let latestGroupId: number | null = $state(null);
     let activeOutcome: string | null = $state(null);
     let lastRefreshed: number | null = $state(null);
+    let pinManagerOpen = $state(false);
+    let PinManagerComponent: Component<{
+        profile: string;
+        onClose: () => void;
+        onChanged: () => void;
+    }> | null = $state(null);
 
     let currentAbort: AbortController | null = null;
     let statusWs: WebSocket | null = null;
@@ -88,6 +96,10 @@
 
     function historyPath() {
         return `/api/history/${encodeURIComponent(profile)}`;
+    }
+
+    function pinPath(key: string) {
+        return `/api/pins/${encodeURIComponent(profile)}/${encodeURIComponent(key)}`;
     }
 
     function historyParams(includeStats = true) {
@@ -285,6 +297,48 @@
         }
     }
 
+    async function openPinManager() {
+        if (!PinManagerComponent) {
+            PinManagerComponent = (
+                await import("$lib/components/pins/pin-manager.svelte")
+            ).default;
+        }
+        pinManagerOpen = true;
+    }
+
+    function isOperation(
+        target: HistoryGroup | HistoryOperation,
+    ): target is HistoryOperation {
+        return "resource_kind" in target;
+    }
+
+    function targetKey(target: HistoryGroup | HistoryOperation): string | null {
+        if (isOperation(target)) return target.target_ref?.key ?? null;
+        return target.target_parent_ref?.key ?? null;
+    }
+
+    function targetPinned(target: HistoryGroup | HistoryOperation): boolean {
+        if (isOperation(target)) return !!target.pinned;
+        return !!target.operations?.some((operation) => operation.pinned);
+    }
+
+    async function togglePin(target: HistoryGroup | HistoryOperation) {
+        const key = targetKey(target);
+        if (!key) return;
+        const pinned = targetPinned(target);
+        acting = true;
+        try {
+            const response = await apiFetch(
+                pinPath(key),
+                { method: pinned ? "DELETE" : "PUT" },
+                { successMessage: pinned ? "Unpinned target" : "Pinned target" },
+            );
+            if (response.ok) await loadHistory("replace");
+        } finally {
+            acting = false;
+        }
+    }
+
     function openStatusWs() {
         if (destroyed) return;
         statusWs?.close();
@@ -351,6 +405,7 @@
         if (!mounted || profile === activeProfile) return;
         activeProfile = profile;
         activeOutcome = null;
+        pinManagerOpen = false;
         groups = [];
         nextBeforeId = null;
         latestGroupId = null;
@@ -396,6 +451,11 @@
                     class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 font-medium text-sky-200 shadow-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:px-3 sm:py-1.5"
                     disabled={isProfileRunning || acting}
                     ><CloudDownload class="inline h-4 w-4 text-[14px]" /> Poll Scan</button>
+                <button
+                    onclick={() => void openPinManager()}
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border border-slate-700/70 bg-slate-900/60 px-2 py-1 font-medium text-slate-300 shadow-sm transition-colors hover:bg-slate-800 hover:text-slate-100 focus:ring-2 focus:ring-slate-500/40 focus:outline-none sm:px-3 sm:py-1.5"
+                    ><Pin class="inline h-4 w-4 text-[14px]" /> Pins</button>
                 <button
                     onclick={() => loadHistory("replace")}
                     type="button"
@@ -514,7 +574,8 @@
                     onRetry={retryGroup}
                     onDeleteGroup={deleteGroup}
                     onUndoOperation={undoOperation}
-                    onDeleteOperation={deleteOperation} />
+                    onDeleteOperation={deleteOperation}
+                    onTogglePin={togglePin} />
             {/each}
         {/if}
 
@@ -532,6 +593,14 @@
         {/if}
     </section>
 </div>
+
+{#if pinManagerOpen && PinManagerComponent}
+    {@const PinManager = PinManagerComponent}
+    <PinManager
+        {profile}
+        onClose={() => (pinManagerOpen = false)}
+        onChanged={() => void loadHistory("replace")} />
+{/if}
 
 <style>
     .sync-progress-indeterminate {

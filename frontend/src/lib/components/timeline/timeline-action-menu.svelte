@@ -1,5 +1,12 @@
 <script lang="ts">
-    import { MoreHorizontal, RotateCcw, Trash2, Undo2 } from "@lucide/svelte";
+    import {
+        MoreHorizontal,
+        Pin,
+        PinOff,
+        RotateCcw,
+        Trash2,
+        Undo2,
+    } from "@lucide/svelte";
     import { Popover } from "bits-ui";
 
     import type { HistoryGroup, HistoryOperation } from "$lib/types/api";
@@ -12,6 +19,7 @@
         onDeleteGroup?: (group: HistoryGroup) => void;
         onUndoOperation?: (operation: HistoryOperation) => void;
         onDeleteOperation?: (operation: HistoryOperation) => void;
+        onTogglePin?: (target: HistoryGroup | HistoryOperation) => void;
     }
 
     let {
@@ -22,6 +30,7 @@
         onDeleteGroup,
         onUndoOperation,
         onDeleteOperation,
+        onTogglePin,
     }: Props = $props();
 
     let open = $state(false);
@@ -32,8 +41,17 @@
             operation.resource_kind === "record" &&
             (!!operation.before_state || !!operation.after_state),
     );
+    const targetRef = $derived(
+        operation?.target_ref ?? group.target_parent_ref ?? null,
+    );
+    const canPin = $derived(!!targetRef?.key && !!onTogglePin);
+    const isPinned = $derived(
+        operation?.pinned ?? group.operations?.some((item) => item.pinned) ?? false,
+    );
     const hasActions = $derived(
-        operation ? canUndo || !!onDeleteOperation : canRetry || !!onDeleteGroup,
+        operation
+            ? canPin || canUndo || !!onDeleteOperation
+            : canPin || canRetry || !!onDeleteGroup,
     );
 
     function run(action: () => void) {
@@ -57,6 +75,20 @@
             align="end"
             sideOffset={6}>
             <div class="space-y-1">
+                {#if canPin && onTogglePin}
+                    <button
+                        type="button"
+                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sky-200 hover:bg-sky-600/20"
+                        onclick={() => run(() => onTogglePin?.(operation ?? group))}>
+                        {#if isPinned}
+                            <PinOff class="h-3.5 w-3.5" />
+                            <span>Unpin target</span>
+                        {:else}
+                            <Pin class="h-3.5 w-3.5" />
+                            <span>Pin target</span>
+                        {/if}
+                    </button>
+                {/if}
                 {#if operation}
                     {#if canUndo && onUndoOperation}
                         <button

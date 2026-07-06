@@ -520,7 +520,6 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
         target_record=target,
         target_ref=Ref.anchor("target"),
         target_kind=_KIND,
-        pinned_fields=(RecordField.REPEAT_COUNT,),
         label=_label(),
         mappings=_diagnostic_mappings(
             AnibridgeMapping.parse("1-2", "1-2"),
@@ -537,10 +536,6 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
         current=2, total=10, unit="unit"
     )
     assert planned.plan.write.clear == frozenset({RecordField.NOTES})
-    assert RecordField.REPEAT_COUNT not in planned.plan.write.clear
-    assert any(
-        block.reason == "pinned" for block in planned.plan.diagnostics.blocked_fields
-    )
     assert planned.plan.diagnostics.as_info()["mapping_ranges"] == (
         f"tmdb_show:1:s1@1-2 {ARROW} anilist:2@1-2, "
         f"tmdb_show:1:s1@3-4 {ARROW} anilist:2@10-11"
@@ -554,7 +549,6 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
             target_record=target,
             target_ref=Ref.anchor("target"),
             target_kind=_KIND,
-            pinned_fields=(),
             label=_label(),
         )
         == SyncOutcome.SKIPPED
@@ -583,7 +577,6 @@ def test_prepare_upsert_applies_rules_and_status_support() -> None:
         target_record=Record(ref=Ref.anchor("target"), surface=_KIND, values={}),
         target_ref=Ref.anchor("target"),
         target_kind=_KIND,
-        pinned_fields=(),
         label=_label(),
     )
 
@@ -615,7 +608,6 @@ def test_prepare_upsert_applies_rules_and_status_support() -> None:
         target_record=Record(ref=Ref.anchor("target"), surface=_KIND, values={}),
         target_ref=Ref.anchor("target"),
         target_kind=_KIND,
-        pinned_fields=(),
         label=_label(),
     )
     assert blocked == SyncOutcome.SKIPPED
@@ -811,7 +803,6 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
             target_record=target,
             target_ref=Ref.anchor("target"),
             target_kind=_KIND,
-            pinned_fields=(),
             label=_label(),
         )
         == SyncOutcome.SKIPPED
@@ -831,7 +822,6 @@ def test_integer_target_progress_floors_fractional_mapping_before_diff() -> None
         target_record=target,
         target_ref=Ref.anchor("target"),
         target_kind=_KIND,
-        pinned_fields=(),
         label=_label(),
         mappings=_diagnostic_mappings(*mappings),
     )

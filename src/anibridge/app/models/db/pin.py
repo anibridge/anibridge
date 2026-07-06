@@ -1,4 +1,4 @@
-"""Pin model for per-profile normalized record-field pinning."""
+"""Pin model for per-profile target parent pinning."""
 
 from datetime import UTC, datetime
 
@@ -12,7 +12,7 @@ __all__ = ["Pin"]
 
 
 class Pin(Base):
-    """Model representing pinned normalized record fields for a target ref."""
+    """Model representing a pinned target parent entry."""
 
     __tablename__ = "pin"
 
@@ -20,9 +20,7 @@ class Pin(Base):
     profile_name: Mapped[str] = mapped_column(String, index=True)
 
     target_namespace: Mapped[str] = mapped_column(String, index=True)
-    target_ref: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
-
-    fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    target_parent_ref: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -37,8 +35,8 @@ class Pin(Base):
         UniqueConstraint(
             "profile_name",
             "target_namespace",
-            "target_ref",
-            name="uq_pin_profile_target_ref",
+            "target_parent_ref",
+            name="uq_pin_profile_target_parent_ref",
         ),
         Index("ix_pin_profile_updated_at", "profile_name", "updated_at"),
     )

@@ -9,7 +9,6 @@ from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.web.routes.api import pins as pins_api_module
 from anibridge.app.web.services.pin_service import (
     PinEntry,
-    PinFieldOption,
     PinSearchResult,
 )
 
@@ -17,18 +16,14 @@ from anibridge.app.web.services.pin_service import (
 class _FakePinService:
     def __init__(self) -> None:
         self.deleted: list[tuple[str, str]] = []
-        self.upsert_calls: list[tuple[str, str, list[str], bool]] = []
-
-    def list_options(self) -> list[PinFieldOption]:
-        return [PinFieldOption(value="status", label="Status")]
+        self.upsert_calls: list[tuple[str, str, bool]] = []
 
     async def list_pins(self, profile: str, *, with_media: bool) -> list[PinEntry]:
         return [
             PinEntry(
                 profile_name=profile,
                 target_namespace="anilist",
-                target_ref=RefPayload("123"),
-                fields=["status"],
+                target_parent_ref=RefPayload("123"),
                 created_at=datetime(2026, 1, 1, tzinfo=UTC),
                 updated_at=datetime(2026, 1, 2, tzinfo=UTC),
             )
@@ -42,23 +37,21 @@ class _FakePinService:
         return PinEntry(
             profile_name=profile,
             target_namespace="anilist",
-            target_ref=RefPayload(media_key),
-            fields=["status"],
+            target_parent_ref=RefPayload(media_key),
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
 
     async def upsert_pin(
-        self, profile: str, media_key: str, fields: list[str], *, with_media: bool
+        self, profile: str, media_key: str, *, with_media: bool
     ) -> PinEntry:
-        self.upsert_calls.append((profile, media_key, fields, with_media))
+        self.upsert_calls.append((profile, media_key, with_media))
         if media_key == "bad":
-            raise ValueError("Unsupported field")
+            raise ValueError("Invalid pin")
         return PinEntry(
             profile_name=profile,
             target_namespace="anilist",
-            target_ref=RefPayload(media_key),
-            fields=fields,
+            target_parent_ref=RefPayload(media_key),
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
@@ -97,17 +90,10 @@ def pins_client(api_client_for):
     return api_client_for(pins_api_module, "/api/pins")
 
 
-def test_get_pin_fields_returns_service_options(pins_client, fake_pin_service):
-    response = pins_client.get("/api/pins/fields")
-
-    assert response.status_code == 200
-    assert response.json() == {"options": [{"value": "status", "label": "Status"}]}
-
-
 def test_list_pin_route_returns_service_items(pins_client, fake_pin_service) -> None:
     listed = pins_client.get("/api/pins/default", params={"with_media": "true"})
     assert listed.status_code == 200
-    assert listed.json()["pins"][0]["target_ref"]["key"] == "123"
+    assert listed.json()["pins"][0]["target_parent_ref"]["key"] == "123"
 
 
 def test_search_pin_route_returns_target_results(pins_client, fake_pin_service) -> None:
@@ -150,32 +136,26 @@ def test_get_pin_route_handles_found_and_missing_entries(
 
     assert fetched.status_code == expected_status
     if expected_status == 200:
-        assert fetched.json()["target_ref"]["key"] == media_key
+        assert fetched.json()["target_parent_ref"]["key"] == media_key
     else:
         assert fetched.json()["detail"] == "Pin not found"
 
 
-def test_upsert_pin_route_normalizes_payload_and_handles_errors(
+def test_upsert_pin_route_creates_parent_pin_and_handles_errors(
     pins_client,
     fake_pin_service,
 ) -> None:
     response = pins_client.put(
         "/api/pins/default/123",
         params={"with_media": "true"},
-        json={"fields": [" progress ", "status", "STATUS"]},
     )
 
     assert response.status_code == 200
-    assert fake_pin_service.upsert_calls[-1] == (
-        "default",
-        "123",
-        ["progress", "status"],
-        True,
-    )
+    assert fake_pin_service.upsert_calls[-1] == ("default", "123", True)
 
-    invalid = pins_client.put("/api/pins/default/bad", json={"fields": ["status"]})
+    invalid = pins_client.put("/api/pins/default/bad")
     assert invalid.status_code == 400
-    assert invalid.json()["detail"] == "Unsupported field"
+    assert invalid.json()["detail"] == "Invalid pin"
 
 
 def test_delete_pin_route_returns_ok(pins_client, fake_pin_service) -> None:

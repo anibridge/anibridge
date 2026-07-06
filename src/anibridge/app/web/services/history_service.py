@@ -89,7 +89,7 @@ class HistoryOperation(msgspec.Struct):
     info: dict[str, str] | None = None
     error_message: str | None = None
     ephemeral: bool = False
-    pinned_fields: list[str] | None = None
+    pinned: bool = False
 
 
 class HistoryGroup(msgspec.Struct):
@@ -226,7 +226,7 @@ class HistoryService:
             else {}
         )
 
-        exact_pin_index, anchor_pin_index = self._pin_indexes(profile, rows)
+        pin_index = self._pin_index(profile, rows)
 
         groups: list[HistoryGroup] = []
         for row in rows:
@@ -261,14 +261,11 @@ class HistoryService:
                         info=operation.info,
                         error_message=operation.error_message,
                         ephemeral=operation.ephemeral,
-                        pinned_fields=self._pinned_fields(
+                        pinned=self._is_pinned(
                             namespace=operation.target_namespace,
                             ref=target_ref_value,
-                            exact_pin_index=exact_pin_index,
-                            anchor_pin_index=anchor_pin_index,
-                        )
-                        if operation.resource_kind == SyncResourceKind.RECORD
-                        else None,
+                            pin_index=pin_index,
+                        ),
                     )
                 )
 
@@ -308,50 +305,38 @@ class HistoryService:
             )
         return groups
 
-    def _pin_indexes(
+    def _pin_index(
         self,
         profile: str,
         rows: Sequence[SyncHistoryGroup],
-    ) -> tuple[dict[tuple[str, RefKey], list[str]], dict[tuple[str, str], list[str]]]:
+    ) -> frozenset[tuple[str, RefKey]]:
         has_target_refs = any(
-            operation.target_ref
-            for row in rows
-            for operation in row.operations
-            if operation.resource_kind == SyncResourceKind.RECORD
+            operation.target_ref for row in rows for operation in row.operations
         )
         if not has_target_refs:
-            return {}, {}
+            return frozenset()
 
         with db() as ctx:
             pin_rows = ctx.session.query(Pin).filter(Pin.profile_name == profile).all()
 
-        exact_pin_index: dict[tuple[str, RefKey], list[str]] = {}
-        anchor_pin_index: dict[tuple[str, str], list[str]] = {}
+        pin_index: set[tuple[str, RefKey]] = set()
         for pin in pin_rows:
-            pin_ref = ref_from_payload(pin.target_ref)
+            pin_ref = ref_from_payload(pin.target_parent_ref)
             if pin_ref is None:
                 continue
-            pin_ref_key = ref_to_key(pin_ref)
-            pin_fields = list(pin.fields or [])
-            exact_pin_index[(pin.target_namespace, pin_ref_key)] = pin_fields
-            if pin_ref_key.is_anchor:
-                anchor_pin_index[(pin.target_namespace, pin_ref_key.key)] = pin_fields
-        return exact_pin_index, anchor_pin_index
+            pin_index.add((pin.target_namespace, RefKey(key=pin_ref.key)))
+        return frozenset(pin_index)
 
     @staticmethod
-    def _pinned_fields(
+    def _is_pinned(
         *,
         namespace: str | None,
         ref: Ref | None,
-        exact_pin_index: dict[tuple[str, RefKey], list[str]],
-        anchor_pin_index: dict[tuple[str, str], list[str]],
-    ) -> list[str] | None:
+        pin_index: frozenset[tuple[str, RefKey]],
+    ) -> bool:
         if namespace is None or ref is None:
-            return None
-        ref_key = ref_to_key(ref)
-        return exact_pin_index.get((namespace, ref_key)) or anchor_pin_index.get(
-            (namespace, ref_key.key)
-        )
+            return False
+        return (namespace, RefKey(key=ref.key)) in pin_index
 
     async def _fetch_profile_stats(
         self,

@@ -319,7 +319,7 @@ export interface HistoryOperation {
     info?: Record<string, string> | null;
     error_message?: string | null;
     ephemeral?: boolean;
-    pinned_fields?: string[] | null;
+    pinned?: boolean;
 }
 
 export interface HistoryGroup {
@@ -357,16 +357,10 @@ export interface GetHistoryResponse {
     resource_stats?: Record<string, number> | null;
 }
 
-export interface PinFieldOption {
-    value: string;
-    label: string;
-}
-
 export interface PinResponse {
     profile_name: string;
     target_namespace: string;
-    target_ref: RefPayload;
-    fields: string[];
+    target_parent_ref: RefPayload;
     created_at: string;
     updated_at: string;
     media?: ProviderMediaMetadata | null;
@@ -374,10 +368,6 @@ export interface PinResponse {
 
 export interface PinListResponse {
     pins: PinResponse[];
-}
-
-export interface PinOptionsResponse {
-    options: PinFieldOption[];
 }
 
 export interface PinSearchResult {

@@ -51,7 +51,7 @@ export function targetIdentifier(item: HistoryTargetRef): ProviderIdentifier | n
 
 export function pinIdentifier(pin: PinResponse): ProviderIdentifier | null {
     const namespace = pin.target_namespace ?? pin.media?.namespace ?? null;
-    const key = refKey(pin.target_ref) ?? pin.media?.key ?? null;
+    const key = refKey(pin.target_parent_ref) ?? pin.media?.key ?? null;
     if (!namespace || !key) return null;
     return { namespace, key };
 }

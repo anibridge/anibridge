@@ -1,7 +1,5 @@
 """Alembic environment script for managing database migrations."""
 
-import pathlib
-import sys
 from logging.config import fileConfig
 
 from sqlalchemy.engine import create_engine
@@ -18,7 +16,9 @@ if config.config_file_name is not None:
 
 target_metadata = anibridge.app.models.db.Base.metadata
 
-db_url = f"sqlite:///{get_config().data_path / 'anibridge.db'}"
+db_url = config.get_main_option("sqlalchemy.url") or (
+    f"sqlite:///{get_config().data_path / 'anibridge.db'}"
+)
 config.set_main_option("sqlalchemy.url", db_url)
 
 

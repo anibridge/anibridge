@@ -376,6 +376,9 @@ def lint() -> None:
                     cwd=package_dir,
                     check=True,
                 )
+                subprocess.run(
+                    [_python_tool("ty"), "check", "."], cwd=package_dir, check=True
+                )
                 print_success(f"{package_dir.name} linting passed!")
 
         if target in ("both", "frontend"):

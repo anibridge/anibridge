@@ -43,7 +43,9 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
     ) -> None:
         """Initialize the BasicAuthMiddleware."""
         super().__init__(
-            app=app, exclude=list(self.EXEMPT_PATHS), scopes={ScopeType.HTTP}
+            app=app,
+            exclude=list(self.EXEMPT_PATHS),
+            scopes={ScopeType.HTTP, ScopeType.WEBSOCKET},
         )
         self.username = username
         self.password = password

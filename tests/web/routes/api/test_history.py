@@ -66,7 +66,6 @@ def test_history_page_route_delegates_filters_to_service(
         params={
             "limit": 10,
             "before_id": 5,
-            "after_id": 2,
             "include_stats": "false",
             "outcome": "synced",
             "source_namespace": "plex",
@@ -79,6 +78,21 @@ def test_history_page_route_delegates_filters_to_service(
     assert page.json()["groups"][0]["profile_name"] == "default"
     assert history_service.page_requests[0]["include_stats"] is False
     assert history_service.page_requests[0]["resource_kind"] == "record"
+
+
+def test_history_page_route_rejects_conflicting_cursors(history_client) -> None:
+    response = history_client.get(
+        "/api/history/default",
+        params={"before_id": 5, "after_id": 2},
+    )
+
+    assert response.status_code == 400
+
+
+def test_history_page_route_rejects_invalid_limit(history_client) -> None:
+    response = history_client.get("/api/history/default", params={"limit": 0})
+
+    assert response.status_code == 400
 
 
 @pytest.mark.parametrize(

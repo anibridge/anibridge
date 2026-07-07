@@ -657,8 +657,8 @@ class QueryCapabilitiesResponse(msgspec.Struct):
 
 @get(path="")
 async def list_mappings(
-    page: Annotated[int, QueryParameter()] = 1,
-    per_page: Annotated[int, QueryParameter()] = 25,
+    page: Annotated[int, QueryParameter(ge=1)] = 1,
+    per_page: Annotated[int, QueryParameter(ge=1, le=500)] = 25,
     q: Annotated[str | None, QueryParameter()] = None,
     custom_only: Annotated[bool, QueryParameter()] = False,
     with_anilist: Annotated[bool, QueryParameter()] = False,

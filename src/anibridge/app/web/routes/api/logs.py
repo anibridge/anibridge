@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 import msgspec
+from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import get
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
@@ -148,7 +149,12 @@ def _safe_resolve(name: str) -> Path:
     log_dir = _get_log_dir()
     target = (log_dir / name).resolve()
 
-    if not str(target).startswith(str(log_dir)):
+    try:
+        target.relative_to(log_dir)
+    except ValueError as exc:
+        raise InvalidLogFileNameError("Invalid log file name") from exc
+
+    if not _is_log_filename(target.name):
         raise InvalidLogFileNameError("Invalid log file name")
 
     if not target.exists() or not target.is_file():
@@ -159,9 +165,6 @@ def _safe_resolve(name: str) -> Path:
 
 def _tail_lines(path: Path, max_lines: int) -> list[str]:
     """Return up to the last max_lines of the file efficiently."""
-    if max_lines < 0:
-        return []
-
     if max_lines == 0:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             return [ln.rstrip("\n\r") for ln in fh]
@@ -196,9 +199,12 @@ def _tail_lines(path: Path, max_lines: int) -> list[str]:
 @get(path="/file/{name:str}", sync_to_thread=True)
 def get_log_file(
     name: Annotated[str, PathParameter()],
-    lines: Annotated[int, QueryParameter()] = 500,
+    lines: Annotated[int, QueryParameter(ge=0, le=5000)] = 500,
 ) -> list[LogEntryModel]:
     """Return the last N lines of a log file parsed into JSON entries."""
+    if lines < 0 or lines > 5000:
+        raise HTTPException(status_code=400, detail="lines must be between 0 and 5000")
+
     path = _safe_resolve(name)
     raw_lines = _tail_lines(path, lines)
     res: list[LogEntryModel] = []

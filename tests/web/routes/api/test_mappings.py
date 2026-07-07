@@ -241,3 +241,10 @@ def test_list_mappings_translates_service_errors(
     response = TestClient(_build_app()).get("/api/mappings")
 
     assert response.status_code == expected_status
+
+
+@pytest.mark.parametrize("params", [{"page": 0}, {"per_page": 0}, {"per_page": 251}])
+def test_list_mappings_rejects_invalid_pagination(params: dict[str, int]) -> None:
+    response = TestClient(_build_app()).get("/api/mappings", params=params)
+
+    assert response.status_code == 400

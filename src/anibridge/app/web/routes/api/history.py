@@ -3,6 +3,7 @@
 from typing import Annotated
 
 import msgspec
+from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import delete, get, post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
@@ -53,7 +54,7 @@ class UndoResponse(msgspec.Struct):
 @get(path="/{profile:str}")
 async def get_history(
     profile: Annotated[str, PathParameter()],
-    limit: Annotated[int, QueryParameter()] = 25,
+    limit: Annotated[int, QueryParameter(ge=1, le=250)] = 25,
     before_id: Annotated[int | None, QueryParameter()] = None,
     after_id: Annotated[int | None, QueryParameter()] = None,
     include_stats: Annotated[bool, QueryParameter()] = True,
@@ -63,6 +64,12 @@ async def get_history(
     resource_kind: Annotated[str | None, QueryParameter()] = None,
 ) -> GetHistoryResponse:
     """Get paginated timeline for profile."""
+    if before_id is not None and after_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="before_id and after_id are mutually exclusive",
+        )
+
     return await get_history_service().get_page(
         profile=profile,
         limit=limit,

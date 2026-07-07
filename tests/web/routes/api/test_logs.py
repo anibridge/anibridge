@@ -4,6 +4,9 @@ import logging
 from collections.abc import Callable
 from typing import cast
 
+import pytest
+
+from anibridge.app.exceptions import InvalidLogFileNameError
 from anibridge.app.web.routes.api import logs as logs_api
 
 
@@ -75,6 +78,26 @@ def test_get_log_file_returns_all_lines_when_unlimited(tmp_path, monkeypatch):
         "line-4",
         "line-5",
     ]
+
+
+def test_get_log_file_rejects_symlink_escape(tmp_path, monkeypatch):
+    """Log file resolution should reject symlinks escaping the log directory."""
+    get_log_file = cast(
+        Callable[[str, int], list[logs_api.LogEntryModel]],
+        logs_api.get_log_file.fn,
+    )
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    escaped_dir = tmp_path / "logs_evil"
+    escaped_dir.mkdir()
+    escaped_file = escaped_dir / "anibridge.DEBUG.log"
+    escaped_file.write_text("line\n", encoding="utf-8")
+    (log_dir / "anibridge.DEBUG.log").symlink_to(escaped_file)
+
+    monkeypatch.setattr(logs_api, "LOG_DIR", log_dir)
+
+    with pytest.raises(InvalidLogFileNameError):
+        get_log_file("anibridge.DEBUG.log", 1)
 
 
 def test_get_log_file_tail_without_trailing_newline(tmp_path, monkeypatch):

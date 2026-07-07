@@ -41,6 +41,7 @@ class _SchedulerStub:
         self.removed_profiles: list[str] = []
         self.reinitialized_profiles: list[str] = []
         self.database_sync_sources: list[str] = []
+        self.fail_reinitialize = False
         self.shared_animap_client = type(
             "Animap",
             (),
@@ -54,6 +55,8 @@ class _SchedulerStub:
         self.removed_profiles.append(profile_name)
 
     async def reinitialize_profile(self, profile_name: str) -> None:
+        if self.fail_reinitialize:
+            raise RuntimeError("reinitialize failed")
         self.reinitialized_profiles.append(profile_name)
 
     async def trigger_database_sync(self, source: str = "manual:database") -> None:
@@ -187,6 +190,47 @@ async def test_save_document_text_applies_live_profile_and_mapping_updates(
         scheduler.shared_animap_client.mappings_client.upstream_url
         == "https://example.com/mappings-b.json"
     )
+
+
+@pytest.mark.asyncio
+async def test_save_document_text_rolls_back_when_runtime_apply_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Failed live application should not persist or leave runtime half-mutated."""
+    config_path = tmp_path / "config.yaml"
+    service = ConfigurationService(config_path=config_path)
+
+    initial_text = _config_text(mappings_url="https://example.com/mappings-a.json")
+    updated_text = _config_text(
+        mappings_url="https://example.com/mappings-b.json",
+        profiles=(
+            "profiles:\n"
+            "  default:\n"
+            "    source_provider: mocklib\n"
+            "    target_provider: mocklist\n"
+            "    scan_interval: 120\n"
+        ),
+    )
+    runtime_config = _runtime_config(initial_text)
+    scheduler = _SchedulerStub()
+    scheduler.fail_reinitialize = True
+
+    monkeypatch.setattr(
+        configuration_service_module, "get_config", lambda: runtime_config
+    )
+    monkeypatch.setattr(
+        configuration_service_module,
+        "get_app_state",
+        lambda: type("State", (), {"scheduler": scheduler})(),
+    )
+
+    with pytest.raises(RuntimeError, match="reinitialize failed"):
+        await service.save_document_text(updated_text)
+
+    assert not config_path.exists()
+    assert runtime_config.mappings_url == "https://example.com/mappings-a.json"
+    assert runtime_config.profiles["default"].scan_interval != 120
+    assert scheduler.shared_animap_client.upstream_url is None
 
 
 @pytest.mark.asyncio

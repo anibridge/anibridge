@@ -47,6 +47,20 @@ def test_find_yaml_config_file_prefers_data_path(
     assert result == config_file.resolve()
 
 
+def test_environment_values_override_yaml_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AB_ environment values should take precedence over YAML config files."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("threads: 2\n", encoding="utf-8")
+    monkeypatch.setenv("AB_DATA_PATH", str(tmp_path))
+    monkeypatch.setenv("AB_THREADS", "8")
+
+    config = AnibridgeConfig()
+
+    assert config.threads == 8
+
+
 def test_profile_parent_requires_assignment() -> None:
     """Test that accessing parent on unassigned profile raises ProfileConfigError."""
     profile = AnibridgeProfileConfig(

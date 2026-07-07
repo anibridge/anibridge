@@ -128,6 +128,16 @@ class ConfigurationService:
         )
         return content if content.endswith("\n") else f"{content}\n"
 
+    def _persist_content(self, content: str, profile_count: int) -> None:
+        """Write validated configuration content to disk."""
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        self._config_path.write_text(content, encoding="utf-8")
+        log.info(
+            "Configuration updated with %s profile(s) at %s",
+            profile_count,
+            self._config_path,
+        )
+
     def load_document_text(self) -> ConfigDocumentPayload:
         """Return the raw YAML content alongside file metadata."""
         file_exists = self._config_path.exists()
@@ -177,44 +187,80 @@ class ConfigurationService:
             runtime_config.global_config
         ) != _normalize_value(next_config.global_config)
 
-        if global_defaults_changed:
-            runtime_config.global_config = next_config.global_config.model_copy(
-                deep=True
-            )
-
-        runtime_config.mappings_url = next_config.mappings_url
-        runtime_config.web.allow_config_without_auth = (
-            next_config.web.allow_config_without_auth
+        previous_global_config = runtime_config.global_config.model_copy(deep=True)
+        previous_mappings_url = runtime_config.mappings_url
+        previous_allow_config_without_auth = (
+            runtime_config.web.allow_config_without_auth
         )
-
-        for profile_name in removed_profiles:
-            runtime_config.profiles.pop(profile_name, None)
-
-        for profile_name in changed_profiles:
-            profile = next_config.get_profile(profile_name).model_copy(deep=True)
-            profile._parent = runtime_config
-            runtime_config.profiles[profile_name] = profile
-
-        if scheduler is None:
-            return requires_restart
-
-        for profile_name in removed_profiles:
-            await scheduler.remove_profile(profile_name)
-
-        for profile_name in changed_profiles:
-            await scheduler.reinitialize_profile(profile_name)
-
-        if mappings_url_changed:
-            scheduler.shared_animap_client.upstream_url = next_config.mappings_url
-            scheduler.shared_animap_client.mappings_client.upstream_url = (
-                next_config.mappings_url
+        previous_profiles = {
+            profile_name: profile.model_copy(deep=True)
+            for profile_name, profile in runtime_config.profiles.items()
+        }
+        previous_shared_url = None
+        previous_mappings_client_url = None
+        if scheduler is not None:
+            previous_shared_url = scheduler.shared_animap_client.upstream_url
+            previous_mappings_client_url = (
+                scheduler.shared_animap_client.mappings_client.upstream_url
             )
-            try:
-                await scheduler.trigger_database_sync(source="api:config:mappings_url")
-            except TimeoutError as exc:
-                raise SchedulerUnavailableError(
-                    "Timed out while refreshing mappings after config update"
-                ) from exc
+
+        try:
+            if global_defaults_changed:
+                runtime_config.global_config = next_config.global_config.model_copy(
+                    deep=True
+                )
+
+            runtime_config.mappings_url = next_config.mappings_url
+            runtime_config.web.allow_config_without_auth = (
+                next_config.web.allow_config_without_auth
+            )
+
+            for profile_name in removed_profiles:
+                runtime_config.profiles.pop(profile_name, None)
+
+            for profile_name in changed_profiles:
+                profile = next_config.get_profile(profile_name).model_copy(deep=True)
+                profile._parent = runtime_config
+                runtime_config.profiles[profile_name] = profile
+
+            if scheduler is None:
+                return requires_restart
+
+            for profile_name in removed_profiles:
+                await scheduler.remove_profile(profile_name)
+
+            for profile_name in changed_profiles:
+                await scheduler.reinitialize_profile(profile_name)
+
+            if mappings_url_changed:
+                scheduler.shared_animap_client.upstream_url = next_config.mappings_url
+                scheduler.shared_animap_client.mappings_client.upstream_url = (
+                    next_config.mappings_url
+                )
+                try:
+                    await scheduler.trigger_database_sync(
+                        source="api:config:mappings_url"
+                    )
+                except TimeoutError as exc:
+                    raise SchedulerUnavailableError(
+                        "Timed out while refreshing mappings after config update"
+                    ) from exc
+        except Exception:
+            runtime_config.global_config = previous_global_config
+            runtime_config.mappings_url = previous_mappings_url
+            runtime_config.web.allow_config_without_auth = (
+                previous_allow_config_without_auth
+            )
+            runtime_config.profiles.clear()
+            for profile_name, profile in previous_profiles.items():
+                profile._parent = runtime_config
+                runtime_config.profiles[profile_name] = profile
+            if scheduler is not None:
+                scheduler.shared_animap_client.upstream_url = previous_shared_url
+                scheduler.shared_animap_client.mappings_client.upstream_url = (
+                    previous_mappings_client_url
+                )
+            raise
 
         return requires_restart
 
@@ -233,16 +279,9 @@ class ConfigurationService:
             payload = self._parse_yaml(content)
             config = self._build_config_instance(payload)
 
-            self._config_path.parent.mkdir(parents=True, exist_ok=True)
             normalized_content = content if content.endswith("\n") else f"{content}\n"
-            self._config_path.write_text(normalized_content, encoding="utf-8")
-            log.info(
-                "Configuration updated with %s profile(s) at %s",
-                len(config.profiles),
-                self._config_path,
-            )
-
             requires_restart = await self._apply_runtime_config(config)
+            self._persist_content(normalized_content, len(config.profiles))
             return config, requires_restart, self._get_mtime_ms()
 
     async def save_settings_payload(
@@ -264,15 +303,8 @@ class ConfigurationService:
             config = self._build_config_instance(payload)
             rendered = self._render_settings_payload(payload)
 
-            self._config_path.parent.mkdir(parents=True, exist_ok=True)
-            self._config_path.write_text(rendered, encoding="utf-8")
-            log.info(
-                "Configuration updated with %s profile(s) at %s",
-                len(config.profiles),
-                self._config_path,
-            )
-
             requires_restart = await self._apply_runtime_config(config)
+            self._persist_content(rendered, len(config.profiles))
             return config, requires_restart, self._get_mtime_ms()
 
 

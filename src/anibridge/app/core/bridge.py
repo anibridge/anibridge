@@ -518,7 +518,7 @@ class BridgeClient:
         if not isinstance(self.source_provider, SupportsChangeFeed):
             log.warning(
                 "[%s] Poll sync requested, but source provider '%s' does not "
-                "support change feeds; falling back to an activity scan",
+                "support it. Falling back to a periodic scan",
                 self.profile_name,
                 self.source_provider.NAMESPACE,
             )
@@ -532,6 +532,9 @@ class BridgeClient:
             changes.extend(page.items)
             if page.cursor is None:
                 break
+            latest_cursor = page.cursor
+            if not page.items:
+                break
             if page.cursor == cursor:
                 log.warning(
                     "[%s] Source provider '%s' returned an unchanged change-feed "
@@ -539,9 +542,7 @@ class BridgeClient:
                     self.profile_name,
                     self.source_provider.NAMESPACE,
                 )
-                latest_cursor = page.cursor
                 break
-            latest_cursor = page.cursor
             cursor = page.cursor
 
         if latest_cursor:

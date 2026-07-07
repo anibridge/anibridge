@@ -473,6 +473,7 @@ def test_bridge_housekeeping_keys_and_change_refs(
 async def test_bridge_error_and_fallback_branches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     sqlite_db_factory,
 ) -> None:
     """Close, backup write, sync failure, and poll-empty branches should recover."""
@@ -493,6 +494,7 @@ async def test_bridge_error_and_fallback_branches(
     source.change_pages = [Page(items=(), cursor="same")]
     bridge._set_change_cursor("same")
     assert await bridge._poll_source_refs() == ()
+    assert "returned an unchanged change-feed cursor" not in caplog.text
 
     monkeypatch.setattr(bridge_module, "SyncClient", _FakeSyncClient)
     monkeypatch.setattr(bridge_module, "release_memory", lambda: None)

@@ -71,6 +71,18 @@ async def test_app_state_shutdown_callbacks_can_be_sync_or_async():
 
 
 @pytest.mark.asyncio
+async def test_app_state_shutdown_clears_scheduler() -> None:
+    """Shutdown should not leave a stale scheduler in process-global state."""
+    get_app_state.cache_clear()
+    state = get_app_state()
+    state.scheduler = cast(SchedulerClient, SimpleNamespace(bridge_clients={}))
+
+    await state.shutdown()
+
+    assert state.scheduler is None
+
+
+@pytest.mark.asyncio
 async def test_app_state_status_change_wait_and_timeout() -> None:
     """Status notifications should wake waiters and timeouts should be harmless."""
     state = get_app_state()

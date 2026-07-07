@@ -86,6 +86,8 @@ class AppState:
                 await self.public_anilist.close()
             self.public_anilist = None
 
+        self.scheduler = None
+
 
 @cache
 def get_app_state() -> AppState:

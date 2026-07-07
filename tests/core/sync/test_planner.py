@@ -46,6 +46,7 @@ from anibridge.provider.base import (
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
+from anibridge.app.config.sync_rules import SyncRulesConfig
 from anibridge.app.core.sync.planner import PreparedUpdate, RecordPlanner, SyncLabel
 from anibridge.app.core.sync.projection import MappingProjector
 from anibridge.app.core.sync.rules import SyncRuleEngine
@@ -173,14 +174,14 @@ def _planner(
     source: Capabilities | None = None,
     target: Capabilities | None = None,
     destructive: bool = False,
-    rules: SyncRuleEngine | None = None,
+    rules: SyncRulesConfig | None = None,
 ) -> RecordPlanner:
     return RecordPlanner(
         source_capabilities=source
         or _capabilities(role=Role.SOURCE, readable=True, writable=False),
         target_capabilities=target
         or _capabilities(role=Role.TARGET, readable=True, writable=True),
-        sync_rule_engine=rules or SyncRuleEngine(),
+        sync_rule_engine=SyncRuleEngine(rules),
         destructive_sync=destructive,
     )
 
@@ -309,7 +310,11 @@ def test_record_channel_matching_uses_field_capabilities_not_names() -> None:
             ),
         ),
     )
-    planner = _planner(source=source, target=target)
+    planner = _planner(
+        source=source,
+        target=target,
+        rules=SyncRulesConfig.model_validate([]),
+    )
 
     assert planner.source_record_kinds() == (source_kind,)
     assert planner.target_record_surface_for(source_kind) == target_kind
@@ -355,7 +360,11 @@ def test_sync_fields_only_use_selected_writable_target_surfaces() -> None:
             ),
         ),
     )
-    planner = _planner(source=source, target=target)
+    planner = _planner(
+        source=source,
+        target=target,
+        rules=SyncRulesConfig.model_validate([]),
+    )
 
     assert planner.target_record_surface_for(_KIND) == _KIND
     assert planner.sync_fields == (RecordField.PROGRESS,)
@@ -372,7 +381,10 @@ def test_sync_fields_require_readable_source_writable_target_and_status_overlap(
         statuses=(Status.DROPPED,),
     )
     planner = _planner(
-        target=target, rules=SyncRuleEngine(field_rules={"notes": False})
+        target=target,
+        rules=SyncRulesConfig.model_validate(
+            [{"selector": "record.notes", "skip": True}]
+        ),
     )
 
     assert RecordField.STATUS not in planner.sync_fields_for(_KIND, _KIND)
@@ -493,7 +505,7 @@ def test_project_source_record_maps_temporal_fields_from_units() -> None:
 
 
 def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
-    planner = _planner(destructive=True)
+    planner = _planner(destructive=True, rules=SyncRulesConfig.model_validate([]))
     target = Record(
         ref=Ref.anchor("target"),
         surface=_KIND,
@@ -557,11 +569,15 @@ def test_prepare_upsert_sets_clears_blocks_and_formats_diff() -> None:
 
 def test_prepare_upsert_applies_rules_and_status_support() -> None:
     planner = _planner(
-        rules=SyncRuleEngine(
-            field_rules={
-                "status": [{"name": "complete", "set": "Status.COMPLETED"}],
-                "notes": False,
-            }
+        rules=SyncRulesConfig.model_validate(
+            [
+                {"selector": "record.notes", "skip": True},
+                {
+                    "name": "complete",
+                    "selector": "record.status",
+                    "value": "Status.COMPLETED",
+                },
+            ]
         )
     )
     planned = planner.prepare_upsert(

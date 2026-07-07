@@ -22,12 +22,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from anibridge.app.config.sync_rules import (
-    BaseStrEnum,
-    SyncRuleDefinition,
-    SyncRulesConfig,
-    SyncRuleTemplateId,
-)
+from anibridge.app.config.sync_rules import BaseStrEnum, SyncRulesConfig
 from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
 from anibridge.app.logging import get_logger
 from anibridge.app.utils.cron import CronStr
@@ -37,8 +32,6 @@ __all__ = [
     "AnibridgeProfileConfig",
     "LogLevel",
     "ScanMode",
-    "SyncRuleDefinition",
-    "SyncRuleTemplateId",
     "SyncRulesConfig",
     "get_config",
 ]
@@ -187,11 +180,7 @@ class AnibridgeProfileConfig(BaseModel):
     )
     sync_rules: SyncRulesConfig = Field(
         default_factory=SyncRulesConfig,
-        description=(
-            "Declarative rule-based sync overrides. Each field can be disabled "
-            "or configured with an ordered list of conditions that decide how "
-            "the computed value should be transformed or whether it should sync."
-        ),
+        description="Ordered sync rule templates and field or event override rules.",
     )
     backup_retention_days: int = Field(
         default=30,

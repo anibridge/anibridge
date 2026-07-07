@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-import yaml
-from anibridge.provider.base import Progress, Rating, RecordField, Status
 from pydantic import SecretStr
 
 from anibridge.app.config import settings as settings_module
@@ -15,11 +13,15 @@ from anibridge.app.config.settings import (
     BasicAuthConfig,
     ScanMode,
     SyncRulesConfig,
-    SyncRuleTemplateId,
     WebConfig,
     find_yaml_config_file,
 )
-from anibridge.app.core.sync.rules import SyncRuleEngine
+from anibridge.app.config.sync_rules import (
+    SyncRuleDefinition,
+    SyncRuleSelector,
+    SyncRuleTemplateId,
+    SyncRuleTemplateItem,
+)
 from anibridge.app.exceptions import (
     ProfileConfigError,
     ProfileNotFoundError,
@@ -55,7 +57,6 @@ def test_profile_parent_requires_assignment() -> None:
                 "url": "http://plex:32400",
             },
         },
-        target_provider_config={"anilist": {"token": SecretStr("anilist-token")}},
     )
 
     with pytest.raises(ProfileConfigError):
@@ -183,281 +184,111 @@ def test_get_profile_raises_for_unknown_name(
         config.get_profile("missing")
 
 
-def test_sync_rules_accept_declarative_field_rules() -> None:
-    """Declarative sync rules should validate and preserve runtime expressions."""
+def test_sync_rules_accepts_template_and_rule_items() -> None:
+    """Sync rules should validate ordered template and rule items."""
     rules = SyncRulesConfig.model_validate(
-        {
-            "vars": {
-                "has_notes": ("computed.notes is not None and len(computed.notes) > 0"),
-                "is_special_item": 'ctx.node.title == "Movie"',
+        [
+            {"template": "prevent_regression"},
+            {"template": "promote_rewatch"},
+            {
+                "name": "Promote rewatch",
+                "selector": "record.status",
+                "if": (
+                    "dst.status in (Status.COMPLETED, Status.REPEATING) "
+                    "and src.status == Status.ACTIVE"
+                ),
+                "value": "Status.REPEATING",
             },
-            "status": [
-                {
-                    "name": "Promote rewatch",
-                    "if": (
-                        "current.status == Status.COMPLETED and "
-                        "computed.status == Status.ACTIVE"
-                    ),
-                    "set": "Status.REPEATING",
-                }
-            ],
-            "notes": [
-                {
-                    "name": "Clear empty notes",
-                    "if": "not vars.has_notes",
-                    "set": None,
-                }
-            ],
-        }
+        ]
     )
 
-    field_rules = rules.field_rules()
-    status_rules = cast(list[dict[str, object]], field_rules["status"])
-    notes_rules = cast(list[dict[str, object]], field_rules["notes"])
+    first = rules.root[0]
+    second = rules.root[1]
+    third = rules.root[2]
 
-    assert status_rules[0]["if"] == (
-        "current.status == Status.COMPLETED and computed.status == Status.ACTIVE"
-    )
-    assert status_rules[0]["set"] == "Status.REPEATING"
-    assert "set" in notes_rules[0]
-    assert notes_rules[0]["set"] is None
+    assert isinstance(first, SyncRuleTemplateItem)
+    assert isinstance(second, SyncRuleTemplateItem)
+    assert isinstance(third, SyncRuleDefinition)
+    assert first.template == SyncRuleTemplateId.PREVENT_REGRESSION
+    assert second.template == SyncRuleTemplateId.PROMOTE_REWATCH
+    assert third.if_expr.startswith("dst.status")
+    assert third.value == "Status.REPEATING"
 
 
-def test_sync_rules_user_rules_precede_template_rules() -> None:
-    """User field rules should run before built-in template fallback rules."""
+def test_sync_rules_accepts_if_alias_and_single_action_rules() -> None:
+    """Rules should allow conditions and one action."""
     rules = SyncRulesConfig.model_validate(
-        {
-            "templates": [SyncRuleTemplateId.PROMOTE_REWATCH],
-            "status": [
-                {
-                    "name": "User rule",
-                    "if": "computed.status == current.status",
-                    "set": "current.status",
-                }
-            ],
-        }
+        [
+            {
+                "name": "Promote rewatch",
+                "selector": "record.status",
+                "if": "dst.status == Status.COMPLETED",
+                "value": "Status.REPEATING",
+            },
+            {
+                "selector": "event.delete",
+                "skip": True,
+            },
+            {
+                "selector": "node.*",
+                "if": "node.kind == 'movie'",
+                "skip": True,
+            },
+        ]
     )
 
-    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
+    first_rule = rules.root[0]
+    second_rule = rules.root[1]
+    third_rule = rules.root[2]
 
-    assert status_rules[0]["name"] == "User rule"
-    assert status_rules[1]["name"] == "Promote rewatch to repeating"
-
-
-def test_sync_rules_disable_dropped_and_paused_template_adds_status_guard() -> None:
-    """Dropped/paused template should add the expected status guard rule."""
-    rules = SyncRulesConfig.model_validate(
-        {
-            "templates": [SyncRuleTemplateId.DISABLE_DROPPED_AND_PAUSED],
-        }
-    )
-
-    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
-
-    assert status_rules[0]["name"] == "Don't sync dropped or paused status changes"
-    assert status_rules[0]["if"] == (
-        "computed.status in (Status.DROPPED, Status.PAUSED)"
-    )
-    assert status_rules[0]["set"] == "current.status"
-
-    decision = SyncRuleEngine(field_rules=rules.field_rules()).evaluate_field(
-        field=RecordField.STATUS,
-        current_values={},
-        computed_values={RecordField.STATUS: Status.DROPPED},
-    )
-
-    assert decision.value is None
+    assert isinstance(first_rule, SyncRuleDefinition)
+    assert isinstance(second_rule, SyncRuleDefinition)
+    assert isinstance(third_rule, SyncRuleDefinition)
+    assert first_rule.if_expr == "dst.status == Status.COMPLETED"
+    assert first_rule.value == "Status.REPEATING"
+    assert second_rule.selector == SyncRuleSelector.EVENT_DELETE
+    assert second_rule.skip is True
+    assert third_rule.selector == SyncRuleSelector.NODE_ANY
 
 
-def test_sync_rules_promote_rewatch_template_adds_status_promotion_rule() -> None:
-    """Promote rewatch template should add the status promotion rule."""
-    rules = SyncRulesConfig.model_validate(
-        {
-            "templates": [SyncRuleTemplateId.PROMOTE_REWATCH],
-        }
-    )
-
-    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
-
-    assert status_rules[0]["name"] == "Promote rewatch to repeating"
-    assert status_rules[0]["if"] == (
-        "current.status in (Status.COMPLETED, Status.REPEATING) and "
-        "computed.status == Status.ACTIVE"
-    )
-    assert status_rules[0]["set"] == "Status.REPEATING"
-
-
-def test_sync_rules_disable_notes_and_rating_template_overrides_defaults() -> None:
-    """The disable template should force notes and rating off."""
-    rules = SyncRulesConfig.model_validate(
-        {"templates": [SyncRuleTemplateId.DISABLE_RATING_AND_NOTES]}
-    )
-
-    assert rules.field_rules()["notes"] is False
-    assert rules.field_rules()["rating"] is False
-    assert rules.templates == [SyncRuleTemplateId.DISABLE_RATING_AND_NOTES]
-
-
-def test_sync_rules_default_templates_disable_notes_and_gate_ratings() -> None:
-    """Defaults should disable notes and ratings without user overrides."""
+def test_sync_rules_defaults_to_prevent_regression() -> None:
+    """Defaults should prevent record field regression."""
     rules = SyncRulesConfig()
 
-    field_rules = rules.field_rules()
-
-    assert rules.templates[:2] == [
-        SyncRuleTemplateId.RATING_REQUIRES_COMPLETED,
-        SyncRuleTemplateId.DISABLE_RATING_AND_NOTES,
+    assert rules.root == [
+        SyncRuleTemplateItem(template=SyncRuleTemplateId.PREVENT_REGRESSION)
     ]
-    assert field_rules["notes"] is False
-    assert field_rules["rating"] is False
 
 
-def test_sync_rules_prevent_regressions_template_adds_guard_rules() -> None:
-    """The regression template should add keep-current rules for decreasing fields."""
-    rules = SyncRulesConfig.model_validate(
-        {
-            "templates": [SyncRuleTemplateId.PREVENT_REGRESSIONS],
-        }
-    )
-    progress_rules = cast(list[dict[str, object]], rules.field_rules()["progress"])
-    status_rules = cast(list[dict[str, object]], rules.field_rules()["status"])
-
-    assert progress_rules[0]["if"] == (
-        "current.progress is not None and "
-        "current.progress.current is not None and "
-        "(computed.progress is None or computed.progress.current is None or "
-        "computed.progress.current < current.progress.current)"
-    )
-    assert progress_rules[0]["set"] == "current.progress"
-    assert status_rules[0]["if"] == (
-        "current.status is not None and "
-        "status_rank(computed.status) < status_rank(current.status)"
-    )
-
-
-def test_sync_rules_prevent_regressions_ignores_unknown_current_progress() -> None:
-    """Progress regression guard should not compare against unknown progress."""
-    rules = SyncRulesConfig.model_validate(
-        {"templates": [SyncRuleTemplateId.PREVENT_REGRESSIONS]}
-    )
-
-    decision = SyncRuleEngine(field_rules=rules.field_rules()).evaluate_field(
-        field=RecordField.PROGRESS,
-        current_values={RecordField.PROGRESS: Progress(current=None, total=12)},
-        computed_values={RecordField.PROGRESS: Progress(current=1, total=12)},
-    )
-
-    assert decision.value == Progress(current=1, total=12)
-    assert decision.reason == "default"
-
-
-def test_sync_rules_rating_gate_considers_current_completed_status() -> None:
-    """Rating gate should allow ratings when current status will be preserved."""
-    rules = SyncRulesConfig.model_validate(
-        {"templates": [SyncRuleTemplateId.RATING_REQUIRES_COMPLETED]}
-    )
-    rating = Rating(8, (0, 10, 1))
-
-    decision = SyncRuleEngine(field_rules=rules.field_rules()).evaluate_field(
-        field=RecordField.RATING,
-        current_values={
-            RecordField.STATUS: Status.COMPLETED,
-            RecordField.RATING: Rating(7, (0, 10, 1)),
-        },
-        computed_values={
-            RecordField.STATUS: Status.ACTIVE,
-            RecordField.RATING: rating,
-        },
-    )
-
-    assert decision.value == rating
-    assert decision.reason == "default"
-
-
-def test_sync_rules_explicit_false_overrides_template_field_rules() -> None:
-    """Explicit field disables should still beat template-provided rule lists."""
-    rules = SyncRulesConfig.model_validate(
-        {
-            "templates": [SyncRuleTemplateId.PREVENT_REGRESSIONS],
-            "progress": False,
-        }
-    )
-
-    assert rules.field_rules()["progress"] is False
-
-
-def test_sync_rules_reject_unknown_template_ids() -> None:
+def test_sync_rules_rejects_unknown_template_ids() -> None:
     """Unknown built-in template IDs should fail validation."""
     with pytest.raises(ValueError):
-        SyncRulesConfig.model_validate({"templates": ["missing-template"]})
+        SyncRulesConfig.model_validate([{"template": "missing-template"}])
 
 
-def test_sync_rules_reject_reserved_ctx_variable_name() -> None:
-    """sync_rules.vars cannot redefine the ctx namespace."""
+def test_sync_rules_rejects_unknown_selectors() -> None:
+    """Unknown rule selectors should fail validation."""
     with pytest.raises(ValueError):
-        SyncRulesConfig(vars={"ctx": "True"})
+        SyncRulesConfig.model_validate([{"selector": "event.watch", "skip": True}])
 
-
-def test_sync_rules_reject_none_field_values() -> None:
-    """Declarative sync rule fields should not accept null values."""
     with pytest.raises(ValueError):
-        SyncRulesConfig.model_validate({"status": None})
+        SyncRulesConfig.model_validate([{"selector": "notes", "skip": True}])
+
+    with pytest.raises(ValueError):
+        SyncRulesConfig.model_validate([{"selector": "node.upsert", "skip": True}])
 
 
-def test_sync_rules_reject_rule_without_set() -> None:
-    """Declarative sync rules must provide an explicit set value."""
+def test_sync_rules_rejects_rule_without_single_action() -> None:
+    """Sync rules should define exactly one action key."""
     with pytest.raises(ValueError):
         SyncRulesConfig.model_validate(
-            {
-                "notes": [
-                    {
-                        "if": "computed.notes is not None",
-                    }
-                ]
-            }
+            [{"selector": "record.notes", "if": "src.notes is None"}]
         )
 
-
-def test_sync_rules_reject_invalid_variable_names() -> None:
-    """sync_rules.vars names must be safe Python identifiers."""
     with pytest.raises(ValueError):
-        SyncRulesConfig(vars={"current": "True"})
-
-
-@pytest.mark.parametrize(
-    ("yaml_set_value", "expected_rule_set"),
-    [("null", None), ("None", "None")],
-)
-def test_sync_rules_yaml_set_values_preserve_null_and_none_semantics(
-    yaml_set_value: str,
-    expected_rule_set: object,
-) -> None:
-    """YAML null and bare None should preserve their expected sync-rule meaning."""
-    payload = yaml.safe_load(
-        "global_config:\n"
-        "  sync_rules:\n"
-        "    notes:\n"
-        "      - name: Clear notes\n"
-        f"        set: {yaml_set_value}\n"
-    )
-
-    rules = SyncRulesConfig.model_validate(payload["global_config"]["sync_rules"])
-    notes_rules = cast(list[dict[str, object]], rules.field_rules()["notes"])
-
-    assert notes_rules[0]["set"] == expected_rule_set
-
-    decision = SyncRuleEngine(
-        variables=rules.resolved_vars(),
-        field_rules=rules.field_rules(),
-    ).evaluate_field(
-        field=RecordField.NOTES,
-        current_values={RecordField.NOTES: "existing"},
-        computed_values={RecordField.NOTES: "computed"},
-    )
-
-    assert decision.allowed is True
-    assert decision.value is None
-    assert decision.reason == "Clear notes"
+        SyncRulesConfig.model_validate(
+            [{"selector": "record.notes", "skip": True, "value": "src.notes"}]
+        )
 
 
 def test_web_config_reports_auth_configuration_state(tmp_path: Path) -> None:

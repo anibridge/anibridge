@@ -45,6 +45,7 @@ from anibridge.provider.base import (
 )
 from anibridge.utils.mappings import AnibridgeMapping
 
+from anibridge.app.config.sync_rules import SyncRulesConfig
 from anibridge.app.core.animap import AnimapClient
 from anibridge.app.core.sync import (
     RecordUndoRequest,
@@ -292,6 +293,7 @@ def _client(
     destructive: bool = False,
     dry_run: bool = False,
     patch_pins: bool = True,
+    sync_rules: SyncRulesConfig | None = None,
 ) -> SyncClient:
     client = SyncClient(
         source_provider=cast(Provider, source or _SourceProvider()),
@@ -300,6 +302,7 @@ def _client(
         destructive_sync=destructive,
         dry_run=dry_run,
         profile_name="profile",
+        sync_rules=sync_rules,
     )
     client._history = cast(Any, _History())
     if patch_pins:
@@ -781,6 +784,32 @@ async def test_resolve_work_items_records_not_found_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_work_items_skips_nodes_blocked_by_sync_rules() -> None:
+    client = _client(
+        sync_rules=SyncRulesConfig.model_validate(
+            [{"selector": "node.*", "if": "node.kind == 'item'", "skip": True}]
+        )
+    )
+    item = ScanItem(
+        node=Node(ref=Ref.anchor("source"), kind="item"),
+        records=(
+            Record(
+                ref=Ref.anchor("source"),
+                surface=_RECORD_KIND,
+                ids=(ExternalId("target", "target"),),
+                values={RecordField.PROGRESS: Progress(current=1)},
+            ),
+        ),
+    )
+
+    outcomes, work_items = await client._resolve_work_items((item,))
+
+    assert outcomes == {}
+    assert work_items == []
+    assert client.sync_stats.count(SyncOutcome.PENDING) == 0
+
+
+@pytest.mark.asyncio
 async def test_prepare_record_update_delete_and_dry_run_apply() -> None:
     target = _TargetProvider(delete=True)
     client = _client(target=target, destructive=True, dry_run=True)
@@ -946,7 +975,14 @@ async def test_destructive_event_sync_deletes_extra_target_events() -> None:
             ),
         )
     )
-    client = _client(source=source, target=target, destructive=True)
+    client = _client(
+        source=source,
+        target=target,
+        destructive=True,
+        sync_rules=SyncRulesConfig.model_validate(
+            [{"selector": "event.delete", "value": "True"}]
+        ),
+    )
 
     assert (
         await client._sync_events_for_work(

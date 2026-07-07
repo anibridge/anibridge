@@ -1,208 +1,137 @@
-"""Declarative sync rules over provider-contract records."""
+"""Runtime evaluator for sync_rules."""
 
-import ast
-from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timedelta
-from functools import lru_cache, total_ordering
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 import msgspec
-from anibridge.provider.base import Node, Record, RecordField, Ref, State, Status
-
-__all__ = [
-    "SyncRuleDecision",
-    "SyncRuleEngine",
-    "build_rule_context",
-    "validate_sync_rule_expression",
-]
-
-
-def status_rank(value: Any) -> int:
-    """Return a stable order for normalized provider status values."""
-    if isinstance(value, State):
-        value = value.status
-    return {
-        None: 0,
-        Status.PLANNED: 1,
-        Status.DROPPED: 2,
-        Status.PAUSED: 3,
-        Status.ACTIVE: 4,
-        Status.COMPLETED: 5,
-        Status.REPEATING: 6,
-    }.get(value, 0)
-
-
-_FUNCTIONS: dict[str, Any] = {
-    "abs": abs,
-    "all": all,
-    "any": any,
-    "bool": bool,
-    "date": date,
-    "datetime": datetime,
-    "float": float,
-    "int": int,
-    "len": len,
-    "max": max,
-    "min": min,
-    "round": round,
-    "str": str,
-    "sum": sum,
-    "timedelta": timedelta,
-    "status_rank": status_rank,
-}
-_GLOBALS: dict[str, Any] = {
-    "Status": Status,
-    "false": False,
-    "none": None,
-    "null": None,
-    "true": True,
-}
-_METHODS = {
-    "astimezone",
-    "capitalize",
-    "casefold",
-    "date",
-    "endswith",
-    "format",
-    "isoformat",
-    "join",
-    "lower",
-    "lstrip",
-    "replace",
-    "rstrip",
-    "split",
-    "startswith",
-    "strftime",
-    "strip",
-    "title",
-    "upper",
-}
-_NAMES = frozenset({"computed", "current", "ctx", "vars", *_FUNCTIONS, *_GLOBALS})
-_NODES = (
-    ast.Add,
-    ast.And,
-    ast.Attribute,
-    ast.BinOp,
-    ast.BoolOp,
-    ast.Call,
-    ast.Compare,
-    ast.comprehension,
-    ast.Constant,
-    ast.Dict,
-    ast.Div,
-    ast.Eq,
-    ast.Expression,
-    ast.FloorDiv,
-    ast.GeneratorExp,
-    ast.Gt,
-    ast.GtE,
-    ast.IfExp,
-    ast.In,
-    ast.Is,
-    ast.IsNot,
-    ast.keyword,
-    ast.List,
-    ast.ListComp,
-    ast.Load,
-    ast.Lt,
-    ast.LtE,
-    ast.Mod,
-    ast.Mult,
-    ast.Name,
-    ast.Not,
-    ast.NotEq,
-    ast.NotIn,
-    ast.Or,
-    ast.Slice,
-    ast.Store,
-    ast.Sub,
-    ast.Subscript,
-    ast.Tuple,
-    ast.UAdd,
-    ast.UnaryOp,
-    ast.USub,
+from anibridge.provider.base import (
+    Node,
+    Progress,
+    Record,
+    RecordField,
+    Ref,
+    State,
+    Status,
 )
 
+from anibridge.app.config.sync_rules import (
+    SyncRuleDefinition,
+    SyncRulesConfig,
+    SyncRuleSelector,
+    SyncRuleTemplateId,
+    SyncRuleTemplateItem,
+)
 
-@total_ordering
-class _Temporal:
-    """Rule-facing temporal value with date/datetime comparison semantics."""
+__all__ = ["SyncRuleDecision", "SyncRuleEngine"]
 
-    def __init__(self, value: date | datetime) -> None:
-        self.value = value
 
-    def __eq__(self, other: object) -> bool:
-        other_value = self._coerce_other(other)
-        if other_value is NotImplemented:
-            return False
-        return self._pair(other_value)[0] == self._pair(other_value)[1]
+class SyncRuleDecision(msgspec.Struct, frozen=True):
+    """Decision for one proposed sync operation."""
 
-    def __lt__(self, other: object) -> bool:
-        other_value = self._coerce_other(other)
-        if other_value is NotImplemented:
-            return NotImplemented
-        lhs, rhs = self._pair(other_value)
-        return lhs < rhs
+    allowed: bool
+    value: Any = None
+    reason: str | None = None
 
-    def __bool__(self) -> bool:
-        return bool(self.value)
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.value, name)
+@dataclass(frozen=True)
+class SyncRuleTemplate:
+    """Built-in sync_rules entries."""
 
-    def __repr__(self) -> str:
-        return repr(self.value)
+    rules: tuple[SyncRuleDefinition, ...] = field(default_factory=tuple)
 
-    def __str__(self) -> str:
-        return str(self.value)
 
-    def _pair(self, other: date | datetime) -> tuple[date | datetime, date | datetime]:
-        if self._date_only(self.value) or self._date_only(other):
-            return self._as_date(self.value), self._as_date(other)
-        return self.value, other
+def _rule(
+    selector: SyncRuleSelector,
+    *,
+    if_expr: str = "True",
+    skip: bool = False,
+    value: Any = None,
+    name: str | None = None,
+) -> SyncRuleDefinition:
+    payload: dict[str, Any] = {"selector": selector}
+    if name is not None:
+        payload["name"] = name
+    if if_expr != "True":
+        payload["if"] = if_expr
+    if skip:
+        payload["skip"] = True
+    else:
+        payload["value"] = value
+    return SyncRuleDefinition.model_validate(payload)
 
-    @staticmethod
-    def _coerce_other(other: object) -> date | datetime | Any:
-        if isinstance(other, _Temporal):
-            return other.value
-        if isinstance(other, date | datetime):
-            return other
-        return NotImplemented
 
-    @staticmethod
-    def _date_only(value: date | datetime) -> bool:
-        return isinstance(value, date) and not isinstance(value, datetime)
-
-    @staticmethod
-    def _as_date(value: date | datetime) -> date:
-        return value.date() if isinstance(value, datetime) else value
+SYNC_RULE_TEMPLATES: Mapping[SyncRuleTemplateId, SyncRuleTemplate] = {
+    SyncRuleTemplateId.PREVENT_REGRESSION: SyncRuleTemplate(
+        rules=(
+            _rule(
+                SyncRuleSelector.RECORD_STATUS,
+                if_expr="regresses(src.status, dst.status)",
+                value="dst.status",
+            ),
+            _rule(
+                SyncRuleSelector.RECORD_PROGRESS,
+                if_expr="regresses(src.progress, dst.progress)",
+                value="dst.progress",
+            ),
+            _rule(
+                SyncRuleSelector.RECORD_STARTED_AT,
+                if_expr="regresses(src.started_at, dst.started_at)",
+                value="dst.started_at",
+            ),
+            _rule(
+                SyncRuleSelector.RECORD_FINISHED_AT,
+                if_expr="regresses(src.finished_at, dst.finished_at)",
+                value="dst.finished_at",
+            ),
+            _rule(
+                SyncRuleSelector.RECORD_LAST_ACTIVITY_AT,
+                if_expr="regresses(src.last_activity_at, dst.last_activity_at)",
+                value="dst.last_activity_at",
+            ),
+            _rule(
+                SyncRuleSelector.RECORD_REPEAT_COUNT,
+                if_expr="regresses(src.repeat_count, dst.repeat_count)",
+                value="dst.repeat_count",
+            ),
+        ),
+    ),
+    SyncRuleTemplateId.PROMOTE_REWATCH: SyncRuleTemplate(
+        rules=(
+            _rule(
+                SyncRuleSelector.RECORD_STATUS,
+                if_expr=(
+                    "dst.status in (Status.COMPLETED, Status.REPEATING) "
+                    "and src.status == Status.ACTIVE"
+                ),
+                value="Status.REPEATING",
+                name="promote_rewatch",
+            ),
+        ),
+    ),
+}
 
 
 class _Namespace(Mapping[str, Any]):
-    """Small mapping wrapper used as the rule expression object model."""
+    """Mapping with attribute access for rule expressions."""
 
-    def __init__(self, values: Mapping[str, Any], *, missing: Any = ...) -> None:
+    def __init__(self, values: Mapping[str, Any], *, missing: Any = None) -> None:
         self._values = values
         self._missing = missing
 
     @classmethod
-    def wrap(cls, value: Any, *, missing: Any = ...) -> Any:
+    def wrap(cls, value: Any, *, missing: Any = None) -> Any:
         if isinstance(value, cls):
             return value
         if isinstance(value, Mapping):
             return cls(value, missing=missing)
-        if isinstance(value, Sequence) and not isinstance(
-            value, str | bytes | bytearray
-        ):
+        if isinstance(value, tuple | list):
             return tuple(cls.wrap(item, missing=missing) for item in value)
-        if isinstance(value, date | datetime):
-            return _Temporal(value)
         return value
 
     def __getitem__(self, key: str) -> Any:
         if key not in self._values:
-            if self._missing is ...:
-                raise KeyError(key)
             return self._missing
         return self.wrap(self._values[key], missing=self._missing)
 
@@ -214,304 +143,314 @@ class _Namespace(Mapping[str, Any]):
 
     def __getattribute__(self, key: str) -> Any:
         if not key.startswith("_"):
-            try:
-                values = object.__getattribute__(self, "_values")
-            except AttributeError:
-                pass
-            else:
-                if key in values:
-                    return self[key]
+            values = object.__getattribute__(self, "_values")
+            if key in values:
+                return self[key]
         return object.__getattribute__(self, key)
 
     def __getattr__(self, key: str) -> Any:
-        try:
-            return self[key]
-        except KeyError as exc:
-            raise AttributeError(key) from exc
-
-
-def _unwrap(value: Any) -> Any:
-    return value.value if isinstance(value, _Temporal) else value
-
-
-def _field_values(values: Mapping[RecordField, Any]) -> _Namespace:
-    return _Namespace(
-        {field.value: value for field, value in values.items()},
-        missing=None,
-    )
-
-
-def _ref_context(ref: Ref) -> _Namespace:
-    return _Namespace(
-        {
-            "key": ref.key,
-            "path": tuple(
-                _Namespace({"axis": step.axis, "value": step.value}, missing=None)
-                for step in ref.path
-            ),
-            "is_anchor": ref.is_anchor,
-        },
-        missing=None,
-    )
-
-
-def _record_context(record: Record | None) -> _Namespace:
-    if record is None:
-        return _Namespace({}, missing=None)
-    return _Namespace(
-        {
-            "ref": _ref_context(record.ref),
-            "surface": record.surface,
-            "key": record.key,
-            "url": record.url,
-            "updated_at": record.updated_at,
-            "revision": record.revision,
-            "ids": tuple(external_id.descriptor for external_id in record.ids),
-            "values": {field.value: value for field, value in record.values.items()},
-            "metadata": record.metadata,
-        },
-        missing=None,
-    )
-
-
-def _node_context(node: Node) -> _Namespace:
-    return _Namespace(
-        {
-            "ref": _ref_context(node.ref),
-            "kind": node.kind,
-            "title": node.title,
-            "url": node.url,
-            "labels": node.labels,
-            "flags": tuple(flag.value for flag in node.flags),
-        },
-        missing=None,
-    )
-
-
-def build_rule_context(
-    *,
-    node: Node,
-    source_record: Record,
-    target_record: Record | None,
-    target_ref: Ref,
-) -> _Namespace:
-    """Build the `ctx` namespace exposed to sync rule expressions."""
-    return _Namespace(
-        {
-            "node": _node_context(node),
-            "source": _record_context(source_record),
-            "target": _record_context(target_record),
-            "target_ref": _ref_context(target_ref),
-        },
-        missing=None,
-    )
-
-
-class SyncRuleDecision(msgspec.Struct, frozen=True):
-    """Decision for one synced record field."""
-
-    allowed: bool
-    value: Any
-    reason: str | None = None
-
-
-class _Validator(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.bound_names: set[str] = set()
-
-    def generic_visit(self, node: ast.AST) -> None:
-        if not isinstance(node, _NODES):
-            raise ValueError(
-                "sync rule expression contains unsupported syntax: "
-                f"{type(node).__name__}"
-            )
-        super().generic_visit(node)
-
-    def visit_Name(self, node: ast.Name) -> None:
-        if (
-            isinstance(node.ctx, ast.Load)
-            and node.id not in _NAMES
-            and node.id not in self.bound_names
-        ):
-            raise ValueError(
-                f"sync rule expression references unknown name: {node.id!r}"
-            )
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr.startswith("_"):
-            raise ValueError("sync rule expressions cannot access private attributes")
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        if isinstance(node.func, ast.Name):
-            if node.func.id not in _FUNCTIONS:
-                raise ValueError(
-                    f"sync rule expression calls unsupported function: {node.func.id!r}"
-                )
-        elif isinstance(node.func, ast.Attribute):
-            if node.func.attr.startswith("_") or node.func.attr not in _METHODS:
-                raise ValueError(
-                    "sync rule expression calls an unsupported method: "
-                    f"{node.func.attr!r}"
-                )
-        else:
-            raise ValueError("sync rule expression contains an unsupported call target")
-        if any(keyword.arg is None for keyword in node.keywords):
-            raise ValueError(
-                "sync rule expressions do not support unpacked keyword arguments"
-            )
-        self.generic_visit(node)
-
-    def visit_ListComp(self, node: ast.ListComp) -> None:
-        self._visit_comprehension_expression(node.elt, node.generators)
-
-    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
-        self._visit_comprehension_expression(node.elt, node.generators)
-
-    def visit_comprehension(self, node: ast.comprehension) -> None:
-        names = set(_target_names(node.target))
-        self.visit(node.iter)
-        self.bound_names.update(names)
-        self.visit(node.target)
-        for condition in node.ifs:
-            self.visit(condition)
-
-    def _visit_comprehension_expression(
-        self,
-        element: ast.AST,
-        generators: list[ast.comprehension],
-    ) -> None:
-        previous = set(self.bound_names)
-        for generator in generators:
-            self.visit(generator)
-        self.visit(element)
-        self.bound_names = previous
-
-
-def _target_names(node: ast.AST) -> tuple[str, ...]:
-    if isinstance(node, ast.Name):
-        return (node.id,)
-    if isinstance(node, ast.Tuple | ast.List):
-        return tuple(name for item in node.elts for name in _target_names(item))
-    return ()
-
-
-def _validate_expression_ast(expression: str) -> ast.Expression:
-    try:
-        tree = ast.parse(expression, mode="eval")
-    except SyntaxError as exc:
-        raise ValueError(f"invalid sync rule expression: {expression!r}") from exc
-    _Validator().visit(tree)
-    return tree
-
-
-@lru_cache(maxsize=512)
-def _compile(expression: str):
-    return compile(_validate_expression_ast(expression), "<sync-rule>", "eval")
-
-
-def validate_sync_rule_expression(expression: str) -> None:
-    """Raise ValueError when a sync rule expression is not supported."""
-    _compile(expression)
-
-
-def _eval(expression: str, environment: Mapping[str, Any]) -> Any:
-    return eval(_compile(expression), {"__builtins__": {}}, dict(environment))
+        return self[key]
 
 
 class SyncRuleEngine:
-    """Evaluate declarative sync rules for provider-contract record fields."""
+    """Evaluate sync_rules for record fields and events."""
 
-    def __init__(
-        self,
-        *,
-        variables: Mapping[str, str] | None = None,
-        field_rules: Mapping[str, bool | Sequence[Mapping[str, Any]]] | None = None,
-    ) -> None:
-        """Store reusable variables and per-field rule decisions."""
-        self._variables = dict(variables or {})
-        self._field_rules = {
-            RecordField(field): rules
-            for field, rules in dict(field_rules or {}).items()
-        }
+    def __init__(self, config: SyncRulesConfig | None = None) -> None:
+        """Initialize the evaluator."""
+        self.config = config or SyncRulesConfig()
+        self._rules = self._expand_rules()
 
     def is_disabled(self, field: RecordField) -> bool:
-        """Return whether a field is explicitly blocked by configuration."""
-        return self._field_rules.get(field) is False
+        """Return whether an unconditional rule blocks a record field."""
+        for rule in reversed(self._rules):
+            if not self._matches_record(rule.selector, field) or rule.if_expr != "True":
+                continue
+            return rule.skip is True
+        return False
 
-    def evaluate_field(
+    def allows_event(self, *, action: str, kind: str, destructive_sync: bool) -> bool:
+        """Return whether rules allow a candidate event write."""
+        default_allowed = action == "upsert"
+        for index, rule in reversed(list(enumerate(self._rules, start=1))):
+            if not self._matches_event(rule.selector, action=action, kind=kind):
+                continue
+            environment = self._event_environment(
+                action=action,
+                kind=kind,
+                destructive_sync=destructive_sync,
+                default_allowed=default_allowed,
+            )
+            if rule.if_expr and not bool(eval(rule.if_expr, {}, environment)):
+                continue
+            name = rule.name or f"{rule.selector}_{index}"
+            decision = self._rule_decision(rule, default_allowed, environment, name)
+            return decision.allowed and bool(decision.value)
+        return default_allowed
+
+    def allows_node(self, *, node: Node) -> bool:
+        """Return whether rules allow a scanned node to enter sync planning."""
+        default_allowed = True
+        for index, rule in reversed(list(enumerate(self._rules, start=1))):
+            if not self._matches_node(rule.selector):
+                continue
+            environment = self._node_environment(
+                node=node,
+                default_allowed=default_allowed,
+            )
+            if rule.if_expr and not bool(eval(rule.if_expr, {}, environment)):
+                continue
+            name = rule.name or f"{rule.selector}_{index}"
+            decision = self._rule_decision(rule, default_allowed, environment, name)
+            return decision.allowed and bool(decision.value)
+        return default_allowed
+
+    def evaluate_record_field(
         self,
         *,
         field: RecordField,
         current_values: Mapping[RecordField, Any],
-        computed_values: Mapping[RecordField, Any],
-        rule_context: Mapping[str, Any] | _Namespace | None = None,
+        source_values: Mapping[RecordField, Any],
+        planned_values: Mapping[RecordField, Any],
+        source_record: Record,
+        target_record: Record | None,
+        target_ref: Ref,
     ) -> SyncRuleDecision:
-        """Return the first matching decision for a field."""
-        rules = self._field_rules.get(field, True)
-        current_value = current_values.get(field)
-        computed_value = computed_values.get(field)
+        """Evaluate one record field write."""
+        proposed_value = source_values.get(field)
 
-        if rules is True:
-            return SyncRuleDecision(True, computed_value)
-        if rules is False:
-            return SyncRuleDecision(False, current_value, "disabled")
-
-        environment = self._environment(
+        decision = self._evaluate_rules(
+            field=field,
             current_values=current_values,
-            computed_values=computed_values,
-            rule_context=rule_context,
+            source_values=source_values,
+            planned_values=planned_values,
+            source_record=source_record,
+            target_record=target_record,
+            target_ref=target_ref,
+            default_value=proposed_value,
         )
-        for index, rule in enumerate(rules, start=1):
-            condition = rule.get("if")
-            if condition is not None and not bool(_eval(str(condition), environment)):
+        if decision is not None:
+            return decision
+        return SyncRuleDecision(True, proposed_value, "default")
+
+    def _expand_rules(self) -> list[SyncRuleDefinition]:
+        rules: list[SyncRuleDefinition] = []
+        for item in self.config.root:
+            if isinstance(item, SyncRuleTemplateItem):
+                rules.extend(SYNC_RULE_TEMPLATES[item.template].rules)
+            else:
+                rules.append(item)
+        return rules
+
+    def _evaluate_rules(
+        self,
+        *,
+        field: RecordField,
+        current_values: Mapping[RecordField, Any],
+        source_values: Mapping[RecordField, Any],
+        planned_values: Mapping[RecordField, Any],
+        source_record: Record,
+        target_record: Record | None,
+        target_ref: Ref,
+        default_value: Any,
+    ) -> SyncRuleDecision | None:
+        for index, rule in reversed(list(enumerate(self._rules, start=1))):
+            if not self._matches_record(rule.selector, field):
                 continue
-
-            value = self._resolve(field, rule["set"], environment)
-            name = str(rule.get("name") or f"rule_{index}")
-            return SyncRuleDecision(True, value, name)
-
-        return SyncRuleDecision(True, computed_value, "default")
+            environment = self._environment(
+                field=field,
+                current_values=current_values,
+                source_values=source_values,
+                planned_values=planned_values,
+                source_record=source_record,
+                target_record=target_record,
+                target_ref=target_ref,
+                proposal_value=default_value,
+            )
+            if rule.if_expr and not bool(eval(rule.if_expr, {}, environment)):
+                continue
+            name = rule.name or f"{rule.selector}_{index}"
+            return self._rule_decision(rule, default_value, environment, name)
+        return None
 
     def _environment(
         self,
         *,
+        field: RecordField,
         current_values: Mapping[RecordField, Any],
-        computed_values: Mapping[RecordField, Any],
-        rule_context: Mapping[str, Any] | _Namespace | None,
+        source_values: Mapping[RecordField, Any],
+        planned_values: Mapping[RecordField, Any],
+        source_record: Record,
+        target_record: Record | None,
+        target_ref: Ref,
+        proposal_value: Any,
     ) -> dict[str, Any]:
         base = {
-            **_FUNCTIONS,
-            **_GLOBALS,
-            "current": _field_values(current_values),
-            "computed": _field_values(computed_values),
-            "ctx": _Namespace.wrap(rule_context or {}, missing=None),
+            "Status": Status,
+            "dst": _field_namespace(current_values),
+            "src": _field_namespace(source_values),
+            "plan": _plan_namespace(planned_values),
+            "proposal": _Namespace(
+                {
+                    "resource": "record",
+                    "action": "field",
+                    "field": field.value,
+                    "value": proposal_value,
+                }
+            ),
+            "env": _Namespace({}),
+            "node": _Namespace({}),
+            "caps": _Namespace({}),
+            "target_ref": target_ref,
+            "source_record": source_record,
+            "target_record": target_record,
+            "regresses": _regresses,
         }
-        variables: dict[str, Any] = {}
-        for name, expression in self._variables.items():
-            variables[name] = _eval(
-                expression,
-                {**base, "vars": _Namespace(variables, missing=None)},
-            )
-        return {**base, "vars": _Namespace(variables, missing=None)}
 
-    def _resolve(
-        self,
-        field: RecordField,
-        raw_value: Any,
+        return {**base, "vars": _Namespace({})}
+
+    @staticmethod
+    def _event_environment(
+        *,
+        action: str,
+        kind: str,
+        destructive_sync: bool,
+        default_allowed: bool,
+    ) -> dict[str, Any]:
+        return {
+            "Status": Status,
+            "dst": _Namespace({}),
+            "src": _Namespace({}),
+            "plan": _Namespace({}),
+            "proposal": _Namespace(
+                {
+                    "resource": "event",
+                    "action": action,
+                    "kind": kind,
+                    "value": default_allowed,
+                }
+            ),
+            "env": _Namespace({"destructive_sync": destructive_sync}),
+            "node": _Namespace({}),
+            "caps": _Namespace({}),
+            "regresses": _regresses,
+        }
+
+    @staticmethod
+    def _node_environment(*, node: Node, default_allowed: bool) -> dict[str, Any]:
+        return {
+            "Status": Status,
+            "dst": _Namespace({}),
+            "src": _Namespace({}),
+            "plan": _Namespace({}),
+            "proposal": _Namespace(
+                {
+                    "resource": "node",
+                    "action": "scan",
+                    "kind": node.kind,
+                    "value": default_allowed,
+                }
+            ),
+            "env": _Namespace({}),
+            "node": _Namespace(
+                {
+                    "ref": node.ref,
+                    "kind": node.kind,
+                    "title": node.title,
+                    "url": node.url,
+                    "labels": node.labels,
+                    "flags": node.flags,
+                    "facets": node.facets,
+                }
+            ),
+            "caps": _Namespace({}),
+            "regresses": _regresses,
+        }
+
+    @staticmethod
+    def _rule_decision(
+        rule: SyncRuleDefinition,
+        default_value: Any,
         environment: Mapping[str, Any],
-    ) -> Any:
-        value = (
-            _eval(raw_value, environment) if isinstance(raw_value, str) else raw_value
+        name: str,
+    ) -> SyncRuleDecision:
+        if rule.skip is not None:
+            return SyncRuleDecision(False, default_value, name)
+        value = eval(str(rule.value), {}, dict(environment))
+        return SyncRuleDecision(True, value, name)
+
+    @staticmethod
+    def _matches_record(selector: SyncRuleSelector, field: RecordField) -> bool:
+        return selector in {f"record.{field.value}", SyncRuleSelector.RECORD_ANY}
+
+    @staticmethod
+    def _matches_event(selector: SyncRuleSelector, *, action: str, kind: str) -> bool:
+        return selector in {
+            SyncRuleSelector.EVENT_ANY,
+            f"event.{action}",
+        }
+
+    @staticmethod
+    def _matches_node(selector: SyncRuleSelector) -> bool:
+        return selector == SyncRuleSelector.NODE_ANY
+
+
+def _field_namespace(values: Mapping[RecordField, Any]) -> _Namespace:
+    return _Namespace(
+        {field.value: _status_value(field, value) for field, value in values.items()}
+    )
+
+
+def _plan_namespace(values: Mapping[RecordField, Any]) -> _Namespace:
+    payload = {
+        field.value: _status_value(field, value) for field, value in values.items()
+    }
+    status = payload.get(RecordField.STATUS.value)
+    payload["completed"] = status in {Status.COMPLETED, Status.REPEATING}
+    payload["rewatching"] = status == Status.REPEATING
+    payload["changed"] = bool(values)
+    return _Namespace(payload)
+
+
+def _status_value(field: RecordField, value: Any) -> Any:
+    if field == RecordField.STATUS and isinstance(value, State):
+        return value.status
+    return value
+
+
+def _regresses(source_value: Any, target_value: Any) -> bool:
+    if target_value is None:
+        return False
+    if isinstance(target_value, Status):
+        stalled = {Status.PLANNED, Status.ACTIVE, Status.PAUSED, Status.DROPPED}
+        regressions = {
+            Status.PLANNED: set(),
+            Status.ACTIVE: {Status.PLANNED},
+            Status.PAUSED: {Status.PLANNED},
+            Status.DROPPED: {Status.PLANNED},
+            Status.COMPLETED: stalled,
+            Status.REPEATING: stalled | {Status.COMPLETED},
+        }
+        return (
+            isinstance(source_value, Status)
+            and source_value in regressions[target_value]
         )
-        value = _unwrap(value)
-        if (
-            field != RecordField.STATUS
-            or value is None
-            or isinstance(value, Status | State)
-        ):
-            return value
-        raise ValueError(
-            "sync rule for status must return a Status, State, or null; "
-            f"got {type(value).__name__}"
+    if isinstance(target_value, Progress):
+        target_current = target_value.current
+        source_current = getattr(source_value, "current", None)
+        return target_current is not None and (
+            source_current is None or source_current < target_current
         )
+    if isinstance(source_value, date) and isinstance(target_value, date):
+        if isinstance(source_value, datetime) is not isinstance(target_value, datetime):
+            source_value = (
+                source_value.date()
+                if isinstance(source_value, datetime)
+                else source_value
+            )
+            target_value = (
+                target_value.date()
+                if isinstance(target_value, datetime)
+                else target_value
+            )
+        return source_value < target_value
+    return source_value is None or source_value < target_value

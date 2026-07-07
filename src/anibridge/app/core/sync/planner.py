@@ -40,7 +40,7 @@ from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.core.sync.history import to_builtins
 from anibridge.app.core.sync.projection import MappingProjector
-from anibridge.app.core.sync.rules import SyncRuleEngine, build_rule_context
+from anibridge.app.core.sync.rules import SyncRuleEngine
 from anibridge.app.core.sync.stats import (
     AppliedRule,
     FieldBlock,
@@ -57,15 +57,6 @@ __all__ = ["PreparedUpdate", "RecordPlanner"]
 
 _ConstraintT = TypeVar("_ConstraintT")
 
-_STATUS_ORDER: Mapping[Status | None, int] = {
-    None: 0,
-    Status.PLANNED: 1,
-    Status.DROPPED: 2,
-    Status.PAUSED: 3,
-    Status.ACTIVE: 4,
-    Status.COMPLETED: 5,
-    Status.REPEATING: 6,
-}
 _TEMPORAL_RECORD_FIELDS = (
     RecordField.STARTED_AT,
     RecordField.FINISHED_AT,
@@ -264,23 +255,20 @@ class RecordPlanner:
             if source_status is not None or target_record is None
             else self.status_of(target_record.values.get(RecordField.STATUS))
         )
-        rule_context = build_rule_context(
-            node=item.node,
-            source_record=source_record,
-            target_record=target_record,
-            target_ref=target_ref,
-        )
 
         for field in sync_fields:
             if gate_reason := self._status_gate(field, final_status):
                 blocked_fields.append(FieldBlock(field, gate_reason))
                 continue
 
-            rule = self.sync_rule_engine.evaluate_field(
+            rule = self.sync_rule_engine.evaluate_record_field(
                 field=field,
                 current_values=current_values,
-                computed_values=computed_values,
-                rule_context=rule_context,
+                source_values=computed_values,
+                planned_values=planned_values,
+                source_record=source_record,
+                target_record=target_record,
+                target_ref=target_ref,
             )
             if not rule.allowed:
                 blocked_fields.append(FieldBlock(field, rule.reason or "blocked"))
@@ -660,13 +648,13 @@ class RecordPlanner:
         if (
             field in (RecordField.REPEAT_COUNT, RecordField.FINISHED_AT)
             and status is not None
-            and _STATUS_ORDER[status] < _STATUS_ORDER[Status.COMPLETED]
+            and status not in {Status.COMPLETED, Status.REPEATING}
         ):
             return "requires_completed"
         if (
             field == RecordField.STARTED_AT
             and status is not None
-            and _STATUS_ORDER[status] <= _STATUS_ORDER[Status.PLANNED]
+            and status == Status.PLANNED
         ):
             return "requires_active_status"
         return None

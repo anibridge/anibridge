@@ -30,6 +30,7 @@ from anibridge.provider.base import (
     Role,
     ScanItem,
     ScanQuery,
+    Status,
     Step,
     SupportsReads,
     SupportsScan,
@@ -86,20 +87,43 @@ _OUTCOME_PRIORITY: Mapping[SyncOutcome, int] = {
     SyncOutcome.PENDING: 1,
 }
 
-_STATUS_ORDER: Mapping[object, int] = {
-    None: 0,
-    "planned": 1,
-    "dropped": 2,
-    "paused": 3,
-    "active": 4,
-    "completed": 5,
-    "repeating": 6,
-}
-
 
 def _event_specs(capabilities: Capabilities) -> tuple[EventSpec, ...]:
     """Return event resource specs from unified provider capabilities."""
     return tuple(spec for spec in capabilities.specs if isinstance(spec, EventSpec))
+
+
+def _status_supersedes(candidate: Status, current: Status) -> bool:
+    replacements = {
+        Status.PLANNED: {
+            Status.ACTIVE,
+            Status.PAUSED,
+            Status.COMPLETED,
+            Status.DROPPED,
+            Status.REPEATING,
+        },
+        Status.ACTIVE: {
+            Status.PAUSED,
+            Status.COMPLETED,
+            Status.DROPPED,
+            Status.REPEATING,
+        },
+        Status.PAUSED: {
+            Status.ACTIVE,
+            Status.COMPLETED,
+            Status.DROPPED,
+            Status.REPEATING,
+        },
+        Status.DROPPED: {
+            Status.ACTIVE,
+            Status.PAUSED,
+            Status.COMPLETED,
+            Status.REPEATING,
+        },
+        Status.COMPLETED: {Status.REPEATING},
+        Status.REPEATING: set(),
+    }[current]
+    return candidate in replacements
 
 
 class _TargetWork(msgspec.Struct, frozen=True):
@@ -160,14 +184,11 @@ class SyncClient:
         self._validate_events(
             provider=self.target_provider, capabilities=self._target_capabilities
         )
-        sync_rule_engine = SyncRuleEngine(
-            variables=sync_rules.resolved_vars() if sync_rules else None,
-            field_rules=sync_rules.field_rules() if sync_rules else None,
-        )
+        self._sync_rule_engine = SyncRuleEngine(sync_rules)
         self._planner = RecordPlanner(
             source_capabilities=self._source_capabilities,
             target_capabilities=self._target_capabilities,
-            sync_rule_engine=sync_rule_engine,
+            sync_rule_engine=self._sync_rule_engine,
             destructive_sync=self.destructive_sync,
         )
         self._planner.validate_provider_contracts(
@@ -466,16 +487,12 @@ class SyncClient:
                     elif field == RecordField.STATUS:
                         status = RecordPlanner.status_of(value)
                         existing_status = RecordPlanner.status_of(existing)
-                        if existing is None or _STATUS_ORDER.get(
-                            status.value if status is not None else None,
-                            0,
-                        ) > _STATUS_ORDER.get(
-                            (
-                                existing_status.value
-                                if existing_status is not None
-                                else None
-                            ),
-                            0,
+                        if existing is None or (
+                            status is not None
+                            and (
+                                existing_status is None
+                                or _status_supersedes(status, existing_status)
+                            )
                         ):
                             values[field] = value
                     elif existing is None:
@@ -539,6 +556,15 @@ class SyncClient:
                 label.node_kind,
                 label.source,
             )
+
+            if not self._sync_rule_engine.allows_node(node=item.node):
+                log.info(
+                    "[%s] Skipping %s %s because sync_rules blocked the node",
+                    self.profile_name,
+                    label.node_kind,
+                    label.source,
+                )
+                continue
 
             records = self._planner.syncable_source_records(item)
             if not records:
@@ -1124,6 +1150,12 @@ class SyncClient:
                 projected_event_identities.add(identity)
                 if not can_append or identity in existing_events:
                     continue
+                if not self._sync_rule_engine.allows_event(
+                    action="upsert",
+                    kind=target_kind,
+                    destructive_sync=self.destructive_sync,
+                ):
+                    continue
                 writes.append(
                     UpsertEvent(
                         ref=target_ref,
@@ -1153,6 +1185,12 @@ class SyncClient:
                         event.dedupe_key,
                     )
                     if identity in projected_event_identities:
+                        continue
+                    if not self._sync_rule_engine.allows_event(
+                        action="delete",
+                        kind=event.kind,
+                        destructive_sync=self.destructive_sync,
+                    ):
                         continue
                     writes.append(self._delete_event_for(event))
                     operations.append(

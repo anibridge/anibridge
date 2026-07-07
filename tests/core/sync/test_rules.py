@@ -1,216 +1,252 @@
-"""Unit tests for declarative sync rules."""
+"""Unit tests for declarative sync rule evaluation."""
 
 from datetime import UTC, date, datetime
 
-import pytest
-from anibridge.provider.base import Node, Record, RecordField, Ref, State, Status
-
-from anibridge.app.core.sync.rules import (
-    SyncRuleDecision,
-    SyncRuleEngine,
-    _Namespace,
-    _validate_expression_ast,
-    build_rule_context,
+from anibridge.provider.base import (
+    Node,
+    Progress,
+    Record,
+    RecordField,
+    Ref,
+    State,
+    Status,
 )
 
-
-def test_namespace_normalizes_nested_values_and_missing_access() -> None:
-    namespace = _Namespace(
-        {
-            "status": Status.ACTIVE,
-            "nested": {"status": Status.PLANNED},
-            "items": [Status.COMPLETED, {"status": Status.DROPPED}],
-        },
-        missing=None,
-    )
-
-    assert namespace.status == Status.ACTIVE
-    assert namespace.nested.status == Status.PLANNED
-    assert namespace["items"][0] == Status.COMPLETED
-    assert namespace["items"][1].status == Status.DROPPED
-    assert list(namespace) == ["status", "nested", "items"]
-    assert len(namespace) == 3
-
-    strict = _Namespace({}, missing=...)
-    with pytest.raises(AttributeError):
-        _ = strict.missing
+from anibridge.app.config.sync_rules import SyncRulesConfig
+from anibridge.app.core.sync.rules import SyncRuleDecision, SyncRuleEngine
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
-        pytest.param("([len][0])([1])", id="unsupported-call-target"),
-        pytest.param("len(**ctx)", id="unpacked-keywords"),
-        pytest.param("ctx.__class__", id="private-attribute"),
-    ],
-)
-def test_validate_expression_ast_rejects_unsafe_expressions(expression: str) -> None:
-    with pytest.raises(ValueError):
-        _validate_expression_ast(expression)
-
-
-@pytest.mark.parametrize(
-    "expression",
-    [
-        "[item for item in ctx.source.values if item is not None]",
-        "max(item for item in (1, 2, 3))",
-        "sum(1 for value in ctx.source.values if value)",
-    ],
-)
-def test_validate_expression_ast_accepts_comprehensions(expression: str) -> None:
-    _validate_expression_ast(expression)
-
-
-def test_validate_expression_ast_rejects_unknown_names() -> None:
-    with pytest.raises(ValueError, match="unknown name"):
-        _validate_expression_ast("missing + 1")
-
-    with pytest.raises(ValueError, match="unknown name"):
-        _validate_expression_ast("[value for value in (1, 2)] and value")
-
-
-def test_build_rule_context_exposes_provider_contract_objects() -> None:
-    node = Node(
-        ref=Ref.at("series-1", ("episode", 3)),
-        kind="episode",
-        title="Episode 3",
-    )
-    source = Record(
-        ref=node.ref,
-        surface="user_state",
-        values={RecordField.STATUS: State(status=Status.ACTIVE)},
-    )
-    target_ref = Ref.anchor("target-1")
-
-    ctx = build_rule_context(
-        node=node,
-        source_record=source,
+def _decision(
+    engine: SyncRuleEngine,
+    field: RecordField,
+    *,
+    current: object = None,
+    source: object = None,
+) -> SyncRuleDecision:
+    return engine.evaluate_record_field(
+        field=field,
+        current_values={field: current},
+        source_values={field: source},
+        planned_values={field: source},
+        source_record=Record(ref=Ref.anchor("source"), surface="list"),
         target_record=None,
-        target_ref=target_ref,
-    )
-
-    assert ctx.node.title == "Episode 3"
-    assert ctx.node.ref.path[0].axis == "episode"
-    assert ctx.source.values.status.status == Status.ACTIVE
-    assert ctx.target.key is None
-    assert ctx.target_ref.key == "target-1"
-
-
-def test_sync_rule_engine_defaults_and_disables_fields() -> None:
-    engine = SyncRuleEngine(field_rules={"notes": False})
-
-    assert engine.is_disabled(RecordField.NOTES) is True
-    assert engine.evaluate_field(
-        field=RecordField.PROGRESS,
-        current_values={RecordField.PROGRESS: 1},
-        computed_values={RecordField.PROGRESS: 2},
-    ) == SyncRuleDecision(allowed=True, value=2)
-    assert engine.evaluate_field(
-        field=RecordField.NOTES,
-        current_values={RecordField.NOTES: "keep"},
-        computed_values={RecordField.NOTES: "replace"},
-    ) == SyncRuleDecision(allowed=False, value="keep", reason="disabled")
-
-
-def test_sync_rule_engine_evaluates_first_matching_rule_with_variables() -> None:
-    engine = SyncRuleEngine(
-        variables={"same_title": "ctx.node.title == 'Movie'"},
-        field_rules={
-            "status": [
-                {
-                    "name": "promote",
-                    "if": "vars.same_title and computed.status == Status.ACTIVE",
-                    "set": "Status.COMPLETED",
-                },
-                {"name": "fallback", "set": "Status.PLANNED"},
-            ]
-        },
-    )
-
-    decision = engine.evaluate_field(
-        field=RecordField.STATUS,
-        current_values={RecordField.STATUS: Status.PLANNED},
-        computed_values={RecordField.STATUS: Status.ACTIVE},
-        rule_context={"node": {"title": "Movie"}},
-    )
-
-    assert decision == SyncRuleDecision(
-        allowed=True,
-        value=Status.COMPLETED,
-        reason="promote",
+        target_ref=Ref.anchor("target"),
     )
 
 
-def test_sync_rule_engine_requires_status_rules_to_return_status_values() -> None:
-    engine = SyncRuleEngine(field_rules={"status": [{"set": "'bad'"}]})
+def test_sync_rules_empty_list_uses_source_value() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig.model_validate([]))
 
-    with pytest.raises(ValueError, match="must return a Status"):
-        engine.evaluate_field(
-            field=RecordField.STATUS,
-            current_values={RecordField.STATUS: Status.PLANNED},
-            computed_values={RecordField.STATUS: Status.ACTIVE},
+    decision = _decision(
+        engine,
+        RecordField.STATUS,
+        current=Status.PLANNED,
+        source=Status.ACTIVE,
+    )
+
+    assert decision == SyncRuleDecision(True, Status.ACTIVE, "default")
+
+
+def test_sync_rules_default_template_prevents_regression() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig())
+
+    assert engine.is_disabled(RecordField.NOTES) is False
+    assert engine.is_disabled(RecordField.RATING) is False
+    assert engine.allows_event(action="upsert", kind="watch", destructive_sync=False)
+    assert not engine.allows_event(
+        action="delete",
+        kind="watch",
+        destructive_sync=False,
+    )
+
+    status_decision = _decision(
+        engine,
+        RecordField.STATUS,
+        current=State(status=Status.COMPLETED),
+        source=State(status=Status.ACTIVE),
+    )
+    progress_decision = _decision(
+        engine,
+        RecordField.PROGRESS,
+        current=Progress(current=10),
+        source=Progress(current=4),
+    )
+
+    assert status_decision == SyncRuleDecision(
+        True,
+        Status.COMPLETED,
+        "record.status_1",
+    )
+    assert progress_decision.value == Progress(current=10)
+
+
+def test_sync_rules_status_regression_uses_explicit_transitions() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig())
+
+    cases = (
+        (Status.ACTIVE, Status.PLANNED, Status.ACTIVE),
+        (Status.COMPLETED, Status.ACTIVE, Status.COMPLETED),
+        (Status.REPEATING, Status.COMPLETED, Status.REPEATING),
+        (Status.PLANNED, Status.DROPPED, Status.DROPPED),
+        (Status.PAUSED, Status.ACTIVE, Status.ACTIVE),
+        (Status.COMPLETED, Status.REPEATING, Status.REPEATING),
+    )
+
+    for current, source, expected in cases:
+        decision = _decision(
+            engine,
+            RecordField.STATUS,
+            current=State(status=current),
+            source=State(status=source),
+        )
+        value = (
+            decision.value.status
+            if isinstance(decision.value, State)
+            else decision.value
         )
 
+        assert value == expected
 
-def test_sync_rule_engine_accepts_state_from_status_rules() -> None:
-    state = State(native="completed", status=Status.COMPLETED)
-    engine = SyncRuleEngine(field_rules={"status": [{"set": state}]})
 
-    decision = engine.evaluate_field(
-        field=RecordField.STATUS,
-        current_values={RecordField.STATUS: Status.ACTIVE},
-        computed_values={RecordField.STATUS: Status.ACTIVE},
+def test_sync_rules_date_regression_handles_mixed_date_and_datetime() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig())
+
+    decision = _decision(
+        engine,
+        RecordField.STARTED_AT,
+        current=date(2026, 1, 2),
+        source=datetime(2026, 1, 1, 23, 30, tzinfo=UTC),
     )
 
-    assert decision.value == state
+    assert decision == SyncRuleDecision(True, date(2026, 1, 2), "record.started_at_3")
 
 
-def test_sync_rule_engine_compares_mixed_date_and_datetime_values() -> None:
+def test_sync_rules_later_rules_override_templates() -> None:
     engine = SyncRuleEngine(
-        field_rules={
-            "started_at": [
+        SyncRulesConfig.model_validate(
+            [
+                {"template": "prevent_regression"},
+                {"selector": "record.progress", "value": "src.progress"},
+                {"selector": "event.upsert", "skip": True},
+            ]
+        )
+    )
+
+    assert not engine.allows_event(action="upsert", kind="watch", destructive_sync=True)
+    assert _decision(
+        engine,
+        RecordField.PROGRESS,
+        current=Progress(current=10),
+        source=Progress(current=4),
+    ) == SyncRuleDecision(True, Progress(current=4), "record.progress_7")
+
+
+def test_sync_rules_promote_rewatch_template_is_opt_in() -> None:
+    default_engine = SyncRuleEngine(SyncRulesConfig())
+    promoted_engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [{"template": "prevent_regression"}, {"template": "promote_rewatch"}]
+        )
+    )
+
+    assert (
+        _decision(
+            default_engine,
+            RecordField.STATUS,
+            current=State(status=Status.COMPLETED),
+            source=State(status=Status.ACTIVE),
+        ).value
+        == Status.COMPLETED
+    )
+    assert _decision(
+        promoted_engine,
+        RecordField.STATUS,
+        current=State(status=Status.COMPLETED),
+        source=State(status=Status.ACTIVE),
+    ) == SyncRuleDecision(True, Status.REPEATING, "promote_rewatch")
+
+
+def test_sync_rules_can_allow_event_deletes_explicitly() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate([{"selector": "event.delete", "value": "True"}])
+    )
+
+    assert engine.allows_event(
+        action="delete",
+        kind="watch",
+        destructive_sync=False,
+    )
+
+
+def test_sync_rules_can_skip_nodes() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [{"selector": "node.*", "if": "node.kind == 'movie'", "skip": True}]
+        )
+    )
+
+    assert not engine.allows_node(
+        node=Node(ref=Ref.anchor("movie"), kind="movie", title="Movie")
+    )
+    assert engine.allows_node(node=Node(ref=Ref.anchor("show"), kind="show"))
+
+
+def test_sync_rules_skip_blocks_record_fields() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate([{"selector": "record.notes", "skip": True}])
+    )
+
+    decision = _decision(
+        engine,
+        RecordField.NOTES,
+        current="keep",
+        source="replace",
+    )
+
+    assert engine.is_disabled(RecordField.NOTES) is True
+    assert decision.allowed is False
+    assert decision.reason == "record.notes_1"
+
+
+def test_sync_rules_evaluate_if_and_value_expressions() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [
                 {
-                    "name": "keep-current",
+                    "name": "Promote rewatch",
+                    "selector": "record.status",
                     "if": (
-                        "current.started_at is not None and "
-                        "computed.started_at > current.started_at"
+                        "dst.status in (Status.COMPLETED, Status.REPEATING) "
+                        "and src.status == Status.ACTIVE"
                     ),
-                    "set": "current.started_at",
+                    "value": "Status.REPEATING",
                 }
             ]
-        },
+        )
     )
 
-    result = engine.evaluate_field(
-        field=RecordField.STARTED_AT,
-        current_values={RecordField.STARTED_AT: date(2026, 1, 2)},
-        computed_values={RecordField.STARTED_AT: datetime(2026, 1, 3, 12, tzinfo=UTC)},
+    decision = _decision(
+        engine,
+        RecordField.STATUS,
+        current=State(status=Status.COMPLETED),
+        source=State(status=Status.ACTIVE),
     )
 
-    assert result == SyncRuleDecision(
-        allowed=True,
-        value=date(2026, 1, 2),
-        reason="keep-current",
-    )
+    assert decision == SyncRuleDecision(True, Status.REPEATING, "Promote rewatch")
 
 
-def test_sync_rule_engine_falls_through_to_computed_value() -> None:
+def test_sync_rules_can_clear_with_none_expression() -> None:
     engine = SyncRuleEngine(
-        field_rules={
-            "repeat_count": [
-                {
-                    "name": "never-matches",
-                    "if": "computed.repeat_count < current.repeat_count",
-                    "set": "current.repeat_count",
-                }
-            ]
-        },
+        SyncRulesConfig.model_validate(
+            [{"name": "Clear notes", "selector": "record.notes", "value": "None"}]
+        )
     )
 
-    result = engine.evaluate_field(
-        field=RecordField.REPEAT_COUNT,
-        current_values={RecordField.REPEAT_COUNT: 1},
-        computed_values={RecordField.REPEAT_COUNT: 2},
+    decision = _decision(
+        engine,
+        RecordField.NOTES,
+        current="keep",
+        source="replace",
     )
 
-    assert result == SyncRuleDecision(allowed=True, value=2, reason="default")
+    assert decision == SyncRuleDecision(True, None, "Clear notes")

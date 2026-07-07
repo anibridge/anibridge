@@ -410,13 +410,13 @@ class AnibridgeConfig(BaseSettings):
         """Customize the order of configuration sources."""
         return (
             init_settings,
-            YamlConfigSettingsSource(settings_cls, yaml_file=find_yaml_config_file()),
             EnvSettingsSource(
                 settings_cls,
                 env_prefix="AB_",
                 env_nested_delimiter="__",
                 env_parse_none_str="null",
             ),
+            YamlConfigSettingsSource(settings_cls, yaml_file=find_yaml_config_file()),
         )
 
     @classmethod

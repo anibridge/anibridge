@@ -39,6 +39,7 @@
     import TimelineOutcomeFilters from "./_components/timeline/timeline-outcome-filters.svelte";
     import { OUTCOME_META, type OutcomeMeta } from "./_components/timeline/types";
 
+    const DEFAULT_OUTCOME = "synced";
     const profile = $derived(page.params.profile ?? "");
 
     let groups: HistoryGroup[] = $state([]);
@@ -51,7 +52,7 @@
     let hasMore = $state(false);
     let nextBeforeId: number | null = $state(null);
     let latestGroupId: number | null = $state(null);
-    let activeOutcome: string | null = $state(null);
+    let activeOutcome: string | null = $state(DEFAULT_OUTCOME);
     let lastRefreshed: number | null = $state(null);
     let pinManagerOpen = $state(false);
     let PinManagerComponent: Component<{
@@ -407,7 +408,7 @@
     $effect(() => {
         if (!mounted || profile === activeProfile) return;
         activeProfile = profile;
-        activeOutcome = null;
+        activeOutcome = DEFAULT_OUTCOME;
         pinManagerOpen = false;
         groups = [];
         nextBeforeId = null;

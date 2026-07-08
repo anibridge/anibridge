@@ -602,12 +602,9 @@ class SyncClient:
                         label.source,
                         record.ref,
                     )
-                    await self._history.create_sync_history(
+                    await self._history.record_not_found(
                         source_node=item.node,
                         source_record=record,
-                        target_ref=None,
-                        snapshots=(None, None),
-                        outcome=SyncOutcome.NOT_FOUND,
                         info={"trackable_count": str(len(sync_items))},
                         ephemeral=self.dry_run,
                     )

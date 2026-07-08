@@ -140,6 +140,7 @@ def _capabilities(
 class _History:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
+        self.not_found: list[dict[str, Any]] = []
         self.event_operations: list[dict[str, Any]] = []
         self.cleanup: list[tuple[Ref, Ref | None]] = []
         self.flushed = False
@@ -147,6 +148,9 @@ class _History:
 
     async def create_sync_history(self, **kwargs) -> None:
         self.created.append(kwargs)
+
+    async def record_not_found(self, **kwargs) -> None:
+        self.not_found.append(kwargs)
 
     async def record_event_operation(self, **kwargs) -> None:
         self.event_operations.append(kwargs)
@@ -778,8 +782,10 @@ async def test_resolve_work_items_records_not_found_history() -> None:
     assert work_items == []
     assert tuple(outcomes.values()) == (SyncOutcome.NOT_FOUND,)
     history = cast(_History, client._history)
-    assert history.created[0]["outcome"] == SyncOutcome.NOT_FOUND
-    assert history.created[0]["info"]["trackable_count"] == "1"
+    assert history.created == []
+    assert history.not_found[0]["source_node"] == item.node
+    assert history.not_found[0]["source_record"] == item.records[0]
+    assert history.not_found[0]["info"]["trackable_count"] == "1"
     assert client.sync_stats.count(SyncOutcome.PENDING) == 1
 
 

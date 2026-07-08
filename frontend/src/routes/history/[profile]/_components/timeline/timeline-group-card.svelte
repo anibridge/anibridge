@@ -1,7 +1,7 @@
 <script lang="ts">
     /* eslint-disable svelte/no-navigation-without-resolve */
 
-    import { ArrowRight, ExternalLink, Map } from "@lucide/svelte";
+    import { ArrowRight, CircleQuestionMark, ExternalLink, Map } from "@lucide/svelte";
 
     import { resolve } from "$app/paths";
     import type {
@@ -92,6 +92,7 @@
     const targetParentLabel = $derived(
         qualifiedRefLabel(group.target_namespace, group.target_parent_ref),
     );
+    const targetMissing = $derived(!group.target_parent_ref);
 </script>
 
 <article
@@ -199,68 +200,72 @@
             </div>
 
             <section
-                class="flex gap-2 rounded-md border border-emerald-900/40 bg-emerald-950/20 p-2">
-                <div
-                    class="relative flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-950/70 shadow-inner sm:h-20 sm:w-14">
-                    {#if group.target_media?.poster_url}
-                        <img
-                            src={group.target_media.poster_url}
-                            alt=""
-                            loading="lazy"
-                            class="max-h-full max-w-full object-contain" />
-                    {:else}
+                class={`flex gap-2 rounded-md border p-2 ${targetMissing ? "min-h-20 items-center justify-center border-dashed border-amber-800/50 bg-amber-950/10" : "border-emerald-900/40 bg-emerald-950/20"}`}>
+                {#if targetMissing}
+                    <CircleQuestionMark class="h-8 w-8 text-amber-200/70" />
+                {:else}
+                    <div
+                        class="relative flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-950/70 shadow-inner sm:h-20 sm:w-14">
+                        {#if group.target_media?.poster_url}
+                            <img
+                                src={group.target_media.poster_url}
+                                alt=""
+                                loading="lazy"
+                                class="max-h-full max-w-full object-contain" />
+                        {:else}
+                            <div
+                                class="flex h-full w-full items-center justify-center bg-slate-900/70 text-xl font-semibold text-slate-500">
+                                {posterFallback(
+                                    group.target_media,
+                                    refLabel(group.target_parent_ref),
+                                )}
+                            </div>
+                        {/if}
+                    </div>
+                    <div class="min-w-0 flex-1">
                         <div
-                            class="flex h-full w-full items-center justify-center bg-slate-900/70 text-xl font-semibold text-slate-500">
-                            {posterFallback(
+                            class="line-clamp-2 text-sm leading-snug font-medium text-slate-100">
+                            {mediaTitle(
                                 group.target_media,
                                 refLabel(group.target_parent_ref),
                             )}
-                        </div>
-                    {/if}
-                </div>
-                <div class="min-w-0 flex-1">
-                    <div
-                        class="line-clamp-2 text-sm leading-snug font-medium text-slate-100">
-                        {mediaTitle(
-                            group.target_media,
-                            refLabel(group.target_parent_ref),
-                        )}
-                        {#if targetParentLabel}
-                            <span class="font-mono text-[11px] text-slate-500">
-                                ({targetParentLabel})
-                            </span>
-                        {/if}
-                    </div>
-                    {#if group.target_media?.labels?.length}
-                        <div class="mt-1.5 flex flex-wrap gap-1">
-                            {#each group.target_media.labels.slice(0, 2) as label (label)}
-                                <span
-                                    class="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-300">
-                                    {label}
+                            {#if targetParentLabel}
+                                <span class="font-mono text-[11px] text-slate-500">
+                                    ({targetParentLabel})
                                 </span>
-                            {/each}
+                            {/if}
                         </div>
-                    {/if}
-                    <div class="mt-1.5 flex flex-wrap gap-x-2 gap-y-1">
-                        {#if group.target_media?.external_url}
-                            <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-                            <a
-                                class="inline-flex items-center gap-1 text-[11px] text-sky-200 hover:text-sky-100"
-                                href={group.target_media.external_url}
-                                target="_blank"
-                                rel="noreferrer">
-                                Open target <ExternalLink class="h-3 w-3" />
-                            </a>
+                        {#if group.target_media?.labels?.length}
+                            <div class="mt-1.5 flex flex-wrap gap-1">
+                                {#each group.target_media.labels.slice(0, 2) as label (label)}
+                                    <span
+                                        class="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-300">
+                                        {label}
+                                    </span>
+                                {/each}
+                            </div>
                         {/if}
-                        {#if targetMappingHref}
-                            <a
-                                class="inline-flex items-center gap-1 text-[11px] text-sky-200/80 hover:text-sky-100"
-                                href={targetMappingHref}>
-                                Mapping <Map class="h-3 w-3" />
-                            </a>
-                        {/if}
+                        <div class="mt-1.5 flex flex-wrap gap-x-2 gap-y-1">
+                            {#if group.target_media?.external_url}
+                                <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+                                <a
+                                    class="inline-flex items-center gap-1 text-[11px] text-sky-200 hover:text-sky-100"
+                                    href={group.target_media.external_url}
+                                    target="_blank"
+                                    rel="noreferrer">
+                                    Open target <ExternalLink class="h-3 w-3" />
+                                </a>
+                            {/if}
+                            {#if targetMappingHref}
+                                <a
+                                    class="inline-flex items-center gap-1 text-[11px] text-sky-200/80 hover:text-sky-100"
+                                    href={targetMappingHref}>
+                                    Mapping <Map class="h-3 w-3" />
+                                </a>
+                            {/if}
+                        </div>
                     </div>
-                </div>
+                {/if}
             </section>
         </div>
 

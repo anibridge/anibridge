@@ -197,6 +197,47 @@ class SyncHistoryManager:
             else SyncOperationAction.UPSERT,
         )
 
+    async def record_not_found(
+        self,
+        *,
+        source_node: Node,
+        source_record: Record | None,
+        external_id: ExternalId | None = None,
+        error_message: str | None = None,
+        info: Mapping[str, object] | None = None,
+        ephemeral: bool = False,
+    ) -> None:
+        """Persist a targetless not-found group without a child operation."""
+        self.start_run(ephemeral=ephemeral)
+        source_ref = source_record.ref if source_record else source_node.ref
+        history_info = _info_mapping(
+            {
+                "source_title": source_node.title,
+                "source_node_kind": source_node.kind,
+                "source_record_key": source_record.key if source_record else None,
+                "source_ref": repr(source_ref),
+            },
+            info,
+            {"error_message": error_message},
+        )
+        now = datetime.now(UTC)
+
+        with self._db_factory() as ctx:
+            group = self._get_or_create_group(
+                ctx,
+                source_parent_ref=_anchor_ref(source_ref),
+                target_parent_ref=None,
+                external_id=external_id,
+                ephemeral=ephemeral,
+                timestamp=now,
+            )
+            group.outcome = SyncOutcome.NOT_FOUND
+            group.error_count = 1
+            group.info = history_info
+            group.ephemeral = ephemeral
+            group.timestamp = now
+            ctx.session.commit()
+
     async def record_record_operation(
         self,
         *,
@@ -530,7 +571,8 @@ class SyncHistoryManager:
             return
         operations = tuple(group.operations)
         if not operations:
-            ctx.session.delete(group)
+            if group.outcome != SyncOutcome.NOT_FOUND:
+                ctx.session.delete(group)
             return
 
         group.operation_count = len(operations)
@@ -572,6 +614,25 @@ class SyncHistoryManager:
             for start in range(0, len(targets), FAILURE_HISTORY_CLEANUP_BATCH_SIZE):
                 chunk = targets[start : start + FAILURE_HISTORY_CLEANUP_BATCH_SIZE]
                 for source_key, target_key in chunk:
+                    if target_key is None:
+                        group_rows = (
+                            ctx.session.query(SyncHistoryGroup)
+                            .filter(
+                                SyncHistoryGroup.profile_name == self.profile_name,
+                                SyncHistoryGroup.source_namespace
+                                == self.source_namespace,
+                                SyncHistoryGroup.source_parent_ref
+                                == RefKey(key=source_key.key).to_json(),
+                                SyncHistoryGroup.target_namespace
+                                == self.target_namespace,
+                                SyncHistoryGroup.target_parent_ref.is_(None),
+                                SyncHistoryGroup.outcome == SyncOutcome.NOT_FOUND,
+                            )
+                            .all()
+                        )
+                        for group in group_rows:
+                            ctx.session.delete(group)
+
                     query = ctx.session.query(SyncHistoryOperation).filter(
                         SyncHistoryOperation.profile_name == self.profile_name,
                         SyncHistoryOperation.source_namespace == self.source_namespace,

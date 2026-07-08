@@ -110,12 +110,9 @@ async def test_successful_sync_cleans_matching_failure_rows(
         snapshots=(None, None),
         outcome=SyncOutcome.FAILED,
     )
-    await history_manager.create_sync_history(
+    await history_manager.record_not_found(
         source_node=_node(),
         source_record=_record(),
-        target_ref=None,
-        snapshots=(None, None),
-        outcome=SyncOutcome.NOT_FOUND,
     )
     await history_manager.create_sync_history(
         source_node=_node(),
@@ -133,3 +130,25 @@ async def test_successful_sync_cleans_matching_failure_rows(
         group = ctx.session.query(SyncHistoryGroup).one()
         assert group.operation_count == 1
         assert group.outcome == SyncOutcome.SYNCED
+
+
+@pytest.mark.asyncio
+async def test_record_not_found_creates_group_without_operation(
+    history_manager: SyncHistoryManager,
+    sqlite_db_factory,
+) -> None:
+    """Targetless misses should show as group-level history only."""
+    await history_manager.record_not_found(
+        source_node=_node(),
+        source_record=_record(),
+        info={"trackable_count": "1"},
+    )
+
+    with sqlite_db_factory() as ctx:
+        group = ctx.session.query(SyncHistoryGroup).one()
+        assert group.outcome == SyncOutcome.NOT_FOUND
+        assert group.operation_count == 0
+        assert group.error_count == 1
+        assert group.target_parent_ref is None
+        assert group.info["trackable_count"] == "1"
+        assert ctx.session.query(SyncHistoryOperation).count() == 0

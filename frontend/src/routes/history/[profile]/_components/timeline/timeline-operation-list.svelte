@@ -85,7 +85,7 @@
             const unit = value.progress.unit ? ` ${value.progress.unit}` : "";
             return `${current}/${total}${unit}`;
         }
-        if (value.rating) return `${value.rating.value}/${value.rating.scale[2]}`;
+        if (value.rating) return `${value.rating.value}/${value.rating.scale[1]}`;
         if (value.scalar !== undefined) return String(value.scalar);
         if (value.date_value) return value.date_value;
         if (value.datetime_value)

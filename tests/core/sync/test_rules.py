@@ -126,7 +126,7 @@ def test_sync_rules_later_rules_override_templates() -> None:
     engine = SyncRuleEngine(
         SyncRulesConfig.model_validate(
             [
-                {"template": "prevent_regression"},
+                {"template": "prevent-regression"},
                 {"selector": "record.progress", "value": "src.progress"},
                 {"selector": "event.upsert", "skip": True},
             ]
@@ -146,7 +146,7 @@ def test_sync_rules_promote_rewatch_template_is_opt_in() -> None:
     default_engine = SyncRuleEngine(SyncRulesConfig())
     promoted_engine = SyncRuleEngine(
         SyncRulesConfig.model_validate(
-            [{"template": "prevent_regression"}, {"template": "promote_rewatch"}]
+            [{"template": "prevent-regression"}, {"template": "promote-rewatch"}]
         )
     )
 
@@ -164,7 +164,7 @@ def test_sync_rules_promote_rewatch_template_is_opt_in() -> None:
         RecordField.STATUS,
         current=State(status=Status.COMPLETED),
         source=State(status=Status.ACTIVE),
-    ) == SyncRuleDecision(True, Status.REPEATING, "promote_rewatch")
+    ) == SyncRuleDecision(True, Status.REPEATING, "promote-rewatch")
 
 
 def test_sync_rules_require_completed_for_rating_template_is_opt_in() -> None:
@@ -172,8 +172,8 @@ def test_sync_rules_require_completed_for_rating_template_is_opt_in() -> None:
     gated_engine = SyncRuleEngine(
         SyncRulesConfig.model_validate(
             [
-                {"template": "prevent_regression"},
-                {"template": "require_completed_for_rating"},
+                {"template": "prevent-regression"},
+                {"template": "require-completed-for-rating"},
             ]
         )
     )
@@ -218,7 +218,7 @@ def test_sync_rules_require_completed_for_rating_template_is_opt_in() -> None:
     assert blocked == SyncRuleDecision(
         False,
         rating,
-        "require_completed_for_rating",
+        "require-completed-for-rating",
     )
     assert allowed == SyncRuleDecision(True, rating, "default")
 

@@ -183,9 +183,9 @@ def test_sync_rules_accepts_template_and_rule_items() -> None:
     """Sync rules should validate ordered template and rule items."""
     rules = SyncRulesConfig.model_validate(
         [
-            {"template": "prevent_regression"},
-            {"template": "promote_rewatch"},
-            {"template": "require_completed_for_rating"},
+            {"template": "prevent-regression"},
+            {"template": "promote-rewatch"},
+            {"template": "require-completed-for-rating"},
             {
                 "name": "Promote rewatch",
                 "selector": "record.status",

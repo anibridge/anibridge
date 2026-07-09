@@ -106,7 +106,7 @@ SYNC_RULE_TEMPLATES: Mapping[SyncRuleTemplateId, SyncRuleTemplate] = {
                     "and src.status == Status.ACTIVE"
                 ),
                 value="Status.REPEATING",
-                name="promote_rewatch",
+                name="promote-rewatch",
             ),
         ),
     ),
@@ -116,7 +116,7 @@ SYNC_RULE_TEMPLATES: Mapping[SyncRuleTemplateId, SyncRuleTemplate] = {
                 SyncRuleSelector.RECORD_RATING,
                 if_expr="not plan.completed",
                 skip=True,
-                name="require_completed_for_rating",
+                name="require-completed-for-rating",
             ),
         ),
     ),

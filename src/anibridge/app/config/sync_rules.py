@@ -39,9 +39,9 @@ class BaseStrEnum(StrEnum):
 class SyncRuleTemplateId(BaseStrEnum):
     """Built-in sync rule templates."""
 
-    PREVENT_REGRESSION = "prevent_regression"
-    PROMOTE_REWATCH = "promote_rewatch"
-    REQUIRE_COMPLETED_FOR_RATING = "require_completed_for_rating"
+    PREVENT_REGRESSION = "prevent-regression"
+    PROMOTE_REWATCH = "promote-rewatch"
+    REQUIRE_COMPLETED_FOR_RATING = "require-completed-for-rating"
 
 
 class SyncRuleSelector(BaseStrEnum):

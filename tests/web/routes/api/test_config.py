@@ -12,24 +12,24 @@ from anibridge.app.web.routes.api import config as config_api_module
 
 
 @pytest.mark.parametrize(
-    ("has_auth", "allow_without_auth", "expected_status"),
+    ("has_auth", "allow_config_without_auth", "expected_status"),
     [
-        pytest.param(False, False, 403, id="blocked-by-default"),
-        pytest.param(False, True, 200, id="explicit-override"),
+        pytest.param(False, False, 403, id="blocked-without-auth"),
         pytest.param(True, False, 200, id="configured-auth"),
+        pytest.param(False, True, 200, id="explicitly-allowed-without-auth"),
     ],
 )
 def test_config_api_access_policy(
     api_client_factory,
     set_config_api_access,
     has_auth: bool,
-    allow_without_auth: bool,
+    allow_config_without_auth: bool,
     expected_status: int,
 ) -> None:
     """Config API access policy should match web auth configuration."""
     set_config_api_access(
         has_auth=has_auth,
-        allow_config_without_auth=allow_without_auth,
+        allow_config_without_auth=allow_config_without_auth,
     )
 
     response = api_client_factory(config_api_module.router, "/api/config").get(
@@ -62,7 +62,6 @@ def test_require_config_api_access_can_fall_back_to_get_config(
         lambda: SimpleNamespace(
             web=SimpleNamespace(
                 has_auth=True,
-                allow_config_without_auth=False,
             )
         ),
     )
@@ -76,6 +75,12 @@ def test_get_configuration_success_and_error_translation(
     get_configuration = cast(
         Callable[[], config_api_module.ConfigDocumentResponse],
         config_api_module.get_configuration.fn,
+    )
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(web=SimpleNamespace(has_auth=True)),
+        raising=False,
     )
 
     monkeypatch.setattr(
@@ -135,6 +140,12 @@ async def test_update_configuration_success_and_error_translation(
     request = config_api_module.ConfigDocumentUpdateRequest(
         content="profiles: {}", expected_mtime=123
     )
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(web=SimpleNamespace(has_auth=True)),
+        raising=False,
+    )
 
     class _Service:
         async def save_text(self, content: str, expected_mtime: int | None):
@@ -186,6 +197,12 @@ async def test_update_configuration_structured_success_and_error_translation(
 ) -> None:
     request = config_api_module.ConfigStructuredUpdateRequest(
         settings={"profiles": {}}, expected_mtime=123
+    )
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(web=SimpleNamespace(has_auth=True)),
+        raising=False,
     )
 
     class _Service:

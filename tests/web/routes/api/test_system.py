@@ -35,6 +35,7 @@ def system_client(api_client_for):
 
 def test_api_restart_requests_scheduler_shutdown(
     patch_app_state,
+    set_config_api_access,
     scheduler_stub_cls,
 ) -> None:
     """Restart endpoint should mark restart and request scheduler shutdown."""
@@ -42,6 +43,7 @@ def test_api_restart_requests_scheduler_shutdown(
         Callable[[], system_api_module.RestartResponse],
         system_api_module.api_restart.fn,
     )
+    set_config_api_access(has_auth=True)
     scheduler = scheduler_stub_cls()
     state = patch_app_state(system_api_module, scheduler=scheduler)
 
@@ -53,12 +55,13 @@ def test_api_restart_requests_scheduler_shutdown(
     assert scheduler.shutdown_requested is True
 
 
-def test_api_restart_requires_scheduler(patch_app_state) -> None:
+def test_api_restart_requires_scheduler(patch_app_state, set_config_api_access) -> None:
     """Restart endpoint should fail when scheduler is unavailable."""
     api_restart = cast(
         Callable[[], system_api_module.RestartResponse],
         system_api_module.api_restart.fn,
     )
+    set_config_api_access(has_auth=True)
     patch_app_state(system_api_module, scheduler=None)
 
     with raises(SchedulerUnavailableError):
@@ -66,10 +69,11 @@ def test_api_restart_requires_scheduler(patch_app_state) -> None:
 
 
 @pytest.mark.parametrize(
-    ("allow_without_auth", "expected_status", "restart_requested"),
+    ("has_auth", "allow_config_without_auth", "expected_status", "restart_requested"),
     [
-        pytest.param(False, 403, False, id="blocked-without-override"),
-        pytest.param(True, 202, True, id="allowed-with-override"),
+        pytest.param(False, False, 403, False, id="blocked-without-auth"),
+        pytest.param(True, False, 202, True, id="allowed-with-auth"),
+        pytest.param(False, True, 202, True, id="allowed-explicitly-without-auth"),
     ],
 )
 def test_restart_api_access_policy(
@@ -77,12 +81,16 @@ def test_restart_api_access_policy(
     system_client,
     set_config_api_access,
     scheduler_stub_cls,
-    allow_without_auth: bool,
+    has_auth: bool,
+    allow_config_without_auth: bool,
     expected_status: int,
     restart_requested: bool,
 ) -> None:
     """Restart API should follow the shared config API access policy."""
-    set_config_api_access(allow_config_without_auth=allow_without_auth)
+    set_config_api_access(
+        has_auth=has_auth,
+        allow_config_without_auth=allow_config_without_auth,
+    )
     scheduler = scheduler_stub_cls()
     state = patch_app_state(system_api_module, scheduler=scheduler)
 

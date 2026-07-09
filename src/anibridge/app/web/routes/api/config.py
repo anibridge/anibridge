@@ -53,7 +53,7 @@ class ConfigDocumentResponse(msgspec.Struct):
                     "Parsed configuration mapping for the guided UI. Null when the "
                     "current YAML cannot be parsed into a mapping."
                 ),
-                examples=[{"global_config": {}, "profiles": {}}],
+                examples=[{"profiles": {}}],
             ),
         ]
         | None
@@ -116,7 +116,7 @@ class ConfigStructuredUpdateRequest(msgspec.Struct):
         dict[str, object],
         msgspec.Meta(
             description="Structured AniBridge configuration payload for the guided UI.",
-            examples=[{"global_config": {}, "profiles": {}}],
+            examples=[{"profiles": {}}],
         ),
     ]
     expected_mtime: (
@@ -174,18 +174,18 @@ class ConfigUpdateResponse(msgspec.Struct):
 
 
 def require_config_api_access() -> None:
-    """Ensure configuration API access is not exposed without explicit opt-in."""
+    """Ensure configuration API access is only exposed with configured auth."""
     config = globals().get("runtime_config") or get_config()
     web_config = config.web
-    if web_config.has_auth or web_config.allow_config_without_auth:
+    if getattr(web_config, "allows_config_api", web_config.has_auth):
         return
 
     raise HTTPException(
         status_code=403,
         detail=(
             "Configuration API is disabled when web authentication is not configured. "
-            "Configure web.basic_auth or set "
-            "web.allow_config_without_auth=true to override."
+            "Configure web.basic_auth or set web.allow_config_without_auth to enable "
+            "configuration editing."
         ),
     )
 

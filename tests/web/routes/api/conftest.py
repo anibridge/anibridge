@@ -74,7 +74,7 @@ def set_config_api_access(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None
             SimpleNamespace(
                 web=SimpleNamespace(
                     has_auth=has_auth,
-                    allow_config_without_auth=allow_config_without_auth,
+                    allows_config_api=has_auth or allow_config_without_auth,
                 )
             ),
             raising=False,

@@ -11,7 +11,6 @@ from anibridge.app.config.settings import (
     AnibridgeConfig,
     AnibridgeProfileConfig,
     BasicAuthConfig,
-    ScanMode,
     SyncRulesConfig,
     WebConfig,
     find_yaml_config_file,
@@ -22,10 +21,7 @@ from anibridge.app.config.sync_rules import (
     SyncRuleTemplateId,
     SyncRuleTemplateItem,
 )
-from anibridge.app.exceptions import (
-    ProfileConfigError,
-    ProfileNotFoundError,
-)
+from anibridge.app.exceptions import ProfileNotFoundError
 
 
 @pytest.fixture(autouse=True)
@@ -61,105 +57,15 @@ def test_environment_values_override_yaml_config(
     assert config.threads == 8
 
 
-def test_profile_parent_requires_assignment() -> None:
-    """Test that accessing parent on unassigned profile raises ProfileConfigError."""
-    profile = AnibridgeProfileConfig(
-        source_provider_config={
-            "plex": {
-                "token": SecretStr("plex-token"),
-                "user": "eliasbenb",
-                "url": "http://plex:32400",
-            },
-        },
-    )
-
-    with pytest.raises(ProfileConfigError):
-        _ = profile.parent
-
-
-def test_config_creates_default_profile_from_globals() -> None:
-    """Test that AnibridgeConfig creates a default profile from global settings."""
+def test_profile_provider_config_is_explicit_per_profile() -> None:
+    """Provider config should come directly from the profile payload."""
     config = AnibridgeConfig(
-        global_config=AnibridgeProfileConfig(
-            source_provider_config={
-                "plex": {
-                    "token": "plex-token",
-                    "user": "eliasbenb",
-                    "url": "http://plex:32400",
-                    "sections": ["Anime"],
-                },
-            },
-            target_provider_config={"anilist": {"token": "anilist-token"}},
-        )
-    )
-
-    profile = config.get_profile("default")
-    target_config = cast(dict[str, Any], profile.target_provider_config["anilist"])
-    source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
-
-    assert profile.parent is config
-    assert target_config["token"] == "anilist-token"
-    assert source_config["token"] == "plex-token"
-    assert source_config["user"] == "eliasbenb"
-    assert source_config["url"] == "http://plex:32400"
-    assert source_config["sections"] == ["Anime"]
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        pytest.param("", "", id="empty"),
-        pytest.param("/", "", id="root"),
-        pytest.param("anibridge", "/anibridge", id="adds-leading-slash"),
-        pytest.param("/anibridge/", "/anibridge", id="strips-trailing-slash"),
-        pytest.param(" /nested/path/ ", "/nested/path", id="trims-whitespace"),
-    ],
-)
-def test_web_config_normalizes_path_prefix(raw: str, expected: str) -> None:
-    config = WebConfig(path_prefix=raw)
-
-    assert config.path_prefix == expected
-
-
-def test_config_profile_inherits_global_values() -> None:
-    """Test that a profile inherits global settings from AnibridgeConfig."""
-    config = AnibridgeConfig(
-        global_config=AnibridgeProfileConfig(
-            source_provider_config={
-                "plex": {"url": "http://global"},
-            }
-        ),
-        profiles={
-            "primary": AnibridgeProfileConfig(
-                source_provider_config={
-                    "anilist": {"token": "anilist-token"},
-                }
-            )
-        },
-    )
-
-    profile = config.get_profile("primary")
-    source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
-
-    assert source_config["url"] == "http://global"
-
-
-def test_provider_config_merges_one_level_per_namespace() -> None:
-    """Test provider config merge keeps global keys and applies profile overrides."""
-    config = AnibridgeConfig(
-        global_config=AnibridgeProfileConfig(
-            source_provider_config={
-                "plex": {
-                    "url": "http://global",
-                    "token": "global-token",
-                    "advanced": {"timeout": 30, "retry": 2},
-                }
-            }
-        ),
         profiles={
             "primary": AnibridgeProfileConfig(
                 source_provider_config={
                     "plex": {
+                        "url": "http://profile",
+                        "token": "profile-token",
                         "sections": ["Anime"],
                         "advanced": {"timeout": 60},
                     }
@@ -171,10 +77,42 @@ def test_provider_config_merges_one_level_per_namespace() -> None:
     profile = config.get_profile("primary")
     source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
 
-    assert source_config["url"] == "http://global"
-    assert source_config["token"] == "global-token"
+    assert source_config["url"] == "http://profile"
+    assert source_config["token"] == "profile-token"
     assert source_config["sections"] == ["Anime"]
     assert source_config["advanced"] == {"timeout": 60}
+
+
+def test_global_config_merges_into_profiles() -> None:
+    """Global profile config should provide defaults for explicit profiles."""
+    config = AnibridgeConfig(
+        global_config=AnibridgeProfileConfig(
+            source_provider="plex",
+            source_provider_config={
+                "plex": {
+                    "url": "http://global",
+                    "token": "global-token",
+                }
+            },
+        ),
+        profiles={
+            "primary": AnibridgeProfileConfig(
+                target_provider="anilist",
+                source_provider_config={"plex": {"sections": ["Anime"]}},
+            )
+        },
+    )
+
+    profile = config.get_profile("primary")
+    source_config = cast(dict[str, Any], profile.source_provider_config["plex"])
+
+    assert profile.source_provider == "plex"
+    assert profile.target_provider == "anilist"
+    assert source_config == {
+        "url": "http://global",
+        "token": "global-token",
+        "sections": ["Anime"],
+    }
 
 
 def test_provider_config_requires_namespace_mapping() -> None:
@@ -305,28 +243,38 @@ def test_sync_rules_rejects_rule_without_single_action() -> None:
         )
 
 
-def test_web_config_reports_auth_configuration_state(tmp_path: Path) -> None:
+def test_web_config_reports_auth_configuration_state() -> None:
     """WebConfig should correctly report whether authentication is configured."""
     default = WebConfig()
     assert default.has_auth is False
+    assert default.allows_config_api is False
 
     with_credentials = WebConfig(
         basic_auth=BasicAuthConfig(username="admin", password=SecretStr("secret"))
     )
     assert with_credentials.has_auth is True
+    assert with_credentials.allows_config_api is True
 
-    htpasswd = tmp_path / "htpasswd"
-    htpasswd.write_text("user:$apr1$hash", encoding="utf-8")
-    with_htpasswd = WebConfig(basic_auth=BasicAuthConfig(htpasswd_path=htpasswd))
+    with_htpasswd = WebConfig(basic_auth=BasicAuthConfig(htpasswd_path=Path("users")))
     assert with_htpasswd.has_auth is True
+    assert with_htpasswd.allows_config_api is True
+
+    without_auth_override = WebConfig(allow_config_without_auth=True)
+    assert without_auth_override.has_auth is False
+    assert without_auth_override.allows_config_api is True
 
 
-def test_unconfigured_config_allows_config_api_without_auth() -> None:
-    """Default/unconfigured app should allow config API access without auth."""
-    config = AnibridgeConfig()
-
-    assert config.web.has_auth is False
-    assert config.web.allow_config_without_auth is True
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param("", "", id="empty"),
+        pytest.param("/", "", id="root"),
+        pytest.param("anibridge", "/anibridge", id="adds-leading-slash"),
+        pytest.param("/anibridge/", "/anibridge", id="strips-trailing-slash"),
+    ],
+)
+def test_web_config_normalizes_path_prefix(raw: str, expected: str) -> None:
+    assert WebConfig(path_prefix=raw).path_prefix == expected
 
 
 def test_config_schema_includes_extra_behavior_metadata() -> None:
@@ -340,14 +288,6 @@ def test_config_schema_includes_extra_behavior_metadata() -> None:
     )
     assert definitions["WebConfig"]["x-anibridge-extraBehavior"] == "ignore"
     assert definitions["BasicAuthConfig"]["x-anibridge-extraBehavior"] == "ignore"
-
-
-def test_profile_merge_globals_no_parent_returns_self() -> None:
-    """Profile config merge should be a no-op when no parent is assigned."""
-    profile = AnibridgeProfileConfig(scan_modes=[ScanMode.POLL])
-
-    assert profile._merge_globals() is profile
-    assert profile.scan_modes == [ScanMode.POLL]
 
 
 def test_config_data_path_uses_environment_variable(
@@ -364,7 +304,6 @@ def test_partial_basic_auth_credentials_are_cleared() -> None:
     config = AnibridgeConfig(
         web=WebConfig(
             basic_auth=BasicAuthConfig(username="admin", password=None),
-            allow_config_without_auth=False,
         )
     )
 
@@ -372,13 +311,12 @@ def test_partial_basic_auth_credentials_are_cleared() -> None:
     assert config.web.basic_auth.password is None
 
 
-def test_invalid_htpasswd_path_is_rejected(tmp_path: Path) -> None:
-    """Configured htpasswd files must exist on disk."""
-    with pytest.raises(ValueError, match="htpasswd_path"):
+def test_missing_htpasswd_file_is_rejected(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.htpasswd"
+
+    with pytest.raises(ValueError, match="htpasswd file does not exist"):
         AnibridgeConfig(
-            web=WebConfig(
-                basic_auth=BasicAuthConfig(htpasswd_path=tmp_path / "missing")
-            )
+            web=WebConfig(basic_auth=BasicAuthConfig(htpasswd_path=missing))
         )
 
 
@@ -386,6 +324,7 @@ def test_config_string_and_default_template_helpers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Config helpers should render readable summaries and create default templates."""
+    monkeypatch.setenv("AB_DATA_PATH", str(tmp_path))
     config = AnibridgeConfig(profiles={"alpha": AnibridgeProfileConfig()})
     assert "alpha" in str(config)
     assert "1 profile" in str(config)
@@ -394,15 +333,17 @@ def test_config_string_and_default_template_helpers(
     assert template.startswith("################################################")
     assert "# profiles:" in template
 
-    monkeypatch.setenv("AB_DATA_PATH", str(tmp_path))
     created = settings_module._ensure_default_config_file()
     assert created.exists()
     assert created.read_text(encoding="utf-8").startswith("################")
     assert settings_module._ensure_default_config_file() == created
 
 
-def test_threads_defaults_to_profile_count_plus_one() -> None:
+def test_threads_defaults_to_profile_count_plus_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Thread count should default to len(profiles) + 1 when not set."""
+    monkeypatch.setenv("AB_DATA_PATH", str(tmp_path))
     config = AnibridgeConfig(
         profiles={
             "a": AnibridgeProfileConfig(),
@@ -414,22 +355,23 @@ def test_threads_defaults_to_profile_count_plus_one() -> None:
     assert config.threads == 4
 
 
-def test_threads_defaults_to_one_with_no_profiles() -> None:
+def test_threads_defaults_to_one_with_no_profiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Thread count should be 1 when there are no profiles and threads is unset."""
+    monkeypatch.setenv("AB_DATA_PATH", str(tmp_path))
     config = AnibridgeConfig()
 
     assert config.threads == 1
 
 
-def test_threads_defaults_to_two_with_implicit_default_profile() -> None:
-    """Implicit default profile from globals should count toward thread default."""
+def test_global_config_creates_implicit_default_profile() -> None:
+    """Global-only config should create a default profile."""
     config = AnibridgeConfig(
-        global_config=AnibridgeProfileConfig(
-            source_provider_config={"plex": {"url": "http://plex:32400"}},
-        )
+        global_config=AnibridgeProfileConfig(source_provider="plex")
     )
 
-    assert "default" in config.profiles
+    assert config.profiles["default"].source_provider == "plex"
     assert config.threads == 2
 
 

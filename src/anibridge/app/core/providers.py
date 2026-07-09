@@ -83,14 +83,19 @@ def _register_classes(class_paths: Iterable[str]) -> None:
         _LOADED_CLASSES.add(class_path)
 
 
+def _collect_class_overrides(config: AnibridgeConfig | None) -> set[str]:
+    """Return custom provider class paths from root configuration."""
+    return set(config.provider_classes or ()) if config is not None else set()
+
+
 def build_provider(
     namespace: str,
     config: ProviderNamespaceConfigMap,
-    profile: AnibridgeProfileConfig,
+    provider_classes: Iterable[str] = (),
 ) -> Provider:
     """Instantiate provider endpoint for a profile."""
     _register_classes(_DEFAULT_PROVIDER_CLASSES)
-    _register_classes(set(profile.parent.provider_classes or ()))
+    _register_classes(set(provider_classes))
 
     if not namespace:
         raise ProfileConfigError("Provider namespace must be configured")
@@ -118,12 +123,16 @@ def build_provider(
         ) from exc
 
 
-def build_profile_providers(profile: AnibridgeProfileConfig) -> dict[Role, Provider]:
+def build_profile_providers(
+    profile: AnibridgeProfileConfig,
+    config: AnibridgeConfig | None = None,
+) -> dict[Role, Provider]:
     """Instantiate the configured source and target providers for a profile."""
+    provider_classes = _collect_class_overrides(config)
     source_provider = build_provider(
-        profile.source_provider, profile.source_provider_config, profile
+        profile.source_provider, profile.source_provider_config, provider_classes
     )
     target_provider = build_provider(
-        profile.target_provider, profile.target_provider_config, profile
+        profile.target_provider, profile.target_provider_config, provider_classes
     )
     return {Role.SOURCE: source_provider, Role.TARGET: target_provider}

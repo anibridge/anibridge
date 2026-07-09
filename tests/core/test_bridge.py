@@ -169,7 +169,6 @@ def _config(
     )
     global_config = AnibridgeConfig(profiles={"default": profile})
     global_config.__dict__["data_path"] = tmp_path
-    profile._parent = global_config
     return global_config, profile
 
 
@@ -189,7 +188,7 @@ def _bridge(
     monkeypatch.setattr(
         bridge_module,
         "build_profile_providers",
-        lambda _profile: {Role.SOURCE: source, Role.TARGET: target},
+        lambda _profile, _config: {Role.SOURCE: source, Role.TARGET: target},
     )
     global_config, profile = _config(tmp_path, **profile_overrides)
     return BridgeClient(

@@ -64,7 +64,7 @@ class BridgeClient:
         self.global_config = global_config
         self.animap_client = shared_animap_client
 
-        providers = build_profile_providers(profile_config)
+        providers = build_profile_providers(profile_config, global_config)
         self.source_provider: Provider = providers[Role.SOURCE]
         self.target_provider: Provider = providers[Role.TARGET]
 

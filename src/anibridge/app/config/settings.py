@@ -105,6 +105,10 @@ class WebConfig(BaseModel):
     basic_auth: BasicAuthConfig = Field(
         default_factory=BasicAuthConfig, description="Authentication settings"
     )
+    allow_config_without_auth: bool = Field(
+        default=False,
+        description="Allow configuration API access without web authentication",
+    )
 
     @field_validator("path_prefix", mode="before")
     @classmethod
@@ -127,6 +131,11 @@ class WebConfig(BaseModel):
             and self.basic_auth.password.get_secret_value()
         )
         return has_static_credentials or self.basic_auth.htpasswd_path is not None
+
+    @property
+    def allows_config_api(self) -> bool:
+        """Whether configuration endpoints may be exposed."""
+        return self.has_auth or self.allow_config_without_auth
 
 
 class AnibridgeProfileConfig(BaseModel):
@@ -188,48 +197,38 @@ class AnibridgeProfileConfig(BaseModel):
         description="Target provider configuration payloads by provider namespace",
     )
 
-    _parent: AnibridgeConfig | None = None
 
-    @property
-    def parent(self) -> AnibridgeConfig:
-        """Get the parent multi-config instance."""
-        if not self._parent:
-            raise ProfileConfigError(
-                "This configuration is not part of a multi-config instance"
+def _merge_provider_config(
+    global_config: ProviderNamespaceConfigMap,
+    profile_config: ProviderNamespaceConfigMap,
+) -> ProviderNamespaceConfigMap:
+    """Merge provider namespace maps one level deep."""
+    merged = {**global_config}
+    for namespace, settings in profile_config.items():
+        global_settings = merged.get(namespace)
+        merged[namespace] = (
+            {**global_settings, **settings}
+            if isinstance(global_settings, dict) and isinstance(settings, dict)
+            else settings
+        )
+    return merged
+
+
+def _merge_profile_config(
+    global_config: AnibridgeProfileConfig,
+    profile_config: AnibridgeProfileConfig,
+) -> AnibridgeProfileConfig:
+    """Return a profile with explicit values layered over global defaults."""
+    updates = profile_config.model_dump(mode="python", exclude_unset=True)
+    for field_name in ("source_provider_config", "target_provider_config"):
+        if (
+            field_name in global_config.model_fields_set
+            or field_name in profile_config.model_fields_set
+        ):
+            updates[field_name] = _merge_provider_config(
+                getattr(global_config, field_name), getattr(profile_config, field_name)
             )
-        return self._parent
-
-    def _merge_globals(self) -> AnibridgeProfileConfig:
-        """Merge global settings from the parent config into this profile config."""
-        if not self._parent:
-            return self
-
-        for field in self.__class__.model_fields:
-            if field in ("source_provider_config", "target_provider_config"):
-                # Special handling to merge provider configs one level deep.
-                global_providers = getattr(self._parent.global_config, field)
-                profile_providers = getattr(self, field)
-                merged_providers = {**global_providers}
-                for provider_namespace, provider_settings in profile_providers.items():
-                    global_settings = global_providers.get(provider_namespace)
-                    if isinstance(global_settings, dict) and isinstance(
-                        provider_settings, dict
-                    ):
-                        merged_providers[provider_namespace] = {
-                            **global_settings,
-                            **provider_settings,
-                        }
-                    else:
-                        merged_providers[provider_namespace] = provider_settings
-                setattr(self, field, merged_providers)
-            elif field in self.model_fields_set:  # Field set on profile level
-                continue
-            else:  # Inherit from global if not set
-                if field not in self._parent.global_config.model_fields_set:
-                    continue
-                global_value = getattr(self._parent.global_config, field)
-                setattr(self, field, global_value)
-        return self
+    return global_config.model_copy(update=updates, deep=True)
 
 
 def _iter_model_types(annotation: Any) -> set[type[BaseModel]]:
@@ -274,13 +273,13 @@ class AnibridgeConfig(BaseSettings):
     """Multi-configuration manager for AniBridge application.
 
     Configuration is sourced from a YAML file (optionally combined with
-    parameters passed directly to the model). Global settings are shared across
-    all profiles, while profile-specific settings override those defaults.
+    parameters passed directly to the model). Each profile is explicit and
+    self-contained.
     """
 
     global_config: AnibridgeProfileConfig = Field(
         default_factory=AnibridgeProfileConfig,
-        description="Global configuration settings",
+        description="Default profile settings inherited by configured profiles",
     )
     profiles: dict[str, AnibridgeProfileConfig] = Field(
         default_factory=dict, description="AniBridge profile configurations"
@@ -318,28 +317,15 @@ class AnibridgeConfig(BaseSettings):
         return Path(os.getenv("AB_DATA_PATH", "./data")).resolve()
 
     @model_validator(mode="after")
-    def validate_global_config(self) -> AnibridgeConfig:
-        """Validates global configuration settings."""
-        if (
-            not self.model_fields_set
-            and not self.profiles
-            and not self.global_config.model_fields_set
-            and not self.web.has_auth
-        ):
-            self.web.allow_config_without_auth = True
-
-        # If there are no explicit profiles, attempt to bootstrap a default from globals
+    def validate_config(self) -> AnibridgeConfig:
+        """Validate configuration settings."""
         if not self.profiles and self.global_config.model_fields_set:
-            log.info(
-                "No profiles configured; creating implicit 'default' profile from "
-                "globals"
-            )
-            self.profiles["default"] = self.global_config.model_copy()
-
-        # Merge global settings into each profile
-        for profile in self.profiles.values():
-            profile._parent = self
-            profile._merge_globals()
+            self.profiles["default"] = self.global_config.model_copy(deep=True)
+        else:
+            self.profiles = {
+                name: _merge_profile_config(self.global_config, profile)
+                for name, profile in self.profiles.items()
+            }
 
         # Default thread count to len(profiles) + 1 when not explicitly set
         if self.threads is None:

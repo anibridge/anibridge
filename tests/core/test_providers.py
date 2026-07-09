@@ -79,9 +79,6 @@ def test_build_provider_raises_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing providers should raise ProfileConfigError."""
-    profile = SimpleNamespace(
-        parent=DummyConfig(provider_classes=[]),
-    )
 
     def fake_create(_namespace: str, logger: Logger, config=None):
         raise LookupError("missing")
@@ -92,7 +89,6 @@ def test_build_provider_raises_when_missing(
         providers_module.build_provider(
             "missing",
             {},
-            cast("providers_module.AnibridgeProfileConfig", profile),
         )
 
 
@@ -101,7 +97,6 @@ def test_build_provider_registers_default_providers(
 ) -> None:
     """AniList and Plex should be available without explicit provider_classes."""
     registered: list[str] = []
-    profile = SimpleNamespace(parent=DummyConfig(provider_classes=[]))
 
     def fake_register_classes(class_paths) -> None:
         registered.extend(class_paths)
@@ -120,7 +115,6 @@ def test_build_provider_registers_default_providers(
         providers_module.build_provider(
             "missing",
             {},
-            cast("providers_module.AnibridgeProfileConfig", profile),
         )
 
     assert registered == list(providers_module._DEFAULT_PROVIDER_CLASSES)
@@ -130,7 +124,6 @@ def test_build_provider_selects_namespace_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Provider instances should receive only their namespace-specific config."""
-    profile = SimpleNamespace(parent=DummyConfig(provider_classes=[]))
     captured_config: dict[str, object] | None = None
 
     class FakeProvider(Provider):
@@ -163,7 +156,6 @@ def test_build_provider_selects_namespace_config(
             "plex": {"url": "http://plex:32400", "token": "plex-token"},
             "emby": {"url": "http://emby:8096"},
         },
-        cast("providers_module.AnibridgeProfileConfig", profile),
     )
 
     assert isinstance(provider, FakeProvider)

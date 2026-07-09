@@ -27,7 +27,8 @@
         ProfileStatus,
         StatusResponse,
     } from "$lib/types/api";
-    import { apiFetch, buildWebSocketUrl, isAbortError } from "$lib/utils/api";
+    import { apiFetch, isAbortError } from "$lib/utils/api";
+    import { createJsonWebSocket } from "$lib/utils/json-websocket";
     import { toast } from "$lib/utils/notify";
     import {
         progressCount,
@@ -62,13 +63,35 @@
     }> | null = $state(null);
 
     let currentAbort: AbortController | null = null;
-    let statusWs: WebSocket | null = null;
-    let historyWs: WebSocket | null = null;
-    let statusReconnect: ReturnType<typeof setTimeout> | null = null;
-    let historyReconnect: ReturnType<typeof setTimeout> | null = null;
     let mounted = false;
-    let destroyed = false;
     let activeProfile = "";
+
+    const statusSocket = createJsonWebSocket<Partial<StatusResponse>>({
+        path: "/ws/status",
+        reconnectMs: 2500,
+        onMessage: (data) => {
+            if (data.profiles) profiles = data.profiles;
+        },
+    });
+
+    const historySocket = createJsonWebSocket<{ latest_group_id?: number | null }>({
+        path: () => {
+            if (!profile) return null;
+            const params = new SvelteURLSearchParams();
+            if (activeOutcome) params.set("outcome", activeOutcome);
+            const suffix = params.toString() ? `?${params.toString()}` : "";
+            return `/ws/history/${encodeURIComponent(profile)}${suffix}`;
+        },
+        reconnectMs: 2500,
+        onMessage: (data) => {
+            const nextLatest = data.latest_group_id ?? null;
+            if (nextLatest && latestGroupId && nextLatest > latestGroupId) {
+                void loadHistory("newer");
+            } else if (nextLatest && !latestGroupId) {
+                void loadHistory("replace");
+            }
+        },
+    });
 
     const profileStatus = $derived<ProfileStatus | null>(profiles[profile] ?? null);
     const currentSync = $derived(profileStatus?.status?.current_sync ?? null);
@@ -204,7 +227,7 @@
         nextBeforeId = null;
         latestGroupId = null;
         await loadHistory("replace");
-        openHistoryWs();
+        historySocket.reconnect();
     }
 
     async function syncProfile(trigger: "manual" | "poll") {
@@ -343,65 +366,18 @@
         }
     }
 
-    function openStatusWs() {
-        if (destroyed) return;
-        statusWs?.close();
-        if (statusReconnect) clearTimeout(statusReconnect);
-        statusWs = new WebSocket(buildWebSocketUrl("/ws/status"));
-        statusWs.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data) as Partial<StatusResponse>;
-                if (data.profiles) profiles = data.profiles;
-            } catch {}
-        };
-        statusWs.onclose = () => {
-            if (!destroyed) statusReconnect = setTimeout(openStatusWs, 2500);
-        };
-    }
-
-    function openHistoryWs() {
-        if (destroyed || !profile) return;
-        historyWs?.close();
-        if (historyReconnect) clearTimeout(historyReconnect);
-        const params = new SvelteURLSearchParams();
-        if (activeOutcome) params.set("outcome", activeOutcome);
-        const suffix = params.toString() ? `?${params.toString()}` : "";
-        historyWs = new WebSocket(
-            buildWebSocketUrl(`/ws/history/${encodeURIComponent(profile)}${suffix}`),
-        );
-        historyWs.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data) as {
-                    latest_group_id?: number | null;
-                };
-                const nextLatest = data.latest_group_id ?? null;
-                if (nextLatest && latestGroupId && nextLatest > latestGroupId) {
-                    void loadHistory("newer");
-                } else if (nextLatest && !latestGroupId) {
-                    void loadHistory("replace");
-                }
-            } catch {}
-        };
-        historyWs.onclose = () => {
-            if (!destroyed) historyReconnect = setTimeout(openHistoryWs, 2500);
-        };
-    }
-
     onMount(() => {
         mounted = true;
         activeProfile = profile;
         void loadStatus();
         void loadHistory("replace");
-        openStatusWs();
-        openHistoryWs();
+        statusSocket.connect();
+        historySocket.connect();
 
         return () => {
-            destroyed = true;
             currentAbort?.abort();
-            statusWs?.close();
-            historyWs?.close();
-            if (statusReconnect) clearTimeout(statusReconnect);
-            if (historyReconnect) clearTimeout(historyReconnect);
+            statusSocket.close();
+            historySocket.close();
         };
     });
 
@@ -415,7 +391,7 @@
         latestGroupId = null;
         void loadStatus();
         void loadHistory("replace");
-        openHistoryWs();
+        historySocket.reconnect();
     });
 </script>
 

@@ -23,14 +23,25 @@
     import { Tooltip } from "bits-ui";
 
     import ToastHost from "$lib/components/toast-host.svelte";
-    import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
+    import { apiFetch } from "$lib/utils/api";
+    import { createJsonWebSocket } from "$lib/utils/json-websocket";
 
     let { children } = $props();
     let version = $state("?");
     let gitHash = $state("");
     let sidebarOpen = $state(false);
-    let ws: WebSocket | null = null;
     let isWsOpen = $state(false);
+
+    const statusSocket = createJsonWebSocket({
+        path: "/ws/status",
+        reconnectMs: 3000,
+        onOpen: () => {
+            isWsOpen = true;
+        },
+        onClose: () => {
+            isWsOpen = false;
+        },
+    });
 
     function active(href: string, rootMatch = false) {
         const path = page.url.pathname;
@@ -48,23 +59,10 @@
         } catch {}
     }
 
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
-        ws.onopen = () => {
-            isWsOpen = true;
-        };
-        ws.onclose = () => {
-            isWsOpen = false;
-            setTimeout(openWs, 3000);
-        };
-    }
-
     onMount(() => {
         loadMeta();
-        openWs();
+        statusSocket.connect();
+        return () => statusSocket.close();
     });
 </script>
 

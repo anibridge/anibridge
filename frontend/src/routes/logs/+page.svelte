@@ -18,7 +18,8 @@
 
     import PageHeader from "$lib/components/page-header.svelte";
     import type { LogEntry, LogFile } from "$lib/types/api";
-    import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
+    import { apiFetch } from "$lib/utils/api";
+    import { createJsonWebSocket } from "$lib/utils/json-websocket";
     import { toast } from "$lib/utils/notify";
 
     let tab = $state<"live" | "history">("live");
@@ -28,7 +29,6 @@
     let autoScroll = $state(true);
     let logs: LogEntry[] = $state([]);
     let filtered: LogEntry[] = $state([]);
-    let ws: WebSocket | null = null;
     let isWsOpen = $state(false);
     let lastReceived: number | null = $state(null);
     let files: LogFile[] = $state([]);
@@ -49,6 +49,23 @@
         WARNING: 30,
         ERROR: 40,
     };
+
+    const logSocket = createJsonWebSocket<LogEntry>({
+        path: "/ws/logs",
+        reconnectMs: 2000,
+        onOpen: () => {
+            isWsOpen = true;
+        },
+        onClose: () => {
+            isWsOpen = false;
+        },
+        onMessage: (data) => {
+            logs.push(data);
+            lastReceived = Date.now();
+            applyFilter();
+            if (autoScroll && tab === "live") scrollToBottom("live");
+        },
+    });
 
     function levelRank(l: string) {
         return LEVEL_ORDER[l] ?? 0;
@@ -117,29 +134,6 @@
     function scrollToBottom(which: "live" | "history") {
         const el = which === "live" ? liveScroller : historyScroller;
         if (el) el.scrollTop = el.scrollHeight;
-    }
-
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/logs"));
-        ws.onopen = () => {
-            isWsOpen = true;
-        };
-        ws.onmessage = (ev) => {
-            try {
-                const d = JSON.parse(ev.data);
-                logs.push(d);
-                lastReceived = Date.now();
-                applyFilter();
-                if (autoScroll && tab === "live") scrollToBottom("live");
-            } catch {}
-        };
-        ws.onclose = () => {
-            isWsOpen = false;
-            setTimeout(openWs, 2000);
-        };
     }
 
     async function refreshFiles() {
@@ -276,7 +270,7 @@
 
     onMount(() => {
         loadPrefs();
-        openWs();
+        logSocket.connect();
         refreshFiles();
         const updateIsMobile = () => {
             isMobile = window.innerWidth < 640; // Tailwind sm breakpoint
@@ -286,7 +280,10 @@
         };
         updateIsMobile();
         window.addEventListener("resize", updateIsMobile);
-        return () => window.removeEventListener("resize", updateIsMobile);
+        return () => {
+            logSocket.close();
+            window.removeEventListener("resize", updateIsMobile);
+        };
     });
 
     $effect(() => {

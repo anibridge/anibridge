@@ -18,7 +18,8 @@
     import PageHeader from "$lib/components/page-header.svelte";
     import Skeleton from "$lib/components/skeleton.svelte";
     import type { ProfileStatus, StatusResponse } from "$lib/types/api";
-    import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
+    import { apiFetch, apiJson } from "$lib/utils/api";
+    import { createJsonWebSocket } from "$lib/utils/json-websocket";
     import { toast } from "$lib/utils/notify";
     import {
         progressCount,
@@ -30,8 +31,18 @@
 
     let profiles: StatusResponse["profiles"] = $state({});
     let isLoading = $state(true);
-    let ws: WebSocket | null = $state(null);
     let reinitializingProfiles: Record<string, boolean> = $state({});
+
+    const statusSocket = createJsonWebSocket<Partial<StatusResponse>>({
+        path: "/ws/status",
+        reconnectMs: 2000,
+        onMessage: (data) => {
+            if (data.profiles) {
+                profiles = data.profiles;
+                isLoading = false;
+            }
+        },
+    });
 
     function profileEntries() {
         return Object.entries(profiles).sort((a, b) => a[0].localeCompare(b[0]));
@@ -93,25 +104,6 @@
             console.error("Failed to load status", e);
             toast("Failed to load status", "error");
         }
-    }
-
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
-        ws.onmessage = (ev) => {
-            try {
-                const data = JSON.parse(ev.data);
-                if (data.profiles) {
-                    profiles = data.profiles;
-                    isLoading = false;
-                }
-            } catch {}
-        };
-        ws.onclose = () => {
-            setTimeout(openWs, 2000);
-        };
     }
 
     async function syncAll(trigger: "manual" | "poll") {
@@ -189,7 +181,8 @@
 
     onMount(() => {
         refresh();
-        openWs();
+        statusSocket.connect();
+        return () => statusSocket.close();
     });
 </script>
 

@@ -23,7 +23,7 @@ from pydantic_settings import (
 )
 
 from anibridge.app.config.sync_rules import BaseStrEnum, SyncRulesConfig
-from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
+from anibridge.app.exceptions import ProfileNotFoundError
 from anibridge.app.logging import get_logger
 from anibridge.app.utils.cron import CronStr
 
@@ -100,16 +100,7 @@ class WebConfig(BaseModel):
     port: int = Field(default=4848, description="Port for the web server")
     path_prefix: str = Field(
         default="",
-        description="Web serverpath prefix that AniBridge should be served from",
-    )
-    allow_config_without_auth: bool = Field(
-        default=False,
-        description=(
-            "Expose the configuration API (read and write) without requiring "
-            "authentication. Enable only if access is restricted by other means (e.g., "
-            "reverse proxy firewall). Ignored if authentication is configured via "
-            " basic_auth."
-        ),
+        description="Root-relative path prefix for serving the AniBridge web app",
     )
     basic_auth: BasicAuthConfig = Field(
         default_factory=BasicAuthConfig, description="Authentication settings"
@@ -130,14 +121,12 @@ class WebConfig(BaseModel):
     @property
     def has_auth(self) -> bool:
         """Whether web authentication is configured."""
-        return bool(
-            (
-                self.basic_auth.username
-                and self.basic_auth.password is not None
-                and self.basic_auth.password.get_secret_value()
-            )
-            or self.basic_auth.htpasswd_path
+        has_static_credentials = bool(
+            self.basic_auth.username
+            and self.basic_auth.password is not None
+            and self.basic_auth.password.get_secret_value()
         )
+        return has_static_credentials or self.basic_auth.htpasswd_path is not None
 
 
 class AnibridgeProfileConfig(BaseModel):
@@ -366,11 +355,11 @@ class AnibridgeConfig(BaseSettings):
             self.web.basic_auth.password = None
 
         if (
-            self.web.basic_auth.htpasswd_path
+            self.web.basic_auth.htpasswd_path is not None
             and not self.web.basic_auth.htpasswd_path.is_file()
         ):
             raise ValueError(
-                "web.basic_auth.htpasswd_path must point to an existing file"
+                f"htpasswd file does not exist: {self.web.basic_auth.htpasswd_path}"
             )
 
         return self

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import bcrypt
 import pytest
 from litestar.app import Litestar
 from litestar.connection.request import Request
@@ -31,7 +32,6 @@ from anibridge.app.models.db.sync_history import (
     SyncResourceKind,
 )
 from anibridge.app.web import app as app_module
-from anibridge.app.web.middlewares import basic_auth as basic_auth_module
 from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
 from anibridge.app.web.state import get_app_state
 
@@ -141,38 +141,6 @@ def test_basic_auth_middleware_challenges_and_allows_access() -> None:
     assert success.json() == {"ok": True}
 
 
-def test_basic_auth_middleware_allows_access_with_htpasswd(
-    tmp_path: Path,
-) -> None:
-    """BasicAuthMiddleware allows access with valid htpasswd credentials."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "test:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )  # bcrypt hash for "test"
-
-    test_app = _build_app(
-        middleware=[
-            DefineMiddleware(
-                BasicAuthMiddleware,
-                htpasswd_path=htpasswd_file,
-                realm="Realm",
-            )
-        ]
-    )
-
-    client = TestClient(test_app)
-
-    # Wrong credentials
-    wrong = client.get("/protected", headers=_basic_auth_header("test", "wrong"))
-    assert wrong.status_code == 401
-
-    # Correct credentials
-    success = client.get("/protected", headers=_basic_auth_header("test", "test"))
-    assert success.status_code == 200
-    assert success.json() == {"ok": True}
-
-
 def test_basic_auth_middleware_sets_request_user_and_auth() -> None:
     """Successful authentication should populate request.user and request.auth."""
 
@@ -199,43 +167,27 @@ def test_basic_auth_middleware_sets_request_user_and_auth() -> None:
     assert response.json() == {"user": "admin", "auth": "basic"}
 
 
-def test_basic_auth_middleware_plain_and_htpasswd(
-    tmp_path: Path,
-) -> None:
-    """BasicAuthMiddleware allows access with both plain and htpasswd credentials."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "htuser:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )  # bcrypt hash for "test"
-
+def test_basic_auth_middleware_allows_htpasswd_credentials(tmp_path: Path) -> None:
+    """Bcrypt htpasswd entries should authenticate Basic credentials."""
+    password_hash = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode()
+    htpasswd_path = tmp_path / "users.htpasswd"
+    htpasswd_path.write_text(f"admin:{password_hash}\n", encoding="utf-8")
     test_app = _build_app(
-        middleware=[
-            DefineMiddleware(
-                BasicAuthMiddleware,
-                username="plainuser",
-                password="plainpass",
-                htpasswd_path=htpasswd_file,
-                realm="Realm",
-            )
-        ]
+        middleware=[DefineMiddleware(BasicAuthMiddleware, htpasswd_path=htpasswd_path)]
     )
 
     client = TestClient(test_app)
 
-    # Correct plain credentials
-    success_plain = client.get(
-        "/protected", headers=_basic_auth_header("plainuser", "plainpass")
+    wrong_response = client.get(
+        "/protected", headers=_basic_auth_header("admin", "wrong")
     )
-    assert success_plain.status_code == 200
-    assert success_plain.json() == {"ok": True}
-
-    # Correct htpasswd credentials
-    success_htpasswd = client.get(
-        "/protected", headers=_basic_auth_header("htuser", "test")
+    assert wrong_response.status_code == 401
+    assert (
+        client.get(
+            "/protected", headers=_basic_auth_header("admin", "secret")
+        ).status_code
+        == 200
     )
-    assert success_htpasswd.status_code == 200
-    assert success_htpasswd.json() == {"ok": True}
 
 
 def test_basic_auth_middleware_bypasses_probe_endpoints() -> None:
@@ -254,13 +206,13 @@ def test_basic_auth_middleware_bypasses_probe_endpoints() -> None:
 
     client = TestClient(test_app)
 
-    legacy_health = client.get("/healthz")
-    assert legacy_health.status_code == 200
-    assert legacy_health.json() == {"status": "ok"}
-
     health = client.get("/livez")
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
+
+    health_alias = client.get("/healthz")
+    assert health_alias.status_code == 200
+    assert health_alias.json() == {"status": "ok"}
 
     ready = client.get("/readyz")
     assert ready.status_code == 200
@@ -285,52 +237,6 @@ def test_basic_auth_extract_credentials_handles_invalid_headers() -> None:
 
     missing_separator = _make_header_scope([(b"authorization", b"Basic dXNlcg==")])
     assert middleware._extract_credentials(missing_separator) is None
-
-
-def test_basic_auth_load_htpasswd_handles_cache_and_errors(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    """htpasswd loading should cache results and tolerate read failures."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "test:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )
-
-    middleware = BasicAuthMiddleware(
-        app=_noop_asgi_app,
-        htpasswd_path=htpasswd_file,
-    )
-
-    calls = {"count": 0}
-    original_from_file = basic_auth_module.HtpasswdFile.from_file
-
-    def _from_file(path: Path):
-        calls["count"] += 1
-        return original_from_file(path)
-
-    monkeypatch.setattr(basic_auth_module.HtpasswdFile, "from_file", _from_file)
-    first = middleware._load_htpasswd()
-    second = middleware._load_htpasswd()
-    assert first is second
-    assert calls["count"] == 1
-    assert middleware._validate_htpasswd("test", "test") is True
-
-    missing = BasicAuthMiddleware(
-        app=_noop_asgi_app,
-        htpasswd_path=tmp_path / "missing",
-    )
-    assert missing._load_htpasswd() is None
-
-    class _BrokenPath:
-        def stat(self):
-            raise OSError("boom")
-
-    broken = BasicAuthMiddleware(
-        app=_noop_asgi_app,
-        htpasswd_path=_BrokenPath(),
-    )
-    assert broken._load_htpasswd() is None
 
 
 @pytest.mark.asyncio
@@ -369,7 +275,6 @@ def test_create_app_registers_basic_auth_middleware_when_configured(
         basic_auth=BasicAuthConfig(
             username="admin",
             password=SecretStr("secret"),
-            htpasswd_path=None,
             realm="Realm",
         )
     )
@@ -377,6 +282,52 @@ def test_create_app_registers_basic_auth_middleware_when_configured(
     monkeypatch.setattr(app_module, "get_config", lambda: test_config)
 
     # Ensure the SPA assets check passes
+    index_file = tmp_path / "index.html"
+    index_file.write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
+
+    app = app_module.create_app()
+
+    with TestClient(app) as client:
+        assert client.get("/api/status").status_code == 401
+        assert client.get("/api/status", auth=("admin", "secret")).status_code == 200
+
+
+def test_create_app_exempts_prefixed_probe_routes(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Prefixed health probes should bypass Basic Auth."""
+    web_config = WebConfig(
+        path_prefix="/anibridge",
+        basic_auth=BasicAuthConfig(username="admin", password=SecretStr("secret")),
+    )
+    monkeypatch.setattr(
+        app_module, "get_config", lambda: AnibridgeConfig(web=web_config)
+    )
+
+    index_file = tmp_path / "index.html"
+    index_file.write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
+
+    app = app_module.create_app()
+
+    with TestClient(app) as client:
+        assert client.get("/anibridge/healthz").status_code == 200
+        assert client.get("/anibridge/api/status").status_code == 401
+
+
+def test_create_app_registers_basic_auth_middleware_with_htpasswd(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """create_app should treat an htpasswd file as configured auth."""
+    password_hash = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode()
+    htpasswd_path = tmp_path / "users.htpasswd"
+    htpasswd_path.write_text(f"admin:{password_hash}\n", encoding="utf-8")
+    test_config = AnibridgeConfig(
+        web=WebConfig(basic_auth=BasicAuthConfig(htpasswd_path=htpasswd_path))
+    )
+    monkeypatch.setattr(app_module, "get_config", lambda: test_config)
+
     index_file = tmp_path / "index.html"
     index_file.write_text("<html></html>", encoding="utf-8")
     monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
@@ -396,7 +347,6 @@ def test_create_app_skips_basic_auth_without_complete_credentials(
         basic_auth=BasicAuthConfig(
             username="admin",
             password=None,
-            htpasswd_path=None,
             realm="Realm",
         )
     )
@@ -411,39 +361,6 @@ def test_create_app_skips_basic_auth_without_complete_credentials(
 
     with TestClient(app) as client:
         assert client.get("/api/status").status_code == 200
-
-
-def test_create_app_registers_basic_auth_middleware_with_htpasswd(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    """create_app should attach BasicAuthMiddleware when htpasswd path is configured."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "test:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )  # bcrypt hash for "test"
-
-    web_config = WebConfig(
-        basic_auth=BasicAuthConfig(
-            username=None,
-            password=None,
-            htpasswd_path=htpasswd_file,
-            realm="Realm",
-        )
-    )
-    test_config = AnibridgeConfig(web=web_config)
-    monkeypatch.setattr(app_module, "get_config", lambda: test_config)
-
-    # Ensure the SPA assets check passes
-    index_file = tmp_path / "index.html"
-    index_file.write_text("<html></html>", encoding="utf-8")
-    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
-
-    app = app_module.create_app()
-
-    with TestClient(app) as client:
-        assert client.get("/api/status").status_code == 401
-        assert client.get("/api/status", auth=("test", "test")).status_code == 200
 
 
 def test_create_app_lifespan_purges_ephemeral_history_on_startup(

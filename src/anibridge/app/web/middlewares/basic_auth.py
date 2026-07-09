@@ -2,10 +2,12 @@
 
 import base64
 import binascii
+import re
 import secrets
 from pathlib import Path
 from typing import ClassVar
 
+import bcrypt
 from litestar.connection.base import ASGIConnection
 from litestar.datastructures.headers import Headers
 from litestar.enums import ScopeType
@@ -17,7 +19,6 @@ from litestar.middleware.authentication import (
 from litestar.types.asgi_types import ASGIApp, HeaderScope
 
 from anibridge.app.logging import get_logger
-from anibridge.app.utils.htpasswd import HtpasswdFile
 
 __all__ = ["BasicAuthMiddleware"]
 
@@ -38,21 +39,27 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
         app: ASGIApp,
         username: str | None = None,
         password: str | None = None,
-        htpasswd_path: Path | None = None,
+        htpasswd_path: str | Path | None = None,
+        path_prefix: str = "",
         realm: str = "AniBridge",
     ) -> None:
         """Initialize the BasicAuthMiddleware."""
+        exclude = list(self.EXEMPT_PATHS)
+        if path_prefix:
+            prefix = re.escape(path_prefix.rstrip("/"))
+            exclude.extend(
+                pattern.replace("^", f"^{prefix}") for pattern in self.EXEMPT_PATHS
+            )
+
         super().__init__(
             app=app,
-            exclude=list(self.EXEMPT_PATHS),
+            exclude=exclude,
             scopes={ScopeType.HTTP, ScopeType.WEBSOCKET},
         )
         self.username = username
         self.password = password
-        self.htpasswd_path = htpasswd_path
+        self.htpasswd_path = Path(htpasswd_path) if htpasswd_path else None
         self.realm = realm
-        self._htpasswd: HtpasswdFile | None = None
-        self._htpasswd_mtime_ns: int | None = None
 
     def _validate_plain(self, username: str, password: str) -> bool:
         """Validate plain username and password credentials."""
@@ -68,42 +75,27 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
         )
         return username_match and password_match
 
-    def _load_htpasswd(self) -> HtpasswdFile | None:
-        """Load the configured htpasswd file, reusing the parsed file when possible."""
-        if not self.htpasswd_path:
-            return None
-
-        try:
-            stat = self.htpasswd_path.stat()
-        except FileNotFoundError:
-            log.error("HTPasswd file not found at %s", self.htpasswd_path)
-            self._htpasswd = None
-            self._htpasswd_mtime_ns = None
-            return None
-        except OSError as e:
-            log.exception("Error reading HTPasswd file metadata: %s", e)
-            self._htpasswd = None
-            self._htpasswd_mtime_ns = None
-            return None
-
-        if self._htpasswd and self._htpasswd_mtime_ns == stat.st_mtime_ns:
-            return self._htpasswd
-
-        try:
-            self._htpasswd = HtpasswdFile.from_file(self.htpasswd_path)
-            self._htpasswd_mtime_ns = stat.st_mtime_ns
-        except Exception as e:
-            log.exception("Error reading HTPasswd file: %s", e)
-            self._htpasswd = None
-            self._htpasswd_mtime_ns = None
-            return None
-
-        return self._htpasswd
-
     def _validate_htpasswd(self, username: str, password: str) -> bool:
-        """Validate credentials against an htpasswd file."""
-        htpasswd = self._load_htpasswd()
-        return htpasswd.check_password(username, password) if htpasswd else False
+        """Validate bcrypt htpasswd credentials."""
+        if self.htpasswd_path is None:
+            return False
+
+        try:
+            lines = self.htpasswd_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            log.warning("Unable to read htpasswd file: %s", self.htpasswd_path)
+            return False
+
+        for line in lines:
+            entry_username, separator, hashed_password = line.partition(":")
+            if separator and secrets.compare_digest(entry_username, username):
+                try:
+                    return bcrypt.checkpw(
+                        password.encode(), hashed_password.strip().encode()
+                    )
+                except ValueError:
+                    return False
+        return False
 
     def _extract_credentials(self, scope: HeaderScope) -> tuple[str, str] | None:
         """Extract Basic Auth credentials from the request headers."""

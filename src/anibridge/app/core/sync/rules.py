@@ -110,6 +110,16 @@ SYNC_RULE_TEMPLATES: Mapping[SyncRuleTemplateId, SyncRuleTemplate] = {
             ),
         ),
     ),
+    SyncRuleTemplateId.REQUIRE_COMPLETED_FOR_RATING: SyncRuleTemplate(
+        rules=(
+            _rule(
+                SyncRuleSelector.RECORD_RATING,
+                if_expr="not plan.completed",
+                skip=True,
+                name="require_completed_for_rating",
+            ),
+        ),
+    ),
 }
 
 

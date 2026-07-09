@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from anibridge.provider.base import (
     Node,
     Progress,
+    Rating,
     Record,
     RecordField,
     Ref,
@@ -164,6 +165,62 @@ def test_sync_rules_promote_rewatch_template_is_opt_in() -> None:
         current=State(status=Status.COMPLETED),
         source=State(status=Status.ACTIVE),
     ) == SyncRuleDecision(True, Status.REPEATING, "promote_rewatch")
+
+
+def test_sync_rules_require_completed_for_rating_template_is_opt_in() -> None:
+    default_engine = SyncRuleEngine(SyncRulesConfig())
+    gated_engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [
+                {"template": "prevent_regression"},
+                {"template": "require_completed_for_rating"},
+            ]
+        )
+    )
+    rating = Rating(8, (0, 10, 1))
+
+    assert _decision(
+        default_engine,
+        RecordField.RATING,
+        source=rating,
+    ) == SyncRuleDecision(True, rating, "default")
+    blocked = gated_engine.evaluate_record_field(
+        field=RecordField.RATING,
+        current_values={},
+        source_values={
+            RecordField.STATUS: State(status=Status.ACTIVE),
+            RecordField.RATING: rating,
+        },
+        planned_values={
+            RecordField.STATUS: State(status=Status.ACTIVE),
+            RecordField.RATING: rating,
+        },
+        source_record=Record(ref=Ref.anchor("source"), surface="list"),
+        target_record=None,
+        target_ref=Ref.anchor("target"),
+    )
+    allowed = gated_engine.evaluate_record_field(
+        field=RecordField.RATING,
+        current_values={},
+        source_values={
+            RecordField.STATUS: State(status=Status.COMPLETED),
+            RecordField.RATING: rating,
+        },
+        planned_values={
+            RecordField.STATUS: State(status=Status.COMPLETED),
+            RecordField.RATING: rating,
+        },
+        source_record=Record(ref=Ref.anchor("source"), surface="list"),
+        target_record=None,
+        target_ref=Ref.anchor("target"),
+    )
+
+    assert blocked == SyncRuleDecision(
+        False,
+        rating,
+        "require_completed_for_rating",
+    )
+    assert allowed == SyncRuleDecision(True, rating, "default")
 
 
 def test_sync_rules_can_allow_event_deletes_explicitly() -> None:

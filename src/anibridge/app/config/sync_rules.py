@@ -41,6 +41,7 @@ class SyncRuleTemplateId(BaseStrEnum):
 
     PREVENT_REGRESSION = "prevent_regression"
     PROMOTE_REWATCH = "promote_rewatch"
+    REQUIRE_COMPLETED_FOR_RATING = "require_completed_for_rating"
 
 
 class SyncRuleSelector(BaseStrEnum):

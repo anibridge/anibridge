@@ -185,6 +185,7 @@ def test_sync_rules_accepts_template_and_rule_items() -> None:
         [
             {"template": "prevent_regression"},
             {"template": "promote_rewatch"},
+            {"template": "require_completed_for_rating"},
             {
                 "name": "Promote rewatch",
                 "selector": "record.status",
@@ -200,14 +201,17 @@ def test_sync_rules_accepts_template_and_rule_items() -> None:
     first = rules.root[0]
     second = rules.root[1]
     third = rules.root[2]
+    fourth = rules.root[3]
 
     assert isinstance(first, SyncRuleTemplateItem)
     assert isinstance(second, SyncRuleTemplateItem)
-    assert isinstance(third, SyncRuleDefinition)
+    assert isinstance(third, SyncRuleTemplateItem)
+    assert isinstance(fourth, SyncRuleDefinition)
     assert first.template == SyncRuleTemplateId.PREVENT_REGRESSION
     assert second.template == SyncRuleTemplateId.PROMOTE_REWATCH
-    assert third.if_expr.startswith("dst.status")
-    assert third.value == "Status.REPEATING"
+    assert third.template == SyncRuleTemplateId.REQUIRE_COMPLETED_FOR_RATING
+    assert fourth.if_expr.startswith("dst.status")
+    assert fourth.value == "Status.REPEATING"
 
 
 def test_sync_rules_accepts_if_alias_and_single_action_rules() -> None:

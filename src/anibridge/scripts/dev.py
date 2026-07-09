@@ -523,40 +523,6 @@ def start() -> None:
         sys.exit(1)
 
 
-def docs_build() -> None:
-    """Build the documentation."""
-    print_task("Building documentation...")
-
-    try:
-        subprocess.run(["mkdocs", "build"], cwd=ROOT_DIR, check=True)
-        print_success("Documentation built successfully!")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Documentation build failed: {e}")
-        sys.exit(1)
-    except FileNotFoundError:
-        print_error(
-            "mkdocs not found! Please ensure MkDocs is installed and in your PATH."
-        )
-        sys.exit(1)
-
-
-def docs_serve() -> None:
-    """Serve the documentation locally."""
-    print_task("Serving documentation locally...")
-
-    try:
-        subprocess.run(["mkdocs", "serve"], cwd=ROOT_DIR, check=True)
-        print_success("Documentation server started successfully!")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Documentation server failed to start: {e}")
-        sys.exit(1)
-    except FileNotFoundError:
-        print_error(
-            "mkdocs not found! Please ensure MkDocs is installed and in your PATH."
-        )
-        sys.exit(1)
-
-
 def main() -> None:
     """Main entry point for direct script execution."""
     parser = argparse.ArgumentParser(description="Development scripts for AniBridge.")
@@ -570,6 +536,7 @@ def main() -> None:
             "dev",
             "format",
             "lint",
+            "meta-setup",
             "test",
             "start",
         ],

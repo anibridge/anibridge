@@ -215,8 +215,7 @@
                                                 source.value,
                                                 source.scope,
                                             )}
-                                            onNavigate={() =>
-                                                navigate(source.query)} />
+                                            onNavigate={() => navigate(source.query)} />
                                     {:else if cell.targets.length}
                                         <div
                                             class="flex flex-nowrap items-center gap-2 overflow-x-auto"

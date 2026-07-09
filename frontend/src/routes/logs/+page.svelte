@@ -18,7 +18,7 @@
 
     import PageHeader from "$lib/components/page-header.svelte";
     import type { LogEntry, LogFile } from "$lib/types/api";
-    import { apiFetch } from "$lib/utils/api";
+    import { apiFetch, buildAppPath } from "$lib/utils/api";
     import { createJsonWebSocket } from "$lib/utils/json-websocket";
     import { toast } from "$lib/utils/notify";
 
@@ -191,6 +191,10 @@
             URL.revokeObjectURL(a.href);
             a.remove();
         }, 100);
+    }
+
+    function logFileDownloadPath(file: LogFile) {
+        return buildAppPath(`/api/logs/file/${encodeURIComponent(file.name)}/download`);
     }
 
     function clearLive() {
@@ -542,25 +546,26 @@
                             onclick={() => currentFile && loadFile(currentFile, true)}
                             class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground"
                             ><RefreshCw class="inline h-4 w-4" /></button>
-                        <button
-                            type="button"
-                            aria-label="Download file excerpt"
-                            disabled={!historyEntries.length}
-                            onclick={() =>
-                                downloadLog(
-                                    historyEntries,
-                                    (currentFile
-                                        ? currentFile.name.replace(/\.log.*/, "")
-                                        : "history") +
-                                        "-excerpt-" +
-                                        new Date()
-                                            .toISOString()
-                                            .replace(/[:T]/g, "-")
-                                            .slice(0, 19) +
-                                        ".txt",
-                                )}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground disabled:opacity-40"
-                            ><Download class="inline h-4 w-4" /></button>
+                        {#if currentFile}
+                            <form
+                                method="GET"
+                                action={logFileDownloadPath(currentFile)}>
+                                <button
+                                    type="submit"
+                                    aria-label="Download full log file"
+                                    title="Download full log file"
+                                    class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground"
+                                    ><Download class="inline h-4 w-4" /></button>
+                            </form>
+                        {:else}
+                            <button
+                                type="button"
+                                aria-label="Download full log file"
+                                title="Download full log file"
+                                disabled
+                                class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground opacity-40"
+                                ><Download class="inline h-4 w-4" /></button>
+                        {/if}
                     </div>
                 </div>
                 <div class="flex min-w-0 flex-1 overflow-hidden">

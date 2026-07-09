@@ -9,6 +9,7 @@ import msgspec
 from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import get
 from litestar.params import PathParameter, QueryParameter
+from litestar.response import File
 from litestar.router import Router
 
 from anibridge.app.config.settings import get_config
@@ -225,4 +226,13 @@ def get_log_file(
     return res
 
 
-router = Router(path="/logs", route_handlers=[list_log_files, get_log_file])
+@get(path="/file/{name:str}/download", sync_to_thread=True)
+def download_log_file(name: Annotated[str, PathParameter()]) -> File:
+    """Return a log file as a raw attachment."""
+    path = _safe_resolve(name)
+    return File(path=path, filename=path.name, media_type="text/plain")
+
+
+router = Router(
+    path="/logs", route_handlers=[list_log_files, get_log_file, download_log_file]
+)

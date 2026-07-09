@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import cast
 
 import pytest
+from litestar.response import File
 
 from anibridge.app.exceptions import InvalidLogFileNameError
 from anibridge.app.web.routes.api import logs as logs_api
@@ -78,6 +79,21 @@ def test_get_log_file_returns_all_lines_when_unlimited(tmp_path, monkeypatch):
         "line-4",
         "line-5",
     ]
+
+
+def test_download_log_file_returns_raw_attachment(tmp_path, monkeypatch):
+    """Raw downloads should return the requested log file as an attachment."""
+    download_log_file = cast(Callable[[str], File], logs_api.download_log_file.fn)
+    log_file = tmp_path / "anibridge.DEBUG.log"
+    log_file.write_text("original raw log line\n", encoding="utf-8")
+
+    monkeypatch.setattr(logs_api, "LOG_DIR", tmp_path)
+
+    result = download_log_file("anibridge.DEBUG.log")
+
+    assert result.filename == "anibridge.DEBUG.log"
+    assert result.media_type == "text/plain"
+    assert result.content_disposition_type == "attachment"
 
 
 def test_get_log_file_rejects_symlink_escape(tmp_path, monkeypatch):

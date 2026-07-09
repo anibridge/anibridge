@@ -29,7 +29,7 @@
     <Popover.Content
         {sideOffset}
         {align}
-        class="z-50 min-w-[10rem] rounded-md border border-border bg-surface-alt/95 p-2 shadow-lg backdrop-blur-sm {contentClass}">
+        class="z-50 min-w-40 rounded-md border border-border bg-surface-alt/95 p-2 shadow-lg backdrop-blur-sm {contentClass}">
         {@render children?.()}
     </Popover.Content>
 </Popover.Root>

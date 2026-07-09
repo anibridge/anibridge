@@ -163,7 +163,9 @@ async def test_save_settings_applies_profile_changes_without_restart(
     assert reinitialized == ["default"]
     assert removed == []
     assert notified is True
-    assert app_state.scheduler.global_config.profiles["default"].scan_interval == 120
+    scheduler = app_state.scheduler
+    assert scheduler is not None
+    assert scheduler.global_config.profiles["default"].scan_interval == 120
 
 
 @pytest.mark.asyncio
@@ -206,7 +208,9 @@ async def test_save_settings_requires_restart_for_process_settings(
     )
 
     assert result["requires_restart"] is True
-    assert app_state.scheduler.global_config is current_config
+    scheduler = app_state.scheduler
+    assert scheduler is not None
+    assert scheduler.global_config is current_config
 
 
 def test_configuration_service_exposes_config_path_and_mtime(tmp_path: Path) -> None:

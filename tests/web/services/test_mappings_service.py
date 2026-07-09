@@ -13,7 +13,6 @@ from anibridge.app.exceptions import (
     AniListFilterError,
     AniListSearchError,
     BooruQueryEvaluationError,
-    MappingNotFoundError,
 )
 from anibridge.app.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
 from anibridge.app.models.schemas.anilist import Media, MediaTitle

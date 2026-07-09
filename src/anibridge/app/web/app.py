@@ -1,6 +1,7 @@
 """Litestar application factory and setup."""
 
 import asyncio
+import json
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -8,7 +9,6 @@ from logging import DEBUG
 from pathlib import Path
 from typing import Annotated
 
-import msgspec
 from litestar.app import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.connection.request import Request as LitestarRequest
@@ -112,24 +112,17 @@ def litestar_domain_exception_handler(
 
 
 def _render_frontend_spa(path_prefix: str) -> str:
-    """Render the built SPA entrypoint with a runtime path prefix.
+    """Render the built SPA entrypoint."""
+    html = (FRONTEND_BUILD_DIR / "index.html").read_text(encoding="utf-8")
+    if not path_prefix:
+        return html
 
-    SvelteKit always emits absolute asset paths in SPA fallback pages, even when
-    `kit.paths.relative` is enabled, so the fallback HTML must be rewritten
-    before it is returned from the backend.
-    """
-    index_html = (FRONTEND_BUILD_DIR / "index.html").read_text(encoding="utf-8")
-    safe_path_prefix = msgspec.json.encode(path_prefix).decode()
     runtime_script = (
-        f"<script>window.__ANIBRIDGE_PATH_PREFIX = {safe_path_prefix};</script>"
+        f"<script>window.__ANIBRIDGE_PATH_PREFIX = {json.dumps(path_prefix)};</script>"
     )
-    if "window.__ANIBRIDGE_PATH_PREFIX" not in index_html:
-        index_html = index_html.replace(
-            "</head>", f"        {runtime_script}\n    </head>", 1
-        )
-
-    index_html = _ROOT_RELATIVE_URL_RE.sub(rf"\1{path_prefix}/", index_html)
-    return index_html.replace('base: ""', "base: window.__ANIBRIDGE_PATH_PREFIX", 1)
+    html = html.replace("</head>", f"        {runtime_script}\n    </head>", 1)
+    html = _ROOT_RELATIVE_URL_RE.sub(rf"\1{path_prefix}/", html)
+    return html.replace('base: ""', "base: window.__ANIBRIDGE_PATH_PREFIX", 1)
 
 
 def _serve_frontend_asset(path: str) -> File:
@@ -210,6 +203,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
                 if config.web.basic_auth.password
                 else None,
                 htpasswd_path=config.web.basic_auth.htpasswd_path,
+                path_prefix=config.web.path_prefix,
                 realm=config.web.basic_auth.realm,
             )
         )
@@ -253,9 +247,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
         route_handlers.append(serve_spa)
 
     if config.web.path_prefix:
-        log.info(
-            "Serving AniBridge web UI under path prefix %s", config.web.path_prefix
-        )
+        log.info("Serving AniBridge web UI under %s", config.web.path_prefix)
         route_handlers = [
             Router(path=config.web.path_prefix, route_handlers=route_handlers)
         ]

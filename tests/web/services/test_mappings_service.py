@@ -96,17 +96,6 @@ async def test_list_mappings_returns_edges_and_sources() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_mapping_filters_by_descriptor() -> None:
-    """Getting a mapping by descriptor returns the correct item."""
-    service = MappingsService()
-    with _fresh_tables():
-        _seed_graph()
-        item = await service.get_mapping("anilist:1")
-        assert item["descriptor"] == "anilist:1"
-        assert item["edges"][0]["target_authority"] == "tmdb"
-
-
-@pytest.mark.asyncio
 async def test_custom_only_filters_items() -> None:
     """Listing mappings with custom_only filters out non-custom items."""
     service = MappingsService()
@@ -1117,11 +1106,6 @@ async def test_list_mappings_handles_query_errors_empty_pages_and_cancellation(
 
 
 @pytest.mark.asyncio
-async def test_get_mapping_not_found_and_singleton() -> None:
-    """Missing descriptors should raise and the cached factory should be stable."""
-    service = MappingsService()
-
-    with _fresh_tables(), pytest.raises(MappingNotFoundError):
-        await service.get_mapping("tmdb:404")
-
+async def test_get_mappings_service_returns_singleton() -> None:
+    """The cached factory should be stable."""
     assert get_mappings_service() is get_mappings_service()

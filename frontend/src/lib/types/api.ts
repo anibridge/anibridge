@@ -140,8 +140,6 @@ export interface ListMappingsResponse {
     with_anilist: boolean;
 }
 
-export type DeleteMappingResponse = OkResponse;
-
 export type FieldType = "int" | "string" | "enum";
 export type FieldOperator = "=" | ">" | ">=" | "<" | "<=" | "*" | "?" | "range" | "in";
 

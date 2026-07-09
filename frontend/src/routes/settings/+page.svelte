@@ -586,8 +586,7 @@
                                     </div>
                                     <p
                                         class="text-[11px] leading-relaxed text-(--color-muted-foreground)">
-                                        Shared defaults inherited by every configured
-                                        profile.
+                                        Defaults shared by profiles.
                                     </p>
                                 </div>
                             </Tabs.Trigger>

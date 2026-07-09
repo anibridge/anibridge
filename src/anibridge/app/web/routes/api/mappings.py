@@ -215,16 +215,6 @@ class ListMappingsResponse(msgspec.Struct):
     ] = False
 
 
-class DeleteMappingResponse(msgspec.Struct):
-    ok: Annotated[
-        bool,
-        msgspec.Meta(
-            description="Whether the delete operation completed successfully.",
-            examples=[True],
-        ),
-    ]
-
-
 class RangeInputModel(msgspec.Struct):
     source_range: Annotated[
         str,
@@ -658,7 +648,7 @@ class QueryCapabilitiesResponse(msgspec.Struct):
 @get(path="")
 async def list_mappings(
     page: Annotated[int, QueryParameter(ge=1)] = 1,
-    per_page: Annotated[int, QueryParameter(ge=1, le=500)] = 25,
+    per_page: Annotated[int, QueryParameter(ge=1, le=250)] = 25,
     q: Annotated[str | None, QueryParameter()] = None,
     custom_only: Annotated[bool, QueryParameter()] = False,
     with_anilist: Annotated[bool, QueryParameter()] = False,

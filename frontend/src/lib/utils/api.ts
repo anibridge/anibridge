@@ -1,21 +1,13 @@
 import { toast, type ToastType } from "$lib/utils/notify";
 
-function normalizePathPrefix(pathPrefix: string | null | undefined): string {
-    if (!pathPrefix) return "";
-    const trimmed = pathPrefix.trim();
-    if (!trimmed || trimmed === "/") return "";
-    return `/${trimmed.replace(/^\/+/, "").replace(/\/+$/, "")}`;
-}
-
-export function getPathPrefix(): string {
-    if (typeof window === "undefined") return "";
-    return normalizePathPrefix(window.__ANIBRIDGE_PATH_PREFIX);
+function getPathPrefix(): string {
+    return typeof window === "undefined" ? "" : (window.__ANIBRIDGE_PATH_PREFIX ?? "");
 }
 
 export function buildAppPath(path: string): string {
-    if (!path.startsWith("/") || path.startsWith("//")) return path;
-    const pathPrefix = getPathPrefix();
-    return pathPrefix ? `${pathPrefix}${path}` : path;
+    return path.startsWith("/") && !path.startsWith("//")
+        ? `${getPathPrefix()}${path}`
+        : path;
 }
 
 export function buildWebSocketUrl(path: string): string {
@@ -26,19 +18,6 @@ export function buildWebSocketUrl(path: string): string {
 function resolveRequestInput(input: RequestInfo | URL): RequestInfo | URL {
     if (typeof input === "string") {
         return buildAppPath(input);
-    }
-
-    if (
-        input instanceof URL &&
-        typeof window !== "undefined" &&
-        input.origin === window.location.origin
-    ) {
-        const prefixedPath = buildAppPath(input.pathname);
-        if (prefixedPath !== input.pathname) {
-            const url = new URL(input.toString());
-            url.pathname = prefixedPath;
-            return url;
-        }
     }
 
     return input;

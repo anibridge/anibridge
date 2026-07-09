@@ -281,19 +281,6 @@ class SchedulerSummaryModel(msgspec.Struct):
         ]
         | None
     ) = None
-    coordinator: (
-        Annotated[
-            dict[str, Any],
-            msgspec.Meta(
-                description=(
-                    "Low-level coordinator state returned by the "
-                    "scheduler runtime metrics."
-                ),
-                examples=[{"active_profiles": ["default"], "queued_profiles": []}],
-            ),
-        ]
-        | None
-    ) = None
 
 
 class AboutResponse(msgspec.Struct):
@@ -407,14 +394,12 @@ async def api_about() -> AboutResponse:
     """Get runtime metadata."""
     scheduler = get_app_state().scheduler
     status: dict[str, Any] = {}
-    scheduler_runtime_metrics: dict[str, Any] = {}
     scheduler_running = False
     next_db_sync_iso: str | None = None
 
     if scheduler:
         try:
             status = await scheduler.get_status()
-            scheduler_runtime_metrics = await scheduler.get_runtime_metrics()
             scheduler_running = scheduler.is_running
             next_db_sync = scheduler.get_next_database_sync_at()
             if next_db_sync is not None:
@@ -501,7 +486,6 @@ async def api_about() -> AboutResponse:
         most_recent_sync=most_recent_sync_iso,
         most_recent_sync_profile=most_recent_sync_profile,
         next_database_sync_at=next_db_sync_iso,
-        coordinator=scheduler_runtime_metrics.get("coordinator"),
     )
 
     pid = os.getpid()

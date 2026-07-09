@@ -124,12 +124,8 @@ class WebConfig(BaseModel):
         if not isinstance(value, str):
             return value
 
-        normalized = value.strip()
-        if not normalized or normalized == "/":
-            return ""
-        if not normalized.startswith("/"):
-            normalized = f"/{normalized}"
-        return normalized.rstrip("/")
+        normalized = value.strip().strip("/")
+        return f"/{normalized}" if normalized else ""
 
     @property
     def has_auth(self) -> bool:

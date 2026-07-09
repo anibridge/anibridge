@@ -9,7 +9,7 @@ from typing import Any, ClassVar, cast
 
 import msgspec
 from anibridge.utils.cache import cache
-from anibridge.utils.mappings import descriptor_key, parse_mapping_descriptor
+from anibridge.utils.mappings import descriptor_key
 from sqlalchemy.sql import func, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import Select
@@ -22,7 +22,6 @@ from anibridge.app.exceptions import (
     AniListSearchError,
     BooruQueryEvaluationError,
     BooruQuerySyntaxError,
-    MappingNotFoundError,
 )
 from anibridge.app.logging import get_logger
 from anibridge.app.models.db.animap import AnimapEntry, AnimapMapping, AnimapProvenance
@@ -1054,34 +1053,6 @@ class MappingsService:
         )
         await ensure_not_cancelled()
         return [msgspec.to_builtins(item) for item in items], total
-
-    async def get_mapping(self, descriptor: str) -> dict[str, Any]:
-        """Return a single mapping entry by descriptor."""
-        parsed = parse_mapping_descriptor(descriptor)
-        authority, value, scope = parsed
-        with db() as ctx:
-            scope_clause = (
-                AnimapEntry.scope.is_(None)
-                if scope is None
-                else AnimapEntry.scope == scope
-            )
-            entry = (
-                ctx.session.execute(
-                    select(AnimapEntry).where(
-                        AnimapEntry.authority == authority,
-                        AnimapEntry.value == value,
-                        scope_clause,
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if not entry:
-                raise MappingNotFoundError("Mapping not found")
-
-        edge_rows, provenance = self._load_edges_and_provenance([entry.id])
-        item = self._build_item(entry, edge_rows, provenance)
-        return msgspec.to_builtins(item)
 
 
 @cache

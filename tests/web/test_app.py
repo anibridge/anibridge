@@ -157,6 +157,11 @@ def test_create_app_serves_spa_and_domain_errors(
         assert asset_response.text == "body { color: red; }\n"
         assert asset_response.headers["content-disposition"].startswith("inline")
         assert asset_response.headers["content-type"].startswith("text/css")
+        assert set(asset_response.headers["cache-control"].split(", ")) == {
+            "immutable",
+            "max-age=31536000",
+            "public",
+        }
         assert client.get("/api/missing").status_code == 404
 
     handler = cast(_ExceptionHandler, spa_app.exception_handlers[AnibridgeError])

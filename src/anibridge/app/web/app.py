@@ -12,6 +12,7 @@ import msgspec
 from litestar.app import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.connection.request import Request as LitestarRequest
+from litestar.datastructures import CacheControlHeader
 from litestar.enums import MediaType
 from litestar.exceptions.http_exceptions import NotFoundException
 from litestar.handlers.http_handlers.decorators import get
@@ -23,6 +24,7 @@ from litestar.params import PathParameter
 from litestar.response.base import Response as LitestarResponse
 from litestar.response.file import File
 from litestar.router import Router
+from litestar.static_files import create_static_files_router
 from litestar.types.internal_types import ControllerRouterHandler
 
 from anibridge.app import __version__
@@ -47,6 +49,12 @@ log = get_logger(APP_LOGGER_NAME)
 
 FRONTEND_BUILD_DIR = PROJECT_ROOT / "frontend" / "build"
 _ROOT_RELATIVE_URL_RE = re.compile(r'((?:href|src)=["\']|import\(")/')
+_DEFAULT_ASSET_CACHE = CacheControlHeader(public=True, max_age=3600)
+_IMMUTABLE_ASSET_CACHE = CacheControlHeader(
+    public=True,
+    max_age=31_536_000,
+    immutable=True,
+)
 
 
 @asynccontextmanager
@@ -57,7 +65,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None]:
         log.debug("No scheduler passed; external lifecycle management expected")
     else:
         get_app_state().set_scheduler(scheduler)
-        if not scheduler._running:
+        if not scheduler.is_running:
             await scheduler.initialize()
             await scheduler.start()
             log.success("Scheduler started for web UI")
@@ -85,7 +93,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None]:
         yield
     finally:
         await get_app_state().shutdown()
-        if scheduler and scheduler._running:
+        if scheduler and scheduler.is_running:
             await scheduler.stop()
 
 
@@ -181,9 +189,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
     """Create the Litestar application."""
     config = get_config()
     middleware: list[ASGIMiddleware | DefineMiddleware] = []
-    compression_config = CompressionConfig(backend="gzip")
 
-    # Use Litestar's request/response logging when debug logging is enabled.
     if log.getEffectiveLevel() <= DEBUG:
         middleware.append(
             LoggingMiddlewareConfig(
@@ -195,7 +201,6 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
         )
         log.debug("Request logging enabled in debug mode")
 
-    # Add basic auth middleware if configured
     if config.web.has_auth:
         middleware.append(
             DefineMiddleware(
@@ -222,6 +227,29 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
     elif not (FRONTEND_BUILD_DIR / "index.html").exists():
         log.error("Frontend index file does not exist; no SPA will be served")
     else:
+        app_asset_dir = FRONTEND_BUILD_DIR / "_app"
+        immutable_asset_dir = app_asset_dir / "immutable"
+
+        if immutable_asset_dir.exists():
+            route_handlers.append(
+                create_static_files_router(
+                    path="/_app/immutable",
+                    directories=[immutable_asset_dir],
+                    cache_control=_IMMUTABLE_ASSET_CACHE,
+                    name="frontend-immutable-assets",
+                )
+            )
+
+        if app_asset_dir.exists():
+            route_handlers.append(
+                create_static_files_router(
+                    path="/_app",
+                    directories=[app_asset_dir],
+                    cache_control=_DEFAULT_ASSET_CACHE,
+                    name="frontend-assets",
+                )
+            )
+
         route_handlers.append(serve_spa)
 
     if config.web.path_prefix:
@@ -235,7 +263,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
     app = Litestar(
         route_handlers=route_handlers,
         middleware=middleware,
-        compression_config=compression_config,
+        compression_config=CompressionConfig(backend="gzip"),
         lifespan=[lifespan],
         openapi_config=OpenAPIConfig(
             title="AniBridge",
@@ -250,9 +278,5 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
         exception_handlers={AnibridgeError: litestar_domain_exception_handler},
     )
 
-    if scheduler:
-        app.state.scheduler = scheduler
-    else:
-        app.state.scheduler = None
-
+    app.state.scheduler = scheduler
     return app

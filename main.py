@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import uvicorn
 from pydantic import ValidationError
 
-from anibridge.app import ANIBDRIGE_HEADER, initialize_runtime
+from anibridge.app import ANIBRIDGE_HEADER, initialize_runtime
 from anibridge.app.core.sched.client import SchedulerClient
 from anibridge.app.logging import APP_LOGGER_NAME, configure_logging, get_logger
 from anibridge.app.utils.terminal import supports_color
@@ -38,7 +38,7 @@ async def run() -> int:
         executor = ThreadPoolExecutor(max_workers=config.threads)
         loop.set_default_executor(executor)
 
-        log.info("\n%s", ANIBDRIGE_HEADER)
+        log.info("\n%s", ANIBRIDGE_HEADER)
         if config.web.enabled:
             app = create_app()
             uv_config = uvicorn.Config(

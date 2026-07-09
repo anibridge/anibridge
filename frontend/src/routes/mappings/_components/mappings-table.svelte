@@ -1,11 +1,12 @@
 <script lang="ts">
     import { Tooltip } from "bits-ui";
 
-    import type { Mapping, MappingEdge } from "$lib/types/api";
+    import type { Mapping } from "$lib/types/api";
     import { preferredTitle } from "$lib/utils/anilist";
     import { externalAuthorityUrl } from "$lib/utils/authority-links";
     import type { ColumnConfig } from "./columns";
     import MappingCard from "./mapping-card.svelte";
+    import { buildMappingTableRows } from "./table-model";
 
     export interface Props {
         items: Mapping[];
@@ -62,33 +63,12 @@
     }
 
     const visibleColumns = $derived(columns.filter((c) => c.visible));
+    const rows = $derived(buildMappingTableRows(items, visibleColumns));
 
     function navigate(query: string) {
         const text = query.trim();
         if (!text) return;
         onNavigateToQuery?.({ query: text });
-    }
-
-    function authorityFromColumn(columnId: string): string | null {
-        return columnId.startsWith("authority:") ? columnId.slice(9) : null;
-    }
-
-    function formatDestinationRange(value: string | null | undefined): string {
-        if (value === null || value === undefined) return "null";
-        return value === "" ? '""' : value;
-    }
-
-    function edgeKey(edge: MappingEdge) {
-        return `${edge.target_authority}:${edge.target_value}:${edge.target_scope ?? ""}:${edge.source_range}:${formatDestinationRange(edge.destination_range)}`;
-    }
-
-    function targetMappingQuery(edge: MappingEdge): string {
-        const terms = [
-            `target.authority:${edge.target_authority}`,
-            `target.value:${edge.target_value}`,
-        ];
-        if (edge.target_scope) terms.push(`target.scope:${edge.target_scope}`);
-        return terms.join(" ");
     }
 </script>
 
@@ -102,7 +82,7 @@
             class="w-full align-middle text-xs"
             style="table-layout: fixed;">
             <thead
-                class="sticky top-0 z-10 bg-(--color-surface-alt)/60 text-[11px] tracking-wide text-(--color-dimmed) uppercase">
+                class="sticky top-0 z-10 bg-surface-alt/60 text-[11px] tracking-wide text-dimmed uppercase">
                 <tr class="divide-x divide-slate-800/70 whitespace-nowrap">
                     {#each visibleColumns as column, i (column.id)}
                         <th
@@ -128,13 +108,14 @@
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">
-                {#each items as m (m.descriptor)}
+                {#each rows as row (row.key)}
+                    {@const m = row.mapping}
                     <tr class="align-top transition-colors hover:bg-slate-800/40">
-                        {#each visibleColumns as column (column.id)}
+                        {#each row.cells as cell (cell.column.id)}
                             <td
                                 class="min-w-0 overflow-hidden px-3 py-2 whitespace-nowrap"
-                                style="width: {column.width}px;">
-                                {#if column.id === "title"}
+                                style="width: {cell.column.width}px;">
+                                {#if cell.kind === "title"}
                                     <div class="flex min-w-0 items-center gap-2">
                                         {#if m.anilist}
                                             {@const coverImage =
@@ -221,63 +202,53 @@
                                             </div>
                                         </div>
                                     </div>
-                                {:else if authorityFromColumn(column.id)}
-                                    {@const authority = authorityFromColumn(column.id)!}
-                                    {@const edges = m.edges.filter(
-                                        (e) => e.target_authority === authority,
-                                    )}
-                                    {#if m.authority === authority}
+                                {:else if cell.kind === "authority"}
+                                    {@const source = cell.source}
+                                    {#if source}
                                         <MappingCard
                                             tone="source"
-                                            value={m.value}
-                                            scope={m.scope}
+                                            value={source.value}
+                                            scope={source.scope}
                                             label="Source"
                                             url={externalAuthorityUrl(
-                                                authority,
-                                                m.value,
-                                                m.scope,
+                                                cell.authority,
+                                                source.value,
+                                                source.scope,
                                             )}
                                             onNavigate={() =>
-                                                navigate(
-                                                    `source.authority:${authority} source.value:${m.value}`,
-                                                )} />
-                                    {:else if edges.length}
+                                                navigate(source.query)} />
+                                    {:else if cell.targets.length}
                                         <div
                                             class="flex flex-nowrap items-center gap-2 overflow-x-auto"
                                             style="white-space: nowrap;"
-                                            title={`Targets mapped from ${authority}`}>
-                                            {#each edges as edge (edgeKey(edge))}
+                                            title={`Targets mapped from ${cell.authority}`}>
+                                            {#each cell.targets as target (target.key)}
                                                 <MappingCard
-                                                    value={edge.target_value}
-                                                    scope={edge.target_scope}
+                                                    value={target.edge.target_value}
+                                                    scope={target.edge.target_scope}
                                                     url={externalAuthorityUrl(
-                                                        edge.target_authority,
-                                                        edge.target_value,
-                                                        edge.target_scope,
+                                                        target.edge.target_authority,
+                                                        target.edge.target_value,
+                                                        target.edge.target_scope,
                                                     )}
-                                                    meta={[
-                                                        `${edge.source_range} → ${formatDestinationRange(edge.destination_range)}`,
-                                                    ]}
+                                                    meta={[target.rangeLabel]}
                                                     onNavigate={() =>
-                                                        navigate(
-                                                            targetMappingQuery(edge),
-                                                        )} />
+                                                        navigate(target.query)} />
                                             {/each}
                                         </div>
                                     {:else}
                                         <span class="text-[10px] text-slate-500"
                                             >-</span>
                                     {/if}
-                                {:else if column.id === "sources"}
-                                    {#key (m.sources ?? []).join("|") + ":" + String(m.custom)}
-                                        {@const total = (m.sources ?? []).length}
+                                {:else if cell.kind === "sources"}
+                                    {#key row.sourcesKey}
                                         <div>
-                                            {#if total > 0}
+                                            {#if row.sourceCount > 0}
                                                 <Tooltip.Root>
                                                     <Tooltip.Trigger>
                                                         <span
-                                                            class={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1.5 text-[10px] ring-1 ${total > 1 ? "bg-amber-600/30 text-amber-100 ring-amber-700/40" : "bg-slate-800/60 text-slate-300 ring-slate-700/50"}`}
-                                                            >{total}</span>
+                                                            class={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1.5 text-[10px] ring-1 ${row.sourceCount > 1 ? "bg-amber-600/30 text-amber-100 ring-amber-700/40" : "bg-slate-800/60 text-slate-300 ring-slate-700/50"}`}
+                                                            >{row.sourceCount}</span>
                                                     </Tooltip.Trigger>
                                                     <Tooltip.Portal>
                                                         <Tooltip.Content
@@ -309,7 +280,7 @@
                                             {/if}
                                         </div>
                                     {/key}
-                                {:else if column.id === "actions"}
+                                {:else if cell.kind === "actions"}
                                     <div
                                         class="flex justify-end gap-1 whitespace-nowrap">
                                         <button

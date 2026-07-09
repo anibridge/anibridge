@@ -69,9 +69,9 @@
 
     function profileCardClass(profileDisabled: boolean): string {
         if (profileDisabled) {
-            return "group rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none cursor-not-allowed";
+            return "group rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none cursor-not-allowed";
         }
-        return "group rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none cursor-pointer hover:bg-(--color-bg-alt)/70 hover:border-(--color-border)";
+        return "group rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none cursor-pointer hover:bg-bg-alt/70 hover:border-border";
     }
 
     function anyRunning(): boolean {
@@ -225,7 +225,7 @@
             {#each [1, 2, 3] as i (i)}
                 <div
                     in:fade={{ duration: 150 }}
-                    class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+                    class="rounded-md border border-border/80 bg-bg-alt/60 p-4">
                     <Skeleton lines={3} />
                 </div>
             {/each}

@@ -12,7 +12,7 @@
 <div class="space-y-2 {className}">
     {#each range as i (i)}
         <div
-            class="h-4 w-full rounded-md bg-(--color-surface) animate-pulse"
+            class="h-4 w-full rounded-md bg-surface animate-pulse"
             style="animation-duration: 2s;">
         </div>
     {/each}

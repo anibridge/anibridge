@@ -11,10 +11,10 @@
     onDestroy(() => unsub());
 
     const COLORS: Record<string, string> = {
-        info: "border-(--color-accent)/60 bg-(--color-accent-muted)/40 text-(--color-accent-foreground)",
-        success: "border-(--color-success)/60 bg-(--color-success)/20 text-emerald-100",
-        error: "border-(--color-danger)/60 bg-(--color-danger)/20 text-red-100",
-        warn: "border-(--color-warning)/60 bg-(--color-warning)/20 text-amber-100",
+        info: "border-accent/60 bg-accent-muted/40 text-accent-foreground",
+        success: "border-success/60 bg-success/20 text-emerald-100",
+        error: "border-danger/60 bg-danger/20 text-red-100",
+        warn: "border-warning/60 bg-warning/20 text-amber-100",
     };
 </script>
 
@@ -30,7 +30,7 @@
             <button
                 type="button"
                 title="Dismiss"
-                class="pointer-events-auto absolute top-1.5 right-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md bg-black/20 text-(--color-dimmed) transition-colors select-none hover:bg-black/40 hover:text-(--color-foreground)"
+                class="pointer-events-auto absolute top-1.5 right-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md bg-black/20 text-dimmed transition-colors select-none hover:bg-black/40 hover:text-foreground"
                 onclick={() => dismiss(t.id)}>
                 <X class="inline h-3.5 w-3.5" />
             </button>

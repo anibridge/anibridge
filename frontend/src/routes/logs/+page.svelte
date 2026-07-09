@@ -355,7 +355,7 @@
                             aria-label="Clear search"
                             type="button"
                             onclick={() => ((search = ""), applyFilter())}
-                            class="absolute top-1/2 right-1 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                            class="absolute top-1/2 right-1 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             <X class="h-3.5 w-3.5 text-[14px]" />
                         </button>
                     {/if}
@@ -403,7 +403,7 @@
                             aria-label="Clear live logs"
                             title="Clear live logs"
                             onclick={clearLive}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             <Trash2 class="inline h-4 w-4" />
                         </button>
                         <button
@@ -413,7 +413,7 @@
                                 ? "Auto-scroll enabled"
                                 : "Auto-scroll paused"}
                             onclick={() => ((autoScroll = !autoScroll), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             {#if autoScroll}
                                 <ChevronsDown class="inline h-4 w-4" />
                             {:else}
@@ -425,7 +425,7 @@
                             aria-label="Toggle wrap"
                             title={wrap ? "Disable wrap" : "Enable wrap"}
                             onclick={() => ((wrap = !wrap), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             {#if wrap}
                                 <TextWrap class="inline h-4 w-4" />
                             {:else}
@@ -446,7 +446,7 @@
                                             .slice(0, 19) +
                                         ".txt",
                                 )}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             <Download class="inline h-4 w-4" />
                         </button>
                     </div>
@@ -529,7 +529,7 @@
                             aria-label="Toggle wrap"
                             title={wrap ? "Disable wrap" : "Enable wrap"}
                             onclick={() => ((wrap = !wrap), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             {#if wrap}
                                 <TextWrap class="inline h-4 w-4" />
                             {:else}
@@ -540,7 +540,7 @@
                             type="button"
                             aria-label="Refresh"
                             onclick={() => currentFile && loadFile(currentFile, true)}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground"
                             ><RefreshCw class="inline h-4 w-4" /></button>
                         <button
                             type="button"
@@ -559,7 +559,7 @@
                                             .slice(0, 19) +
                                         ".txt",
                                 )}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) disabled:opacity-40"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground disabled:opacity-40"
                             ><Download class="inline h-4 w-4" /></button>
                     </div>
                 </div>
@@ -578,7 +578,7 @@
                                     <button
                                         type="button"
                                         aria-label="Close file list"
-                                        class="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md bg-(--color-surface) text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) sm:hidden"
+                                        class="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground sm:hidden"
                                         onclick={() => (showFiles = false)}>
                                         <X class="h-3.5 w-3.5" />
                                     </button>

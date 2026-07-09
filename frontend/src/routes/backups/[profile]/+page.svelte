@@ -110,7 +110,7 @@
             <button
                 onclick={load}
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/70 px-2 py-1 font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)">
+                class="inline-flex items-center gap-1 rounded-md border border-border bg-surface/70 px-2 py-1 font-medium text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                 <RefreshCcw class="inline h-4 w-4 text-[14px]" /> Refresh
             </button>
         {/snippet}
@@ -119,7 +119,7 @@
     {#if loading}
         <div
             in:fade={{ duration: 150 }}
-            class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+            class="rounded-md border border-border/80 bg-bg-alt/60 p-4">
             <Skeleton lines={6} />
         </div>
     {:else if !backups.length}
@@ -129,7 +129,7 @@
             class="overflow-x-auto rounded-md border border-slate-800 bg-slate-900/60 shadow-sm backdrop-blur-sm">
             <table class="w-full text-[11px]">
                 <thead
-                    class="bg-(--color-surface-alt)/60 text-left text-[11px] tracking-wide text-(--color-dimmed) uppercase">
+                    class="bg-surface-alt/60 text-left text-[11px] tracking-wide text-dimmed uppercase">
                     <tr>
                         <th class="px-3 py-2 font-medium">Filename</th>
                         <th class="px-3 py-2 font-medium">Created</th>
@@ -207,7 +207,7 @@
             {#snippet footerChildren()}
                 <div>
                     <button
-                        class="rounded-md border border-(--color-border) bg-(--color-surface)/70 px-3 py-1 text-[11px] font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground)"
+                        class="rounded-md border border-border bg-surface/70 px-3 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground"
                         onclick={() => setPreviewOpen(false)}>
                         Close
                     </button>

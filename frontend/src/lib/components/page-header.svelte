@@ -24,11 +24,11 @@
     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="space-y-1 sm:flex-1">
             <div class="flex items-center gap-2">
-                <Icon class="h-4 w-4 text-(--color-muted-foreground)" />
+                <Icon class="h-4 w-4 text-muted-foreground" />
                 <h2 class="text-lg font-semibold">{title}</h2>
             </div>
             {#if description}
-                <p class="text-xs text-(--color-muted-foreground)">{description}</p>
+                <p class="text-xs text-muted-foreground">{description}</p>
             {/if}
         </div>
         {#if actions}

@@ -30,7 +30,7 @@
         {@render trigger?.()}
         {#if showArrow}
             <ChevronDown
-                class="ml-auto h-4 w-4 shrink-0 text-(--color-muted-foreground) transition-transform duration-200 {open
+                class="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 {open
                     ? 'rotate-180'
                     : ''}" />
         {/if}

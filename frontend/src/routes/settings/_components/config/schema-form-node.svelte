@@ -605,7 +605,7 @@
                 <input
                     type="checkbox"
                     checked={Boolean(value ?? resolvedSchema.default ?? false)}
-                    class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-(--color-accent)"
+                    class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-accent"
                     onchange={(event) =>
                         onChange(
                             path,
@@ -615,7 +615,7 @@
             </label>
         {:else if isEnum}
             <select
-                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-(--color-accent-muted)"
+                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-accent-muted"
                 value={String(value ?? resolvedSchema.default ?? enumOptions[0] ?? "")}
                 onchange={(event) =>
                     onChange(path, (event.currentTarget as HTMLSelectElement).value)}>
@@ -626,7 +626,7 @@
         {:else if isNumeric}
             <input
                 type="number"
-                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-(--color-accent-muted)"
+                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-accent-muted"
                 value={String(value ?? resolvedSchema.default ?? "")}
                 placeholder={resolvedSchema.default !== undefined
                     ? String(resolvedSchema.default)
@@ -643,7 +643,7 @@
         {:else}
             <input
                 type={resolvedSchema.format === "password" ? "password" : "text"}
-                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-(--color-accent-muted)"
+                class="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 transition outline-none focus:border-accent-muted"
                 value={String(value ?? resolvedSchema.default ?? "")}
                 placeholder={resolvedSchema.default !== undefined
                     ? String(resolvedSchema.default)

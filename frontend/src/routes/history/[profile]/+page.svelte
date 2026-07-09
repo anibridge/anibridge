@@ -424,12 +424,12 @@
             <button
                 onclick={() => void openPinManager()}
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-2 py-1 text-xs font-medium text-(--color-muted-foreground) shadow-sm backdrop-blur-sm transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
+                class="inline-flex items-center gap-1 rounded-md border border-border bg-surface/60 px-2 py-1 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-surface-alt hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
                 ><Pin class="inline h-4 w-4 text-[14px]" /> Pins</button>
             <button
                 onclick={() => loadHistory("replace")}
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md border border-(--color-border) bg-(--color-surface)/70 px-2 py-1 text-xs font-medium text-(--color-muted-foreground) shadow-sm backdrop-blur-sm transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
+                class="inline-flex items-center gap-1 rounded-md border border-border bg-surface/70 px-2 py-1 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-surface-alt hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none sm:px-3 sm:py-1.5 sm:text-sm"
                 ><RotateCw class="inline h-4 w-4 text-[14px]" /> Refresh</button>
         {/snippet}
     </PageHeader>
@@ -494,7 +494,7 @@
             {#each [1, 2, 3] as item (item)}
                 <div
                     in:fade={{ duration: 150 }}
-                    class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+                    class="rounded-md border border-border/80 bg-bg-alt/60 p-4">
                     <Skeleton lines={5} />
                 </div>
             {/each}
@@ -520,7 +520,7 @@
             <div class="flex justify-center">
                 <button
                     type="button"
-                    class="inline-flex items-center gap-2 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-4 py-2 text-sm font-medium text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) disabled:cursor-wait disabled:opacity-60"
+                    class="inline-flex items-center gap-2 rounded-md border border-border bg-surface/60 px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground disabled:cursor-wait disabled:opacity-60"
                     onclick={() => loadHistory("older")}
                     disabled={loadingOlder}>
                     {#if loadingOlder}<LoaderCircle class="h-4 w-4 animate-spin" />{/if}

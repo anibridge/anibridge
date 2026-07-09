@@ -77,7 +77,7 @@
         <ToastHost />
         <a
             href="#main"
-            class="sr-only bg-(--color-accent) px-3 py-2 text-sm font-medium text-white shadow-lg focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md"
+            class="sr-only bg-accent px-3 py-2 text-sm font-medium text-white shadow-lg focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md"
             >Skip to content</a>
         <!-- Mobile backdrop -->
         {#if sidebarOpen}
@@ -95,7 +95,7 @@
         {/if}
         <!-- Sidebar -->
         <aside
-            class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-(--color-border) bg-(--color-bg)/95 px-3 pt-4 pb-6 shadow-lg backdrop-blur transition-transform duration-300 ease-out lg:translate-x-0"
+            class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-border bg-bg/95 px-3 pt-4 pb-6 shadow-lg backdrop-blur transition-transform duration-300 ease-out lg:translate-x-0"
             class:translate-x-0={sidebarOpen}>
             <div class="mb-4 flex items-center gap-3 px-2">
                 <img
@@ -117,8 +117,11 @@
             <nav class="flex flex-1 flex-col gap-1 text-sm font-medium">
                 <a
                     href={resolve("/")}
-                    class="nav-link {active('/', true) || active('/history')
-                        ? 'nav-link-active'
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-surface-alt/60 hover:text-foreground aria-[current=page]:bg-surface aria-[current=page]:ring-1 aria-[current=page]:ring-border {active(
+                        '/',
+                        true,
+                    ) || active('/history')
+                        ? 'bg-surface-alt/70 text-foreground'
                         : ''}"
                     aria-current={active("/", true) || active("/history")
                         ? "page"
@@ -127,17 +130,29 @@
                     ></a>
                 <a
                     href={resolve("/mappings")}
-                    class="nav-link {active('/mappings') ? 'nav-link-active' : ''}"
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-surface-alt/60 hover:text-foreground aria-[current=page]:bg-surface aria-[current=page]:ring-1 aria-[current=page]:ring-border {active(
+                        '/mappings',
+                    )
+                        ? 'bg-surface-alt/70 text-foreground'
+                        : ''}"
                     aria-current={active("/mappings") ? "page" : undefined}
                     ><List class="inline h-4 w-4" /><span>Mappings</span></a>
                 <a
                     href={resolve("/logs")}
-                    class="nav-link {active('/logs') ? 'nav-link-active' : ''}"
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-surface-alt/60 hover:text-foreground aria-[current=page]:bg-surface aria-[current=page]:ring-1 aria-[current=page]:ring-border {active(
+                        '/logs',
+                    )
+                        ? 'bg-surface-alt/70 text-foreground'
+                        : ''}"
                     aria-current={active("/logs") ? "page" : undefined}
                     ><Terminal class="inline h-4 w-4" /><span>Logs</span></a>
                 <a
                     href={resolve("/backups")}
-                    class="nav-link {active('/backups') ? 'nav-link-active' : ''}"
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-surface-alt/60 hover:text-foreground aria-[current=page]:bg-surface aria-[current=page]:ring-1 aria-[current=page]:ring-border {active(
+                        '/backups',
+                    )
+                        ? 'bg-surface-alt/70 text-foreground'
+                        : ''}"
                     aria-current={active("/backups") ? "page" : undefined}
                     ><ArchiveRestore class="inline h-4 w-4" /><span>Backups</span></a>
                 <div
@@ -146,22 +161,30 @@
                 </div>
                 <a
                     href={resolve("/settings")}
-                    class="nav-link {active('/settings') ? 'nav-link-active' : ''}"
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-surface-alt/60 hover:text-foreground aria-[current=page]:bg-surface aria-[current=page]:ring-1 aria-[current=page]:ring-border {active(
+                        '/settings',
+                    )
+                        ? 'bg-surface-alt/70 text-foreground'
+                        : ''}"
                     aria-current={active("/settings") ? "page" : undefined}
                     ><Settings class="inline h-4 w-4" /><span>Settings</span></a>
                 <a
                     href={resolve("/about")}
-                    class="nav-link {active('/about') ? 'nav-link-active' : ''}"
+                    class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-surface-alt/60 hover:text-foreground aria-[current=page]:bg-surface aria-[current=page]:ring-1 aria-[current=page]:ring-border {active(
+                        '/about',
+                    )
+                        ? 'bg-surface-alt/70 text-foreground'
+                        : ''}"
                     aria-current={active("/about") ? "page" : undefined}
                     ><Activity class="inline h-4 w-4" /><span>About</span></a>
-                <div class="mt-auto border-t border-(--color-border)/60 pt-4">
-                    <p class="px-3 text-[11px] text-(--color-dimmed)">
+                <div class="mt-auto border-t border-border/60 pt-4">
+                    <p class="px-3 text-[11px] text-dimmed">
                         © {new Date().getFullYear()}
                         <a
                             href="https://anibridge.eliasbenb.dev"
                             target="_blank"
                             rel="noopener"
-                            class="transition-colors hover:text-(--color-foreground)"
+                            class="transition-colors hover:text-foreground"
                             >AniBridge</a>
                     </p>
                 </div>
@@ -171,10 +194,10 @@
         <div class="flex min-h-dvh w-full flex-col lg:pl-64">
             <!-- Top bar -->
             <header
-                class="sticky top-0 z-20 flex h-14 w-full items-center gap-3 border-b border-(--color-border)/80 bg-(--color-bg)/80 px-4 pb-[env(safe-area-inset-top)] backdrop-blur supports-backdrop-filter:bg-(--color-bg)/65">
+                class="sticky top-0 z-20 flex h-14 w-full items-center gap-3 border-b border-border/80 bg-bg/80 px-4 pb-[env(safe-area-inset-top)] backdrop-blur supports-backdrop-filter:bg-bg/65">
                 <button
                     type="button"
-                    class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-(--color-border) bg-(--color-surface)/70 text-(--color-muted-foreground) transition-colors hover:bg-(--color-surface-alt) hover:text-(--color-foreground) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none lg:hidden"
+                    class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface/70 text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none lg:hidden"
                     aria-label="Toggle navigation"
                     onclick={() => (sidebarOpen = !sidebarOpen)}>
                     {#if sidebarOpen}
@@ -184,7 +207,7 @@
                     {/if}
                 </button>
                 <div
-                    class="ml-auto hidden items-center gap-2 rounded-md border border-(--color-border) bg-(--color-surface)/60 px-3 py-1.5 text-xs text-(--color-muted-foreground) sm:flex"
+                    class="ml-auto hidden items-center gap-2 rounded-md border border-border bg-surface/60 px-3 py-1.5 text-xs text-muted-foreground sm:flex"
                     aria-live="polite"
                     title={isWsOpen ? "Live connection established" : "Offline"}>
                     <span class="relative flex h-2 w-2">
@@ -206,7 +229,7 @@
             </main>
             <!-- Footer -->
             <footer
-                class="mt-auto border-t border-(--color-border)/80 bg-(--color-bg-alt)/80 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] text-[11px] text-(--color-dimmed) backdrop-blur">
+                class="mt-auto border-t border-border/80 bg-bg-alt/80 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] text-[11px] text-dimmed backdrop-blur">
                 <div class="flex flex-row items-center justify-between gap-2">
                     <div class="flex flex-wrap items-center gap-3">
                         <a

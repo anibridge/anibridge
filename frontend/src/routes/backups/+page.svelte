@@ -40,7 +40,7 @@
             {#each [1, 2, 3, 4] as i (i)}
                 <div
                     in:fade={{ duration: 150 }}
-                    class="rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/60 p-4">
+                    class="rounded-md border border-border/80 bg-bg-alt/60 p-4">
                     <Skeleton lines={3} />
                 </div>
             {/each}
@@ -55,7 +55,7 @@
             {#each profiles as p (p)}
                 <a
                     href={resolve(`/backups/${p}`)}
-                    class="group cursor-pointer rounded-md border border-(--color-border)/80 bg-(--color-bg-alt)/50 p-4 text-left transition-colors hover:bg-(--color-bg-alt)/70 hover:border-(--color-border) focus-visible:ring-2 focus-visible:ring-(--color-accent)/50 focus-visible:outline-none"
+                    class="group cursor-pointer rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors hover:bg-bg-alt/70 hover:border-border focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
                     title={`Open backups for ${p}`}>
                     <div
                         class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

@@ -15,9 +15,9 @@
 <Meter.Root
     {value}
     max={1}
-    class="relative h-1.5 w-full overflow-hidden rounded-full bg-(--color-surface) {className}">
+    class="relative h-1.5 w-full overflow-hidden rounded-full bg-surface {className}">
     <div
-        class="h-full rounded-full bg-(--color-accent) transition-transform duration-300 ease-out"
+        class="h-full rounded-full bg-accent transition-transform duration-300 ease-out"
         class:animate-progress-indeterminate={indeterminate}
         style="transform: translateX(-{indeterminate ? 0 : 100 - 100 * percent}%)">
     </div>

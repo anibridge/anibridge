@@ -27,14 +27,14 @@
         bind:checked
         {disabled}
         onCheckedChange={oncheckedchange}
-        class="flex h-4 w-4 shrink-0 items-center justify-center rounded border-(--color-border) bg-(--color-bg-alt) data-[state=checked]:border-(--color-accent) data-[state=checked]:bg-(--color-accent)">
+        class="flex h-4 w-4 shrink-0 items-center justify-center rounded border-border bg-bg-alt data-[state=checked]:border-accent data-[state=checked]:bg-accent">
         {#snippet children({ checked: isChecked })}
             {#if isChecked}
-                <Check class="h-3 w-3 text-(--color-accent-foreground)" />
+                <Check class="h-3 w-3 text-accent-foreground" />
             {/if}
         {/snippet}
     </Checkbox.Root>
     {#if label}
-        <span class="text-sm text-(--color-muted-foreground) select-none">{label}</span>
+        <span class="text-sm text-muted-foreground select-none">{label}</span>
     {/if}
 </label>

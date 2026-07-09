@@ -10,7 +10,6 @@ from litestar.router import Router
 from pydantic import ValidationError
 
 from anibridge.app.config.settings import AnibridgeConfig, get_config
-from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.services.configuration_service import get_configuration_service
 
 __all__ = ["router"]
@@ -196,7 +195,7 @@ def get_configuration() -> ConfigDocumentResponse:
     """Return the current configuration as raw YAML text."""
     require_config_api_access()
     try:
-        payload = get_configuration_service().load_document_text()
+        payload = get_configuration_service().read()
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -220,11 +219,7 @@ async def update_configuration(
     """Persist the provided configuration document."""
     require_config_api_access()
     try:
-        (
-            config,
-            requires_restart,
-            mtime,
-        ) = await get_configuration_service().save_document_text(
+        result = await get_configuration_service().save_text(
             data.content,
             expected_mtime=data.expected_mtime,
         )
@@ -238,11 +233,6 @@ async def update_configuration(
             status_code=422,
             detail=str(exc.errors()),
         ) from exc
-    except SchedulerUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -251,9 +241,9 @@ async def update_configuration(
 
     return ConfigUpdateResponse(
         ok=True,
-        profiles=sorted(config.profiles.keys()),
-        requires_restart=requires_restart,
-        mtime=mtime,
+        profiles=sorted(result["config"].profiles.keys()),
+        requires_restart=result["requires_restart"],
+        mtime=result["mtime"],
     )
 
 
@@ -264,11 +254,7 @@ async def update_configuration_structured(
     """Persist the provided structured configuration payload."""
     require_config_api_access()
     try:
-        (
-            config,
-            requires_restart,
-            mtime,
-        ) = await get_configuration_service().save_settings_payload(
+        result = await get_configuration_service().save_settings(
             data.settings,
             expected_mtime=data.expected_mtime,
         )
@@ -282,11 +268,6 @@ async def update_configuration_structured(
             status_code=422,
             detail=str(exc.errors()),
         ) from exc
-    except SchedulerUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -295,9 +276,9 @@ async def update_configuration_structured(
 
     return ConfigUpdateResponse(
         ok=True,
-        profiles=sorted(config.profiles.keys()),
-        requires_restart=requires_restart,
-        mtime=mtime,
+        profiles=sorted(result["config"].profiles.keys()),
+        requires_restart=result["requires_restart"],
+        mtime=result["mtime"],
     )
 
 

@@ -8,7 +8,6 @@ import pytest
 from litestar.exceptions.http_exceptions import HTTPException
 from pydantic import BaseModel, ValidationError
 
-from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.routes.api import config as config_api_module
 
 
@@ -86,7 +85,7 @@ def test_get_configuration_success_and_error_translation(
             "Svc",
             (),
             {
-                "load_document_text": lambda self: {
+                "read": lambda self: {
                     "config_path": "/tmp/config.yaml",
                     "file_exists": True,
                     "content": "profiles: {}",
@@ -109,11 +108,7 @@ def test_get_configuration_success_and_error_translation(
         lambda: type(
             "Svc",
             (),
-            {
-                "load_document_text": lambda self: (_ for _ in ()).throw(
-                    ValueError("bad config")
-                )
-            },
+            {"read": lambda self: (_ for _ in ()).throw(ValueError("bad config"))},
         )(),
     )
     with pytest.raises(HTTPException, match="bad config"):
@@ -125,11 +120,7 @@ def test_get_configuration_success_and_error_translation(
         lambda: type(
             "Svc",
             (),
-            {
-                "load_document_text": lambda self: (_ for _ in ()).throw(
-                    _validation_error()
-                )
-            },
+            {"read": lambda self: (_ for _ in ()).throw(_validation_error())},
         )(),
     )
     with pytest.raises(HTTPException) as excinfo:
@@ -146,14 +137,16 @@ async def test_update_configuration_success_and_error_translation(
     )
 
     class _Service:
-        async def save_document_text(self, content: str, expected_mtime: int | None):
+        async def save_text(self, content: str, expected_mtime: int | None):
             assert content == "profiles: {}"
             assert expected_mtime == 123
-            return (
-                type("Cfg", (), {"profiles": {"b": object(), "a": object()}})(),
-                False,
-                456,
-            )
+            return {
+                "config": type(
+                    "Cfg", (), {"profiles": {"b": object(), "a": object()}}
+                )(),
+                "mtime": 456,
+                "requires_restart": False,
+            }
 
     monkeypatch.setattr(
         config_api_module, "get_configuration_service", lambda: _Service()
@@ -167,11 +160,10 @@ async def test_update_configuration_success_and_error_translation(
         (FileExistsError("stale"), 409),
         (ValueError("bad"), 400),
         (_validation_error(), 422),
-        (SchedulerUnavailableError("busy"), 503),
     ]:
 
         class _ErrorService:
-            async def save_document_text(
+            async def save_text(
                 self,
                 content: str,
                 expected_mtime: int | None,
@@ -197,36 +189,37 @@ async def test_update_configuration_structured_success_and_error_translation(
     )
 
     class _Service:
-        async def save_settings_payload(
+        async def save_settings(
             self,
             settings: dict[str, object],
             expected_mtime: int | None,
         ):
             assert settings == {"profiles": {}}
             assert expected_mtime == 123
-            return (
-                type("Cfg", (), {"profiles": {"b": object(), "a": object()}})(),
-                True,
-                456,
-            )
+            return {
+                "config": type(
+                    "Cfg", (), {"profiles": {"b": object(), "a": object()}}
+                )(),
+                "mtime": 456,
+                "requires_restart": False,
+            }
 
     monkeypatch.setattr(
         config_api_module, "get_configuration_service", lambda: _Service()
     )
     response = await config_api_module.update_configuration_structured.fn(request)
     assert response.profiles == ["a", "b"]
-    assert response.requires_restart is True
+    assert response.requires_restart is False
     assert response.mtime == 456
 
     for exc, status_code in [
         (FileExistsError("stale"), 409),
         (ValueError("bad"), 400),
         (_validation_error(), 422),
-        (SchedulerUnavailableError("busy"), 503),
     ]:
 
         class _ErrorService:
-            async def save_settings_payload(
+            async def save_settings(
                 self,
                 settings: dict[str, object],
                 expected_mtime: int | None,

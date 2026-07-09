@@ -83,15 +83,6 @@ def _register_classes(class_paths: Iterable[str]) -> None:
         _LOADED_CLASSES.add(class_path)
 
 
-def _collect_class_overrides(config: AnibridgeConfig) -> set[str]:
-    """Gather class paths requested globally and by the profile."""
-    classes: set[str] = set(config.provider_classes or [])
-    if not config.provider_classes:
-        return classes
-    classes.update(config.provider_classes)
-    return classes
-
-
 def build_provider(
     namespace: str,
     config: ProviderNamespaceConfigMap,
@@ -99,7 +90,7 @@ def build_provider(
 ) -> Provider:
     """Instantiate provider endpoint for a profile."""
     _register_classes(_DEFAULT_PROVIDER_CLASSES)
-    _register_classes(_collect_class_overrides(profile.parent))
+    _register_classes(set(profile.parent.provider_classes or ()))
 
     if not namespace:
         raise ProfileConfigError("Provider namespace must be configured")

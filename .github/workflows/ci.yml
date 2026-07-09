@@ -147,9 +147,9 @@ jobs:
                   tags: ${{ steps.meta.outputs.tags }}
                   labels: |
                       ${{ steps.meta.outputs.labels }}
-                      org.opencontainers.image.description="The smart way to keep your anime lists perfectly synchronized."
+                      org.opencontainers.image.description="Sync what you watch, wherever you watch."
                   annotations: |
-                      org.opencontainers.image.description="The smart way to keep your anime lists perfectly synchronized."
+                      org.opencontainers.image.description="Sync what you watch, wherever you watch."
                   provenance: false
                   sbom: false
                   cache-from: type=gha

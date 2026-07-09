@@ -1,7 +1,7 @@
 [project]
 name = "anibridge"
 version = "2.1.4"
-description = "The smart way to keep your anime lists perfectly synchronized."
+description = "Sync what you watch, wherever you watch."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"

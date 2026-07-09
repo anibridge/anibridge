@@ -115,6 +115,49 @@ def test_global_config_merges_into_profiles() -> None:
     }
 
 
+def test_profile_provider_compatibility_aliases() -> None:
+    """Legacy library/list provider names should populate provider settings."""
+    profile = AnibridgeProfileConfig(
+        library_provider="plex",  # ty:ignore[unknown-argument]
+        list_provider="anilist",  # ty:ignore[unknown-argument]
+        library_provider_config={"plex": {"url": "http://plex"}},  # ty:ignore[unknown-argument]
+        list_provider_config={"anilist": {"token": "anilist-token"}},  # ty:ignore[unknown-argument]
+    )
+
+    assert profile.source_provider == "plex"
+    assert profile.target_provider == "anilist"
+    assert profile.source_provider_config == {"plex": {"url": "http://plex"}}
+    assert profile.target_provider_config == {"anilist": {"token": "anilist-token"}}
+
+
+def test_provider_compatibility_aliases_merge_from_global_config() -> None:
+    """Aliased global provider names should merge into explicit profiles."""
+    config = AnibridgeConfig(
+        global_config=AnibridgeProfileConfig(
+            library_provider="plex",  # ty:ignore[unknown-argument]
+            list_provider="anilist",  # ty:ignore[unknown-argument]
+            library_provider_config={"plex": {"url": "http://global"}},  # ty:ignore[unknown-argument]
+            list_provider_config={"anilist": {"token": "global-token"}},  # ty:ignore[unknown-argument]
+        ),
+        profiles={
+            "primary": AnibridgeProfileConfig(
+                dry_run=True,
+                library_provider_config={"plex": {"sections": ["Anime"]}},  # ty:ignore[unknown-argument]
+            )
+        },
+    )
+
+    profile = config.get_profile("primary")
+
+    assert profile.source_provider == "plex"
+    assert profile.target_provider == "anilist"
+    assert profile.source_provider_config == {
+        "plex": {"url": "http://global", "sections": ["Anime"]}
+    }
+    assert profile.target_provider_config == {"anilist": {"token": "global-token"}}
+    assert profile.dry_run is True
+
+
 def test_provider_config_requires_namespace_mapping() -> None:
     """Provider config payloads should be keyed by provider namespace."""
     with pytest.raises(ValueError):

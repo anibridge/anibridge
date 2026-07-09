@@ -7,7 +7,14 @@ from typing import Any, Literal, get_args, get_origin
 
 import yaml
 from anibridge.utils.cache import cache, lru_cache
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import (
     DEFAULT_REF_TEMPLATE,
     GenerateJsonSchema,
@@ -143,10 +150,12 @@ class AnibridgeProfileConfig(BaseModel):
 
     source_provider: str = Field(
         default="",
+        validation_alias=AliasChoices("source_provider", "library_provider"),
         description="Namespace of the source provider to use",
     )
     target_provider: str = Field(
         default="",
+        validation_alias=AliasChoices("target_provider", "list_provider"),
         description="Namespace of the target provider to use",
     )
 
@@ -190,10 +199,14 @@ class AnibridgeProfileConfig(BaseModel):
 
     source_provider_config: ProviderNamespaceConfigMap = Field(
         default_factory=dict,
+        validation_alias=AliasChoices(
+            "source_provider_config", "library_provider_config"
+        ),
         description="Source provider configuration payloads by provider namespace",
     )
     target_provider_config: ProviderNamespaceConfigMap = Field(
         default_factory=dict,
+        validation_alias=AliasChoices("target_provider_config", "list_provider_config"),
         description="Target provider configuration payloads by provider namespace",
     )
 

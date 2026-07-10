@@ -14,6 +14,8 @@ class _FakeHistoryWebSocket:
         self,
         *,
         outcome: str | None = None,
+        source_namespace: str | None = None,
+        target_namespace: str | None = None,
         resource_kind: str | None = None,
     ) -> None:
         self.accepted = False
@@ -22,6 +24,10 @@ class _FakeHistoryWebSocket:
         self.query_params = {}
         if outcome is not None:
             self.query_params["outcome"] = outcome
+        if source_namespace is not None:
+            self.query_params["source_namespace"] = source_namespace
+        if target_namespace is not None:
+            self.query_params["target_namespace"] = target_namespace
         if resource_kind is not None:
             self.query_params["resource_kind"] = resource_kind
 
@@ -37,7 +43,12 @@ class _FakeHistoryWebSocket:
 
 @pytest.mark.asyncio
 async def test_history_websocket_sends_latest_id_updates(monkeypatch) -> None:
-    websocket = _FakeHistoryWebSocket(outcome="synced", resource_kind="record")
+    websocket = _FakeHistoryWebSocket(
+        outcome="synced",
+        source_namespace="plex",
+        target_namespace="anilist",
+        resource_kind="record",
+    )
 
     class _Service:
         async def get_latest_id(
@@ -45,10 +56,14 @@ async def test_history_websocket_sends_latest_id_updates(monkeypatch) -> None:
             *,
             profile: str,
             outcome: str | None,
+            source_namespace: str | None,
+            target_namespace: str | None,
             resource_kind: str | None,
         ):
             assert profile == "default"
             assert outcome == "synced"
+            assert source_namespace == "plex"
+            assert target_namespace == "anilist"
             assert resource_kind == "record"
             return 42
 
@@ -65,6 +80,8 @@ async def test_history_websocket_sends_latest_id_updates(monkeypatch) -> None:
         {
             "profile": "default",
             "outcome": "synced",
+            "source_namespace": "plex",
+            "target_namespace": "anilist",
             "resource_kind": "record",
             "latest_group_id": 42,
         }
@@ -81,6 +98,8 @@ async def test_history_websocket_closes_on_unexpected_errors(monkeypatch) -> Non
             *,
             profile: str,
             outcome: str | None,
+            source_namespace: str | None,
+            target_namespace: str | None,
             resource_kind: str | None,
         ):
             raise RuntimeError("boom")

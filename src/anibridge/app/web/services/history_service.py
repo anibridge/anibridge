@@ -366,7 +366,15 @@ class HistoryService:
                     SyncHistoryOperation.resource_kind,
                     func.count(SyncHistoryOperation.id),
                 )
-                .filter(SyncHistoryOperation.profile_name == profile)
+                .join(
+                    SyncHistoryGroup,
+                    SyncHistoryGroup.id == SyncHistoryOperation.group_id,
+                )
+                .filter(
+                    SyncHistoryGroup.profile_name == profile,
+                    SyncHistoryGroup.source_namespace == source_namespace,
+                    SyncHistoryGroup.target_namespace == target_namespace,
+                )
                 .group_by(SyncHistoryOperation.resource_kind)
                 .all()
             )

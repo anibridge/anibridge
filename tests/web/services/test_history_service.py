@@ -259,6 +259,7 @@ async def test_history_service_get_page_enriches_metadata_and_pins(history_env):
     assert page.latest_group_id == row_id
     assert page.has_more is False
     assert page.stats == {SyncOutcome.SYNCED.value: 1}
+    assert page.resource_stats == {SyncResourceKind.RECORD.value: 1}
     group = page.groups[0]
     operation = group.operations[0]
     assert group.source_media is not None
@@ -339,6 +340,30 @@ async def test_history_service_get_page_paginates_and_filters(history_env):
     assert [group.id for group in failed_page.groups] == [row2]
     assert failed_page.groups[0].operations[0].error_message == "boom"
     assert [group.id for group in after_page.groups] == [row2]
+
+
+@pytest.mark.asyncio
+async def test_history_service_resource_stats_follow_provider_scope(history_env):
+    """Resource stats should use the same source/target scope as outcome stats."""
+    _seed_history_row(target_ref=_ref_payload("tgt1"))
+    _seed_history_row(
+        clear=False,
+        source_ref=_ref_payload("other-src"),
+        target_ref=_ref_payload("other-tgt"),
+        source_namespace="other-source",
+        target_namespace="other-target",
+    )
+
+    page = await HistoryService().get_page(
+        profile="profile",
+        limit=10,
+        include_source_media=False,
+        include_target_media=False,
+        include_stats=True,
+    )
+
+    assert page.stats == {SyncOutcome.SYNCED.value: 1}
+    assert page.resource_stats == {SyncResourceKind.RECORD.value: 1}
 
 
 @pytest.mark.asyncio

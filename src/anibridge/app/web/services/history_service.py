@@ -18,6 +18,7 @@ from sqlalchemy.sql import select
 from sqlalchemy.sql.functions import func
 
 from anibridge.app.config.database import db
+from anibridge.app.config.settings import get_config
 from anibridge.app.core.sync import (
     RecordUndoRequest,
     RefKey,
@@ -32,6 +33,7 @@ from anibridge.app.core.sync.stats import RecordSnapshot
 from anibridge.app.exceptions import (
     HistoryItemNotFoundError,
     HistoryPermissionError,
+    ProfileNotFoundError,
     SchedulerNotInitializedError,
 )
 from anibridge.app.logging import get_logger
@@ -197,18 +199,23 @@ class HistoryService:
         if not rows:
             return []
 
-        bridge = get_bridge(profile)
+        try:
+            bridge = get_bridge(profile)
+        except ProfileNotFoundError, SchedulerNotInitializedError:
+            bridge = None
+
         source_refs: list[Ref] = []
         target_refs: list[Ref] = []
-        for row in rows:
-            if row.source_namespace == bridge.source_provider.NAMESPACE:
-                source_ref = ref_from_payload(row.source_parent_ref)
-                if source_ref is not None:
-                    source_refs.append(source_ref)
-            if row.target_namespace == bridge.target_provider.NAMESPACE:
-                target_ref = ref_from_payload(row.target_parent_ref)
-                if target_ref is not None:
-                    target_refs.append(target_ref)
+        if bridge is not None:
+            for row in rows:
+                if row.source_namespace == bridge.source_provider.NAMESPACE:
+                    source_ref = ref_from_payload(row.source_parent_ref)
+                    if source_ref is not None:
+                        source_refs.append(source_ref)
+                if row.target_namespace == bridge.target_provider.NAMESPACE:
+                    target_ref = ref_from_payload(row.target_parent_ref)
+                    if target_ref is not None:
+                        target_refs.append(target_ref)
 
         source_media = (
             await self._fetch_node_metadata(
@@ -216,7 +223,7 @@ class HistoryService:
                 provider=bridge.source_provider,
                 refs=source_refs,
             )
-            if include_source_media
+            if bridge is not None and include_source_media
             else {}
         )
         target_media = (
@@ -225,7 +232,7 @@ class HistoryService:
                 provider=bridge.target_provider,
                 refs=target_refs,
             )
-            if include_target_media
+            if bridge is not None and include_target_media
             else {}
         )
 
@@ -393,13 +400,17 @@ class HistoryService:
         resource_kind: str | None = None,
     ) -> tuple[str, str, list[Any]]:
         """Resolve provider filters and produce SQLAlchemy predicates."""
-        bridge = get_bridge(profile)
-        effective_source_namespace = (
-            source_namespace or bridge.source_provider.NAMESPACE
-        )
-        effective_target_namespace = (
-            target_namespace or bridge.target_provider.NAMESPACE
-        )
+        try:
+            config = get_config().get_profile(profile)
+            configured_source_namespace = config.source_provider
+            configured_target_namespace = config.target_provider
+        except ProfileNotFoundError:
+            bridge = get_bridge(profile)
+            configured_source_namespace = bridge.source_provider.NAMESPACE
+            configured_target_namespace = bridge.target_provider.NAMESPACE
+
+        effective_source_namespace = source_namespace or configured_source_namespace
+        effective_target_namespace = target_namespace or configured_target_namespace
 
         base_filters = [
             SyncHistoryGroup.profile_name == profile,

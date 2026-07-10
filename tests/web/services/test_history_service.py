@@ -24,7 +24,11 @@ import anibridge.app.web.services.history_service as history_service_module
 from anibridge.app.core.sync import SyncRequest
 from anibridge.app.core.sync.history import to_builtins
 from anibridge.app.core.sync.stats import RecordSnapshot
-from anibridge.app.exceptions import HistoryItemNotFoundError, HistoryPermissionError
+from anibridge.app.exceptions import (
+    HistoryItemNotFoundError,
+    HistoryPermissionError,
+    ProfileNotFoundError,
+)
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.db.sync_history import (
     SyncHistoryGroup,
@@ -272,6 +276,38 @@ async def test_history_service_get_page_enriches_metadata_and_pins(history_env):
     assert operation.target_surface == "target_state"
     assert operation.pinned is True
     assert operation.info == {"source": "test-seed"}
+
+
+@pytest.mark.asyncio
+async def test_history_service_get_page_works_without_initialized_bridge(
+    history_env,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Saved history remains readable when provider clients failed to initialize."""
+    _seed_history_row(pin=False)
+    monkeypatch.setattr(
+        history_service_module,
+        "get_bridge",
+        lambda _profile: (_ for _ in ()).throw(ProfileNotFoundError("profile")),
+    )
+    monkeypatch.setattr(
+        history_service_module,
+        "get_config",
+        lambda: SimpleNamespace(
+            get_profile=lambda _profile: SimpleNamespace(
+                source_provider="source",
+                target_provider="target",
+            )
+        ),
+    )
+
+    page = await HistoryService().get_page("profile", include_stats=True)
+
+    assert len(page.groups) == 1
+    assert page.groups[0].source_media is None
+    assert page.groups[0].target_media is None
+    assert page.latest_group_id == page.groups[0].id
+    assert page.stats == {SyncOutcome.SYNCED.value: 1}
 
 
 @pytest.mark.asyncio

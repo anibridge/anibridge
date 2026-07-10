@@ -63,7 +63,7 @@ async def get_history(
     target_namespace: Annotated[str | None, QueryParameter()] = None,
     resource_kind: Annotated[str | None, QueryParameter()] = None,
 ) -> GetHistoryResponse:
-    """Get paginated timeline for profile."""
+    """Get paginated grouped history for profile."""
     if before_id is not None and after_id is not None:
         raise HTTPException(
             status_code=400,

@@ -140,7 +140,7 @@ anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-p
 anibridge-provider-base = { git = "https://github.com/anibridge/anibridge-provider-base.git", tag = "main" }
 anibridge-simkl-provider = { git = "https://github.com/anibridge/anibridge-simkl-provider.git", tag = "main" }
 anibridge-trakt-provider = { git = "https://github.com/anibridge/anibridge-trakt-provider.git", tag = "main" }
-anibridge-utils = { path = "packages/anibridge-utils", editable = true }
+anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]

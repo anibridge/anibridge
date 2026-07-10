@@ -150,7 +150,7 @@ requires-dist = [
     { name = "anibridge-provider-base", git = "https://github.com/anibridge/anibridge-provider-base.git?tag=main" },
     { name = "anibridge-simkl-provider", git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main" },
     { name = "anibridge-trakt-provider", git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main" },
-    { name = "anibridge-utils", editable = "packages/anibridge-utils" },
+    { name = "anibridge-utils", git = "https://github.com/anibridge/anibridge-utils.git?tag=main" },
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "croniter", specifier = ">=6.2.3" },
@@ -262,30 +262,13 @@ dependencies = [
 
 [[package]]
 name = "anibridge-utils"
-version = "1.0.0"
-source = { editable = "packages/anibridge-utils" }
+version = "0.2.2"
+source = { git = "https://github.com/anibridge/anibridge-utils.git?tag=main#74cc6a7477425513208f8fbace1d1eb897f2f624" }
 dependencies = [
     { name = "aiohttp" },
     { name = "cachetools" },
     { name = "diskcache" },
     { name = "requests" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.14.1" },
-    { name = "cachetools", specifier = ">=7.1.4" },
-    { name = "diskcache", specifier = ">=5.6.3" },
-    { name = "requests", specifier = ">=2.34.2" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-asyncio", specifier = ">=1.4.0" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.15.21" },
-    { name = "ty", specifier = ">=0.0.57" },
 ]
 
 [[package]]

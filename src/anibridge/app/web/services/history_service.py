@@ -96,7 +96,7 @@ class HistoryOperation(msgspec.Struct):
 
 
 class HistoryGroup(msgspec.Struct):
-    """Serializable parent item group in the sync timeline."""
+    """Serializable parent item group in sync history."""
 
     id: Annotated[int, msgspec.Meta(ge=1)]
     run_id: Annotated[int, msgspec.Meta(ge=1)]

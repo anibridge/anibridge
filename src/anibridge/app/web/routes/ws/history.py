@@ -1,4 +1,4 @@
-"""WebSocket endpoint for real-time timeline updates."""
+"""WebSocket endpoint for real-time history updates."""
 
 import asyncio
 from typing import Annotated

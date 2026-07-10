@@ -39,6 +39,7 @@
     const canUndo = $derived(
         !!operation &&
             operation.resource_kind === "record" &&
+            ["synced", "deleted"].includes(operation.outcome) &&
             (!!operation.before_state || !!operation.after_state),
     );
     const targetRef = $derived(
@@ -64,8 +65,8 @@
     <Popover.Root bind:open>
         <Popover.Trigger
             class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700/70 bg-slate-900/70 text-slate-400 shadow-sm transition-colors hover:border-slate-600 hover:bg-slate-800 hover:text-slate-100 focus:ring-2 focus:ring-slate-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Timeline actions"
-            title="Timeline actions"
+            aria-label="History actions"
+            title="History actions"
             {disabled}>
             <MoreHorizontal class="h-4 w-4" />
         </Popover.Trigger>

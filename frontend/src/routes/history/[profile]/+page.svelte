@@ -204,8 +204,10 @@
                 groups = data.groups ?? [];
             }
 
-            hasMore = data.has_more;
-            nextBeforeId = data.next_before_id ?? null;
+            if (mode !== "newer") {
+                hasMore = data.has_more;
+                nextBeforeId = data.next_before_id ?? null;
+            }
             latestGroupId =
                 mode === "replace"
                     ? (data.latest_group_id ?? null)

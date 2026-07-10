@@ -131,7 +131,7 @@
 
     async function syncProfile(name: string, trigger: "manual" | "poll") {
         await apiFetch(
-            `/api/sync/profile/${name}?trigger=${trigger}`,
+            `/api/sync/profile/${encodeURIComponent(name)}?trigger=${trigger}`,
             { method: "POST" },
             {
                 successMessage:
@@ -156,7 +156,7 @@
         reinitializingProfiles[name] = true;
         try {
             const response = await apiFetch(
-                `/api/sync/profile/${name}/reinitialize`,
+                `/api/sync/profile/${encodeURIComponent(name)}/reinitialize`,
                 { method: "POST" },
                 { successMessage: `Reinitialized profile ${name}` },
             );
@@ -170,7 +170,7 @@
     }
 
     function goHistory(name: string) {
-        goto(resolve(`/history/${name}`));
+        goto(resolve(`/history/${encodeURIComponent(name)}`));
     }
 
     function accountPair(p: ProfileStatus): string {
@@ -307,7 +307,7 @@
                             </span>
                         {:else}
                             <a
-                                href={resolve(`/history/${name}`)}
+                                href={resolve(`/history/${encodeURIComponent(name)}`)}
                                 class="inline-flex items-center gap-1 rounded-md border border-indigo-600/60 bg-indigo-600/30 px-2 py-1 text-[11px] font-medium text-indigo-200 shadow-sm hover:bg-indigo-600/40">
                                 <span>History</span>
                                 <ChevronRight class="inline h-3 w-3" />

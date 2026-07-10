@@ -40,13 +40,13 @@
 
     async function listBackups(profile: string): Promise<BackupMeta[]> {
         const data = await apiJson<{ backups: BackupMeta[] }>(
-            `/api/backups/${profile}`,
+            `/api/backups/${encodeURIComponent(profile)}`,
         );
         return data.backups || [];
     }
 
     async function restoreBackup(profile: string, filename: string) {
-        await apiJson(`/api/backups/${profile}/restore`, {
+        await apiJson(`/api/backups/${encodeURIComponent(profile)}/restore`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ filename }),
@@ -59,7 +59,7 @@
             previewLoading = filename;
             try {
                 const data = await apiJson<BackupRawPreview>(
-                    `/api/backups/${params.profile}/raw/${filename}`,
+                    `/api/backups/${encodeURIComponent(params.profile)}/raw/${encodeURIComponent(filename)}`,
                 );
                 previewCache[filename] = data;
             } catch (e) {

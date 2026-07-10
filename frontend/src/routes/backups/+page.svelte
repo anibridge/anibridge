@@ -54,7 +54,7 @@
             class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,32rem),1fr))] gap-4">
             {#each profiles as p (p)}
                 <a
-                    href={resolve(`/backups/${p}`)}
+                    href={resolve(`/backups/${encodeURIComponent(p)}`)}
                     class="group cursor-pointer rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors hover:bg-bg-alt/70 hover:border-border focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
                     title={`Open backups for ${p}`}>
                     <div

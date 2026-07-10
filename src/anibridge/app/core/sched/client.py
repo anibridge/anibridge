@@ -576,8 +576,8 @@ class SchedulerClient:
         for profile_name, profile_config in self.global_config.profiles.items():
             bridge_client = self.bridge_clients.get(profile_name)
 
-            source_namespace: str | None = None
-            target_namespace: str | None = None
+            source_namespace: str | None = profile_config.source_provider
+            target_namespace: str | None = profile_config.target_provider
             source_account_title: str | None = None
             target_account_title: str | None = None
 

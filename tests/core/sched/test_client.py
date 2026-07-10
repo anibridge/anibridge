@@ -82,6 +82,8 @@ class FakeConfig:
         self.mappings_url = None
         self.profiles = {
             "default": SimpleNamespace(
+                source_provider="configured-source",
+                target_provider="configured-target",
                 scan_modes=[],
                 scan_interval=60,
                 poll_interval=30,
@@ -267,6 +269,8 @@ async def test_initialize_tracks_success_and_failed_profiles(
 
     config = FakeConfig(tmp_path)
     config.profiles["broken"] = SimpleNamespace(
+        source_provider="broken-source",
+        target_provider="broken-target",
         scan_modes=[],
         scan_interval=60,
         poll_interval=30,
@@ -282,6 +286,9 @@ async def test_initialize_tracks_success_and_failed_profiles(
     assert scheduler.shared_animap_client.initialized is True
     assert set(scheduler.bridge_clients) == {"default"}
     assert scheduler.failed_profile_errors == {"broken": "bad profile"}
+    status = await scheduler.get_status()
+    assert status["broken"]["config"]["source_namespace"] == "broken-source"
+    assert status["broken"]["config"]["target_namespace"] == "broken-target"
 
 
 @pytest.mark.asyncio

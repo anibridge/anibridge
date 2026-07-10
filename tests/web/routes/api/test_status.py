@@ -43,6 +43,12 @@ async def test_status_route_serializes_scheduler_payload(
                         "last_synced": datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
                         "current_sync": {"state": "running"},
                         "initialization_error": None,
+                        "scheduler": {
+                            "pending_waiters": 2,
+                            "last_sync_sources": ["manual"],
+                            "running": True,
+                            "sync_active": True,
+                        },
                     },
                 }
             },
@@ -57,6 +63,12 @@ async def test_status_route_serializes_scheduler_payload(
     assert profile.config.target_namespace == "anilist"
     assert profile.config.scan_modes == ["poll", "periodic"]
     assert profile.status.current_sync == {"state": "running"}
+    assert profile.status.scheduler == {
+        "pending_waiters": 2,
+        "last_sync_sources": ["manual"],
+        "running": True,
+        "sync_active": True,
+    }
     assert response.scheduler == {"coordinator": {"running": True}}
 
 

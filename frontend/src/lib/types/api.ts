@@ -200,6 +200,7 @@ export interface ProfileRuntimeStatus {
     last_synced?: string | null;
     current_sync?: CurrentSync | null;
     initialization_error?: string | null;
+    scheduler?: Record<string, unknown> | null;
 }
 
 export interface ProfileStatus {
@@ -209,6 +210,7 @@ export interface ProfileStatus {
 
 export interface StatusResponse {
     profiles: Record<string, ProfileStatus>;
+    scheduler?: Record<string, unknown> | null;
 }
 
 export interface SettingsProfile {

@@ -166,6 +166,16 @@ class ProfileRuntimeStatusModel(msgspec.Struct):
         ]
         | None
     ) = None
+    scheduler: (
+        Annotated[
+            dict[str, Any],
+            msgspec.Meta(
+                description="Profile scheduler state such as queue and activity.",
+                examples=[{"pending_waiters": 1, "sync_active": True}],
+            ),
+        ]
+        | None
+    ) = None
 
 
 class ProfileStatusModel(msgspec.Struct):
@@ -252,6 +262,7 @@ def construct_profile_status(data: dict[str, Any]) -> ProfileStatusModel:
             last_synced=st.get("last_synced"),
             current_sync=st.get("current_sync"),
             initialization_error=st.get("initialization_error"),
+            scheduler=st.get("scheduler"),
         ),
     )
 

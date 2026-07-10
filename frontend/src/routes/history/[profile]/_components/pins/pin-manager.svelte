@@ -16,6 +16,7 @@
         PinSearchResponse,
         PinSearchResult,
         ProviderMediaMetadata,
+        RefPayload,
     } from "$lib/types/api";
     import { apiFetch } from "$lib/utils/api";
     import { qualifiedRefLabel } from "$lib/utils/provider-ref";
@@ -37,8 +38,6 @@
     let actingKey: string | null = $state(null);
     let loadedProfile = $state("");
 
-    const pinnedKeys = $derived(new Set(pins.map((pin) => pin.target_parent_ref.key)));
-
     $effect(() => {
         if (profile && loadedProfile !== profile) {
             loadedProfile = profile;
@@ -48,6 +47,21 @@
 
     function pinPath(key: string) {
         return `/api/pins/${encodeURIComponent(profile)}/${encodeURIComponent(key)}`;
+    }
+
+    function anchorRef(key: string): RefPayload {
+        return { key, path: [] };
+    }
+
+    function refIdentity(ref: RefPayload): string {
+        return JSON.stringify({ key: ref.key, path: ref.path ?? [] });
+    }
+
+    function pinnedForRef(ref: RefPayload): PinResponse | null {
+        const identity = refIdentity(ref);
+        return (
+            pins.find((pin) => refIdentity(pin.target_parent_ref) === identity) ?? null
+        );
     }
 
     async function loadPins() {
@@ -89,7 +103,7 @@
     }
 
     async function pinKey(key: string) {
-        actingKey = key;
+        actingKey = refIdentity(anchorRef(key));
         try {
             const response = await apiFetch(
                 pinPath(key),
@@ -104,16 +118,23 @@
         }
     }
 
-    async function unpinKey(key: string) {
-        actingKey = key;
+    async function unpinRef(ref: RefPayload) {
+        const identity = refIdentity(ref);
+        actingKey = identity;
         try {
             const response = await apiFetch(
-                pinPath(key),
-                { method: "DELETE" },
+                pinPath(ref.key),
+                {
+                    method: "DELETE",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ target_ref: ref }),
+                },
                 { successMessage: "Unpinned target" },
             );
             if (!response.ok) return;
-            pins = pins.filter((pin) => pin.target_parent_ref.key !== key);
+            pins = pins.filter(
+                (pin) => refIdentity(pin.target_parent_ref) !== identity,
+            );
             onChanged?.();
         } finally {
             actingKey = null;
@@ -154,7 +175,7 @@
     onclick={onClose}>
 </div>
 <aside
-    class="fixed top-0 right-0 z-50 flex h-dvh w-full max-w-lg flex-col border-l border-slate-800 bg-slate-950 shadow-2xl sm:w-[32rem]"
+    class="fixed top-0 right-0 z-50 flex h-dvh w-full max-w-lg flex-col border-l border-slate-800 bg-slate-950 shadow-2xl sm:w-lg"
     aria-label="Pin manager">
     <header class="border-b border-slate-800 bg-slate-950/95 px-4 py-3">
         <div class="flex items-center justify-between gap-3">
@@ -240,7 +261,10 @@
             {#if results.length}
                 <div class="space-y-2">
                     {#each results as result (result.media.key)}
-                        {@const isPinned = pinnedKeys.has(result.media.key)}
+                        {@const mediaRef = anchorRef(result.media.key)}
+                        {@const pinned = result.pin ?? pinnedForRef(mediaRef)}
+                        {@const isPinned = !!pinned}
+                        {@const mediaIdentity = refIdentity(mediaRef)}
                         <div
                             class="flex items-center gap-3 rounded-md border border-slate-800 bg-slate-950/60 p-2 transition-colors hover:border-slate-700/80">
                             <div
@@ -269,14 +293,14 @@
                             <button
                                 type="button"
                                 class={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:cursor-wait disabled:opacity-60 ${isPinned ? "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800" : "border-sky-700/60 bg-sky-600/20 text-sky-100 hover:bg-sky-600/30"}`}
-                                disabled={actingKey === result.media.key}
+                                disabled={actingKey === mediaIdentity}
                                 aria-label={isPinned ? "Unpin target" : "Pin target"}
                                 title={isPinned ? "Unpin target" : "Pin target"}
                                 onclick={() =>
                                     void (isPinned
-                                        ? unpinKey(result.media.key)
+                                        ? unpinRef(pinned.target_parent_ref)
                                         : pinKey(result.media.key))}>
-                                {#if actingKey === result.media.key}<LoaderCircle
+                                {#if actingKey === mediaIdentity}<LoaderCircle
                                         class="h-3.5 w-3.5 animate-spin" />{:else if isPinned}<PinOff
                                         class="h-3.5 w-3.5" />{:else}<Pin
                                         class="h-3.5 w-3.5" />{/if}
@@ -315,7 +339,8 @@
                 </div>
             {:else}
                 <div class="space-y-2">
-                    {#each pins as pin (pin.target_parent_ref.key)}
+                    {#each pins as pin (refIdentity(pin.target_parent_ref))}
+                        {@const pinIdentity = refIdentity(pin.target_parent_ref)}
                         <article
                             class="flex items-center gap-3 rounded-md border border-slate-800 bg-slate-900/50 p-2.5 transition-colors hover:border-slate-700/80">
                             <div
@@ -359,12 +384,11 @@
                             <button
                                 type="button"
                                 class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-950 text-slate-300 transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60"
-                                disabled={actingKey === pin.target_parent_ref.key}
+                                disabled={actingKey === pinIdentity}
                                 aria-label="Unpin target"
                                 title="Unpin target"
-                                onclick={() =>
-                                    void unpinKey(pin.target_parent_ref.key)}>
-                                {#if actingKey === pin.target_parent_ref.key}<LoaderCircle
+                                onclick={() => void unpinRef(pin.target_parent_ref)}>
+                                {#if actingKey === pinIdentity}<LoaderCircle
                                         class="h-3.5 w-3.5 animate-spin" />{:else}<PinOff
                                         class="h-3.5 w-3.5" />{/if}
                             </button>

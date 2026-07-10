@@ -346,6 +346,39 @@ async def test_history_service_pins_cover_child_refs(history_env):
 
 
 @pytest.mark.asyncio
+async def test_history_service_pathful_pins_do_not_cover_siblings(history_env):
+    """Exact child pins should not mark sibling provider refs as pinned."""
+    episode_1 = _ref_payload("tgt1", [{"axis": "episode", "value": 1}])
+    episode_2 = _ref_payload("tgt1", [{"axis": "episode", "value": 2}])
+    _seed_history_row(pin=False, target_ref=episode_1)
+    _seed_history_row(clear=False, pin=False, target_ref=episode_2)
+    with history_service_module.db() as ctx:
+        ctx.session.add(
+            Pin(
+                profile_name="profile",
+                target_namespace="target",
+                target_parent_ref=episode_1,
+            )
+        )
+        ctx.session.commit()
+
+    page = await HistoryService().get_page(
+        profile="profile",
+        limit=10,
+        include_source_media=False,
+        include_target_media=False,
+    )
+
+    pinned = {
+        operation.target_ref.path[0].value: operation.pinned
+        for group in page.groups
+        for operation in group.operations
+        if operation.target_ref is not None
+    }
+    assert pinned == {1: True, 2: False}
+
+
+@pytest.mark.asyncio
 async def test_history_service_get_page_paginates_and_filters(history_env):
     """Cursor pagination and outcome filters should apply to history rows."""
     row1 = _seed_history_row(target_ref=_ref_payload("tgt1"))

@@ -140,8 +140,12 @@ class PinService:
 
     def _get_pin(self, profile: str, media_key: str) -> PinEntry | None:
         """Return a single target parent pin entry if it exists."""
+        return self._get_pin_by_ref(profile, RefPayload(media_key))
+
+    def _get_pin_by_ref(self, profile: str, ref: RefPayload) -> PinEntry | None:
+        """Return a single target parent pin entry by exact ref."""
         target_namespace = self._target_namespace(profile)
-        target_parent_ref = ref_to_json(Ref.anchor(media_key))
+        target_parent_ref = RefKey.from_payload(ref).to_json()
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)
@@ -161,8 +165,12 @@ class PinService:
         media_key: str,
     ) -> PinEntry:
         """Create or update a target parent pin."""
+        return self._upsert_pin_by_ref(profile, RefPayload(media_key))
+
+    def _upsert_pin_by_ref(self, profile: str, ref: RefPayload) -> PinEntry:
+        """Create or update a target parent pin by exact ref."""
         target_namespace = self._target_namespace(profile)
-        target_parent_ref = ref_to_json(Ref.anchor(media_key))
+        target_parent_ref = RefKey.from_payload(ref).to_json()
 
         with db() as ctx:
             pin = (
@@ -273,7 +281,7 @@ class PinService:
         """Return existing pins keyed by target parent ref."""
         if not refs:
             return {}
-        ref_json = [ref_to_json(Ref.anchor(ref.key)) for ref in refs]
+        ref_json = [ref_to_json(ref) for ref in refs]
         with db() as ctx:
             rows = (
                 ctx.session.query(Pin)
@@ -316,9 +324,14 @@ class PinService:
         profile: str,
         media_key: str,
         with_media: bool = False,
+        target_ref: RefPayload | None = None,
     ) -> PinEntry | None:
         """Return a single pin entry if it exists."""
-        entry = self._get_pin(profile, media_key)
+        entry = (
+            self._get_pin_by_ref(profile, target_ref)
+            if target_ref is not None
+            else self._get_pin(profile, media_key)
+        )
         if not entry:
             return None
         if with_media:
@@ -331,7 +344,7 @@ class PinService:
                 target_parent_ref=entry.target_parent_ref,
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
-                media=metadata.get(RefKey(key=media_key)),
+                media=metadata.get(RefKey.from_payload(entry.target_parent_ref)),
             )
         return entry
 
@@ -340,9 +353,14 @@ class PinService:
         profile: str,
         media_key: str,
         with_media: bool = False,
+        target_ref: RefPayload | None = None,
     ) -> PinEntry:
         """Create or update a target parent pin."""
-        entry = self._upsert_pin(profile, media_key)
+        entry = (
+            self._upsert_pin_by_ref(profile, target_ref)
+            if target_ref is not None
+            else self._upsert_pin(profile, media_key)
+        )
         if with_media:
             metadata = await self._fetch_target_metadata(
                 profile, [entry.target_parent_ref]
@@ -353,14 +371,21 @@ class PinService:
                 target_parent_ref=entry.target_parent_ref,
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
-                media=metadata.get(RefKey(key=media_key)),
+                media=metadata.get(RefKey.from_payload(entry.target_parent_ref)),
             )
         return entry
 
-    def delete_pin(self, profile: str, media_key: str) -> None:
+    def delete_pin(
+        self,
+        profile: str,
+        media_key: str,
+        target_ref: RefPayload | None = None,
+    ) -> None:
         """Remove a target parent pin if it exists."""
         target_namespace = self._target_namespace(profile)
-        target_parent_ref = ref_to_json(Ref.anchor(media_key))
+        target_parent_ref = RefKey.from_payload(
+            target_ref if target_ref is not None else RefPayload(media_key)
+        ).to_json()
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)

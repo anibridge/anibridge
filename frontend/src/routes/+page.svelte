@@ -69,7 +69,7 @@
 
     function profileCardClass(profileDisabled: boolean): string {
         if (profileDisabled) {
-            return "group rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none cursor-not-allowed";
+            return "group cursor-pointer rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors hover:border-border hover:bg-bg-alt/70 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
         }
         return "group rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none cursor-pointer hover:bg-bg-alt/70 hover:border-border";
     }
@@ -247,11 +247,9 @@
             <button
                 type="button"
                 class={profileCardClass(profileDisabled)}
-                onclick={() => {
-                    if (!profileDisabled) goHistory(name);
-                }}
+                onclick={() => goHistory(name)}
                 title={profileDisabled
-                    ? `${name} is unavailable due to a profile initialization error`
+                    ? `Open history for ${name}; profile initialization failed`
                     : `Open history for ${name}`}>
                 <div
                     class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

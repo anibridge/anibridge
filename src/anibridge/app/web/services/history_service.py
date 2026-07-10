@@ -334,7 +334,7 @@ class HistoryService:
             pin_ref = ref_from_payload(pin.target_parent_ref)
             if pin_ref is None:
                 continue
-            pin_index.add((pin.target_namespace, RefKey(key=pin_ref.key)))
+            pin_index.add((pin.target_namespace, ref_to_key(pin_ref)))
         return frozenset(pin_index)
 
     @staticmethod
@@ -346,7 +346,11 @@ class HistoryService:
     ) -> bool:
         if namespace is None or ref is None:
             return False
-        return (namespace, RefKey(key=ref.key)) in pin_index
+        target_key = ref_to_key(ref)
+        return any(
+            pin_namespace == namespace and pin_key.covers(target_key)
+            for pin_namespace, pin_key in pin_index
+        )
 
     async def _fetch_profile_stats(
         self,

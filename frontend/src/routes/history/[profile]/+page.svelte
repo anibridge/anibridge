@@ -40,7 +40,7 @@
     import TimelineOutcomeFilters from "./_components/timeline/timeline-outcome-filters.svelte";
     import { OUTCOME_META, type OutcomeMeta } from "./_components/timeline/types";
 
-    const DEFAULT_OUTCOME = "synced";
+    const DEFAULT_OUTCOME: string | null = null;
     const profile = $derived(page.params.profile ?? "");
 
     let groups: HistoryGroup[] = $state([]);
@@ -353,6 +353,11 @@
         return target.target_parent_ref?.key ?? null;
     }
 
+    function targetRef(target: HistoryGroup | HistoryOperation) {
+        if (isOperation(target)) return target.target_ref ?? null;
+        return target.target_parent_ref ?? null;
+    }
+
     function targetPinned(target: HistoryGroup | HistoryOperation): boolean {
         if (isOperation(target)) return !!target.pinned;
         return !!target.operations?.some((operation) => operation.pinned);
@@ -360,13 +365,18 @@
 
     async function togglePin(target: HistoryGroup | HistoryOperation) {
         const key = targetKey(target);
+        const ref = targetRef(target);
         if (!key) return;
         const pinned = targetPinned(target);
         acting = true;
         try {
             const response = await apiFetch(
                 pinPath(key),
-                { method: pinned ? "DELETE" : "PUT" },
+                {
+                    method: pinned ? "DELETE" : "PUT",
+                    headers: ref ? { "content-type": "application/json" } : undefined,
+                    body: ref ? JSON.stringify({ target_ref: ref }) : undefined,
+                },
                 { successMessage: pinned ? "Unpinned target" : "Pinned target" },
             );
             if (response.ok) await loadHistory("replace");

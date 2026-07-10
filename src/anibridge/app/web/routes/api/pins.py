@@ -5,9 +5,10 @@ from typing import Annotated
 import msgspec
 from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import delete, get, put
-from litestar.params import PathParameter, QueryParameter
+from litestar.params import Body, PathParameter, QueryParameter
 from litestar.router import Router
 
+from anibridge.app.core.sync import RefPayload
 from anibridge.app.web.services.pin_service import (
     PinEntry,
     PinSearchResult,
@@ -61,6 +62,12 @@ class OkResponse(msgspec.Struct):
     ] = True
 
 
+class PinMutationRequest(msgspec.Struct):
+    """Optional payload for exact target ref pin mutations."""
+
+    target_ref: RefPayload | None = None
+
+
 @get(path="/{profile:str}")
 async def list_pins(
     profile: Annotated[str, PathParameter()],
@@ -104,25 +111,32 @@ async def get_pin(
 async def upsert_pin(
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
+    data: Annotated[PinMutationRequest | None, Body()] = None,
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
     """Create or update a target parent pin."""
     try:
         entry = await get_pin_service().upsert_pin(
-            profile, media_key, with_media=with_media
+            profile,
+            media_key,
+            with_media=with_media,
+            target_ref=data.target_ref if data else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return entry
 
 
-@delete(path="/{profile:str}/{media_key:str}", status_code=200, sync_to_thread=True)
-def delete_pin(
+@delete(path="/{profile:str}/{media_key:str}", status_code=200)
+async def delete_pin(
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
+    data: Annotated[PinMutationRequest | None, Body()] = None,
 ) -> OkResponse:
     """Delete pin state for a target parent ref."""
-    get_pin_service().delete_pin(profile, media_key)
+    get_pin_service().delete_pin(
+        profile, media_key, target_ref=data.target_ref if data else None
+    )
     return OkResponse()
 
 

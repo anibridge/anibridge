@@ -21,6 +21,7 @@ from anibridge.provider.base import (
 
 from anibridge.app.config.database import db
 from anibridge.app.core.sched.client import SchedulerClient
+from anibridge.app.core.sync import RefPayload, RefStepPayload
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.web.services.pin_service import PinService
 from anibridge.app.web.state import get_app_state
@@ -170,6 +171,29 @@ async def test_pin_service_upsert_and_delete_roundtrip():
 
     service.delete_pin("default", "abc")
     assert await service.get_pin("default", "abc") is None
+
+
+@pytest.mark.asyncio
+async def test_pin_service_preserves_pathful_target_refs():
+    """Pins for the same key but different provider paths remain independent."""
+    service = PinService()
+    first_ref = RefPayload("abc", (RefStepPayload("episode", 1),))
+    second_ref = RefPayload("abc", (RefStepPayload("episode", 2),))
+
+    first = await service.upsert_pin("default", "abc", target_ref=first_ref)
+    second = await service.upsert_pin("default", "abc", target_ref=second_ref)
+
+    assert first.target_parent_ref == first_ref
+    assert second.target_parent_ref == second_ref
+    assert [pin.target_parent_ref for pin in await service.list_pins("default")] == [
+        second_ref,
+        first_ref,
+    ]
+
+    service.delete_pin("default", "abc", target_ref=first_ref)
+
+    assert await service.get_pin("default", "abc", target_ref=first_ref) is None
+    assert await service.get_pin("default", "abc", target_ref=second_ref) is not None
 
 
 @pytest.mark.asyncio

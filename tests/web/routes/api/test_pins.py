@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from anibridge.app.core.sync import RefPayload
+from anibridge.app.core.sync import RefPayload, RefStepPayload
 from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.web.routes.api import pins as pins_api_module
 from anibridge.app.web.services.pin_service import (
@@ -15,8 +15,8 @@ from anibridge.app.web.services.pin_service import (
 
 class _FakePinService:
     def __init__(self) -> None:
-        self.deleted: list[tuple[str, str]] = []
-        self.upsert_calls: list[tuple[str, str, bool]] = []
+        self.deleted: list[tuple[str, str, RefPayload | None]] = []
+        self.upsert_calls: list[tuple[str, str, bool, RefPayload | None]] = []
 
     async def list_pins(self, profile: str, *, with_media: bool) -> list[PinEntry]:
         return [
@@ -43,9 +43,14 @@ class _FakePinService:
         )
 
     async def upsert_pin(
-        self, profile: str, media_key: str, *, with_media: bool
+        self,
+        profile: str,
+        media_key: str,
+        *,
+        with_media: bool,
+        target_ref: RefPayload | None = None,
     ) -> PinEntry:
-        self.upsert_calls.append((profile, media_key, with_media))
+        self.upsert_calls.append((profile, media_key, with_media, target_ref))
         if media_key == "bad":
             raise ValueError("Invalid pin")
         return PinEntry(
@@ -56,8 +61,13 @@ class _FakePinService:
             updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
 
-    def delete_pin(self, profile: str, media_key: str) -> None:
-        self.deleted.append((profile, media_key))
+    def delete_pin(
+        self,
+        profile: str,
+        media_key: str,
+        target_ref: RefPayload | None = None,
+    ) -> None:
+        self.deleted.append((profile, media_key, target_ref))
 
     async def search_pins(
         self,
@@ -151,7 +161,19 @@ def test_upsert_pin_route_creates_parent_pin_and_handles_errors(
     )
 
     assert response.status_code == 200
-    assert fake_pin_service.upsert_calls[-1] == ("default", "123", True)
+    assert fake_pin_service.upsert_calls[-1] == ("default", "123", True, None)
+
+    pathful = pins_client.put(
+        "/api/pins/default/123",
+        json={"target_ref": {"key": "123", "path": [{"axis": "episode", "value": 1}]}},
+    )
+    assert pathful.status_code == 200
+    assert fake_pin_service.upsert_calls[-1] == (
+        "default",
+        "123",
+        False,
+        RefPayload("123", (RefStepPayload("episode", 1),)),
+    )
 
     invalid = pins_client.put("/api/pins/default/bad")
     assert invalid.status_code == 400
@@ -159,8 +181,14 @@ def test_upsert_pin_route_creates_parent_pin_and_handles_errors(
 
 
 def test_delete_pin_route_returns_ok(pins_client, fake_pin_service) -> None:
-    response = pins_client.delete("/api/pins/default/123")
+    response = pins_client.request(
+        "DELETE",
+        "/api/pins/default/123",
+        json={"target_ref": {"key": "123", "path": [{"axis": "episode", "value": 1}]}},
+    )
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert fake_pin_service.deleted == [("default", "123")]
+    assert fake_pin_service.deleted == [
+        ("default", "123", RefPayload("123", (RefStepPayload("episode", 1),)))
+    ]

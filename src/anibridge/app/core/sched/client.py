@@ -508,10 +508,10 @@ class SchedulerClient:
     def _coalesced_request(requests: Sequence[SyncRequest]) -> SyncRequest:
         """Merge queued requests without losing scan coverage."""
         trigger_priority = {
-            SyncTrigger.PERIODIC: 5,
-            SyncTrigger.MANUAL: 4,
-            SyncTrigger.POLL: 3,
-            SyncTrigger.WEBHOOK: 2,
+            SyncTrigger.MANUAL: 5,
+            SyncTrigger.POLL: 4,
+            SyncTrigger.WEBHOOK: 3,
+            SyncTrigger.PERIODIC: 2,
         }
         trigger = max(requests, key=lambda item: trigger_priority[item.trigger]).trigger
         refs = []

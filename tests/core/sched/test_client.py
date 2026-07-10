@@ -187,6 +187,28 @@ def test_coalesced_request_preserves_poll_fallback_coverage() -> None:
     assert manual_with_poll.full_scan_on_poll_fallback is False
 
 
+def test_coalesced_request_preserves_user_trigger_attribution() -> None:
+    """Manual and poll requests should not be reported as periodic work."""
+    manual_with_periodic = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.PERIODIC),
+            SyncRequest(trigger=SyncTrigger.MANUAL, source_refs=(Ref.anchor("a"),)),
+        ]
+    )
+    poll_with_periodic = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.PERIODIC),
+            SyncRequest(trigger=SyncTrigger.POLL),
+        ]
+    )
+
+    assert manual_with_periodic.trigger == SyncTrigger.MANUAL
+    assert manual_with_periodic.source_refs is None
+    assert poll_with_periodic.trigger == SyncTrigger.POLL
+    assert poll_with_periodic.source_refs is None
+    assert poll_with_periodic.full_scan_on_poll_fallback is True
+
+
 @pytest.mark.asyncio
 async def test_trigger_profile_sync_runs_immediately_when_stopped(
     scheduler: SchedulerClient,

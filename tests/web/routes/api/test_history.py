@@ -16,6 +16,8 @@ class _FakeHistoryService:
 
     async def get_page(self, **kwargs) -> HistoryPage:
         self.page_requests.append(kwargs)
+        if kwargs["outcome"] == "invalid":
+            raise ValueError("'invalid' is not a valid SyncOutcome")
         return HistoryPage(
             groups=[
                 HistoryGroup(
@@ -93,6 +95,16 @@ def test_history_page_route_rejects_invalid_limit(history_client) -> None:
     response = history_client.get("/api/history/default", params={"limit": 0})
 
     assert response.status_code == 400
+
+
+def test_history_page_route_rejects_invalid_filters(history_client) -> None:
+    response = history_client.get(
+        "/api/history/default",
+        params={"outcome": "invalid"},
+    )
+
+    assert response.status_code == 400
+    assert "SyncOutcome" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(

@@ -70,17 +70,20 @@ async def get_history(
             detail="before_id and after_id are mutually exclusive",
         )
 
-    return await get_history_service().get_page(
-        profile=profile,
-        limit=limit,
-        before_id=before_id,
-        after_id=after_id,
-        outcome=outcome,
-        source_namespace=source_namespace,
-        target_namespace=target_namespace,
-        resource_kind=resource_kind,
-        include_stats=include_stats,
-    )
+    try:
+        return await get_history_service().get_page(
+            profile=profile,
+            limit=limit,
+            before_id=before_id,
+            after_id=after_id,
+            outcome=outcome,
+            source_namespace=source_namespace,
+            target_namespace=target_namespace,
+            resource_kind=resource_kind,
+            include_stats=include_stats,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @delete(path="/{profile:str}/groups/{group_id:int}", status_code=200)

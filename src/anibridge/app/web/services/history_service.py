@@ -149,6 +149,12 @@ def _aggregate_outcome(outcomes: Sequence[SyncOutcome]) -> SyncOutcome:
     return max(outcomes, key=lambda outcome: _OUTCOME_SEVERITY[outcome])
 
 
+def _parse_history_filter(value: str | None, enum_type: type[Any]) -> Any | None:
+    if value is None:
+        return None
+    return enum_type(value)
+
+
 class HistoryService:
     """Service to paginate and operate on grouped sync history."""
 
@@ -415,18 +421,20 @@ class HistoryService:
 
         effective_source_namespace = source_namespace or configured_source_namespace
         effective_target_namespace = target_namespace or configured_target_namespace
+        effective_outcome = _parse_history_filter(outcome, SyncOutcome)
+        effective_resource_kind = _parse_history_filter(resource_kind, SyncResourceKind)
 
         base_filters = [
             SyncHistoryGroup.profile_name == profile,
             SyncHistoryGroup.source_namespace == effective_source_namespace,
             SyncHistoryGroup.target_namespace == effective_target_namespace,
         ]
-        if outcome:
-            base_filters.append(SyncHistoryGroup.outcome == outcome)
-        if resource_kind:
+        if effective_outcome:
+            base_filters.append(SyncHistoryGroup.outcome == effective_outcome)
+        if effective_resource_kind:
             base_filters.append(
                 SyncHistoryGroup.operations.any(
-                    SyncHistoryOperation.resource_kind == resource_kind
+                    SyncHistoryOperation.resource_kind == effective_resource_kind
                 )
             )
 

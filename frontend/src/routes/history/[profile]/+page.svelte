@@ -85,8 +85,12 @@
         reconnectMs: 2500,
         onMessage: (data) => {
             const nextLatest = data.latest_group_id ?? null;
-            if (nextLatest && latestGroupId && nextLatest > latestGroupId) {
+            if (nextLatest === null && latestGroupId !== null) {
+                void loadHistory("replace");
+            } else if (nextLatest && latestGroupId && nextLatest > latestGroupId) {
                 void loadHistory("newer");
+            } else if (nextLatest && latestGroupId && nextLatest !== latestGroupId) {
+                void loadHistory("replace");
             } else if (nextLatest && !latestGroupId) {
                 void loadHistory("replace");
             }
@@ -202,7 +206,10 @@
 
             hasMore = data.has_more;
             nextBeforeId = data.next_before_id ?? null;
-            latestGroupId = data.latest_group_id ?? latestGroupId;
+            latestGroupId =
+                mode === "replace"
+                    ? (data.latest_group_id ?? null)
+                    : (data.latest_group_id ?? latestGroupId);
             if (data.stats) stats = data.stats;
             lastRefreshed = Date.now();
         } catch (error) {

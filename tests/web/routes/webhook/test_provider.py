@@ -67,7 +67,11 @@ async def test_provider_webhook_triggers_matching_profiles(monkeypatch) -> None:
         "get_app_state",
         lambda: SimpleNamespace(scheduler=scheduler),
     )
-    monkeypatch.setattr(webhook_module, "schedule_task", _schedule_task)
+    monkeypatch.setattr(
+        webhook_module,
+        "_background_tasks",
+        SimpleNamespace(create=_schedule_task),
+    )
 
     request = cast(Any, object())
     await webhook_module.provider_webhook.fn("plex", request)

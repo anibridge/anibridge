@@ -1,6 +1,7 @@
 """Tests for sync API endpoints."""
 
 from collections.abc import Coroutine
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,7 +25,11 @@ def scheduled_tasks(
         tasks.append((name, coro))
         coro.close()
 
-    monkeypatch.setattr(sync_api_module, "schedule_task", _schedule_task)
+    monkeypatch.setattr(
+        sync_api_module,
+        "_background_tasks",
+        SimpleNamespace(create=_schedule_task),
+    )
     return tasks
 
 

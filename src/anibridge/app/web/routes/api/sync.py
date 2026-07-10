@@ -3,16 +3,22 @@
 from typing import Annotated
 
 import msgspec
+from anibridge.utils.tasks import BackgroundTaskGroup
 from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
 from anibridge.app.core.sync import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
-from anibridge.app.utils.async_tasks import schedule_task
+from anibridge.app.logging import get_logger
 from anibridge.app.web.state import get_app_state
 
 __all__ = ["router"]
+
+log = get_logger(__name__)
+_background_tasks = BackgroundTaskGroup(
+    on_error=lambda name, _exc: log.exception("Background task '%s' failed", name)
+)
 
 
 class OkResponse(msgspec.Struct):
@@ -33,7 +39,7 @@ async def sync_all(
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
-    schedule_task(
+    _background_tasks.create(
         scheduler.trigger_all_profiles_sync(
             request=SyncRequest(trigger=trigger),
             source="api:sync_all",
@@ -49,7 +55,7 @@ async def sync_database() -> OkResponse:
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
-    schedule_task(
+    _background_tasks.create(
         scheduler.trigger_database_sync(source="api:sync_database"),
         name="sync_database",
     )
@@ -65,7 +71,7 @@ async def sync_profile(
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
-    schedule_task(
+    _background_tasks.create(
         scheduler.trigger_profile_sync(
             profile,
             request=SyncRequest(trigger=trigger),

@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+from anibridge.utils.tasks import BackgroundTaskGroup
 from litestar.connection.request import Request
 from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter
@@ -10,12 +11,14 @@ from litestar.router import Router
 from anibridge.app.core.sync import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.logging import get_logger
-from anibridge.app.utils.async_tasks import schedule_task
 from anibridge.app.web.state import get_app_state
 
 __all__ = ["router"]
 
 log = get_logger(__name__)
+_background_tasks = BackgroundTaskGroup(
+    on_error=lambda name, _exc: log.exception("Background task '%s' failed", name)
+)
 
 
 @post(path="/{provider_namespace:str}", status_code=200)
@@ -44,7 +47,7 @@ async def provider_webhook(
                 profile_name,
                 source_refs,
             )
-            schedule_task(
+            _background_tasks.create(
                 scheduler.trigger_profile_sync(
                     profile_name,
                     request=SyncRequest(

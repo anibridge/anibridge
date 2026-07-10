@@ -12,6 +12,7 @@ from anibridge.provider.base import (
     SupportsReads,
 )
 from anibridge.utils.cache import cache
+from anibridge.utils.tasks import BackgroundTaskGroup
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import select
 from sqlalchemy.sql.functions import func
@@ -43,7 +44,6 @@ from anibridge.app.models.db.sync_history import (
     SyncResourceKind,
 )
 from anibridge.app.models.schemas.provider import ProviderMediaMetadata
-from anibridge.app.utils.async_tasks import schedule_task
 from anibridge.app.web.state import get_app_state, get_bridge
 
 __all__ = [
@@ -55,6 +55,9 @@ __all__ = [
 ]
 
 log = get_logger(__name__)
+_background_tasks = BackgroundTaskGroup(
+    on_error=lambda name, _exc: log.exception("Background task '%s' failed", name)
+)
 
 _OUTCOME_SEVERITY = {
     SyncOutcome.SKIPPED: 0,
@@ -591,7 +594,7 @@ class HistoryService:
                 "Cannot retry history group without a source ref"
             )
 
-        schedule_task(
+        _background_tasks.create(
             scheduler.trigger_profile_sync(
                 profile,
                 request=SyncRequest(
@@ -655,7 +658,7 @@ class HistoryService:
                 "Cannot undo history operation without record state"
             )
 
-        schedule_task(
+        _background_tasks.create(
             scheduler.trigger_profile_sync(
                 profile,
                 request=SyncRequest(

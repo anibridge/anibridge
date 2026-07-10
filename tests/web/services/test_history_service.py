@@ -103,8 +103,8 @@ def history_env(
     )
     monkeypatch.setattr(
         history_service_module,
-        "schedule_task",
-        lambda coro, *, name: coro.close(),
+        "_background_tasks",
+        SimpleNamespace(create=lambda coro, *, name: coro.close()),
     )
     return SimpleNamespace(bridge=bridge, scheduler=scheduler)
 
@@ -407,8 +407,8 @@ async def test_history_service_retry_group_targets_source_ref(
     history_env.scheduler.trigger_profile_sync = fake_trigger
     monkeypatch.setattr(
         history_service_module,
-        "schedule_task",
-        lambda coro, *, name: scheduled.append((coro, name)),
+        "_background_tasks",
+        SimpleNamespace(create=lambda coro, *, name: scheduled.append((coro, name))),
     )
 
     await HistoryService().retry_group("profile", row_id)
@@ -440,8 +440,8 @@ async def test_history_service_undo_operation_schedules_record_undo(
     history_env.scheduler.trigger_profile_sync = fake_trigger
     monkeypatch.setattr(
         history_service_module,
-        "schedule_task",
-        lambda coro, *, name: scheduled.append((coro, name)),
+        "_background_tasks",
+        SimpleNamespace(create=lambda coro, *, name: scheduled.append((coro, name))),
     )
 
     await HistoryService().undo_operation("profile", row_id)

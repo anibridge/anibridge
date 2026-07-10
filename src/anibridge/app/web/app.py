@@ -1,6 +1,7 @@
 """Litestar application factory and setup."""
 
 import asyncio
+import json
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -8,10 +9,10 @@ from logging import DEBUG
 from pathlib import Path
 from typing import Annotated
 
-import msgspec
 from litestar.app import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.connection.request import Request as LitestarRequest
+from litestar.datastructures import CacheControlHeader
 from litestar.enums import MediaType
 from litestar.exceptions.http_exceptions import NotFoundException
 from litestar.handlers.http_handlers.decorators import get
@@ -23,11 +24,12 @@ from litestar.params import PathParameter
 from litestar.response.base import Response as LitestarResponse
 from litestar.response.file import File
 from litestar.router import Router
+from litestar.static_files import create_static_files_router
 from litestar.types.internal_types import ControllerRouterHandler
 
 from anibridge.app import __version__
 from anibridge.app.config.settings import get_config
-from anibridge.app.core.sched import SchedulerClient
+from anibridge.app.core.sched.client import SchedulerClient
 from anibridge.app.exceptions import AnibridgeError
 from anibridge.app.logging import APP_LOGGER_NAME, attach_handler, get_logger
 from anibridge.app.utils.paths import PROJECT_ROOT
@@ -47,24 +49,23 @@ log = get_logger(APP_LOGGER_NAME)
 
 FRONTEND_BUILD_DIR = PROJECT_ROOT / "frontend" / "build"
 _ROOT_RELATIVE_URL_RE = re.compile(r'((?:href|src)=["\']|import\(")/')
+_DEFAULT_ASSET_CACHE = CacheControlHeader(public=True, max_age=3600)
+_IMMUTABLE_ASSET_CACHE = CacheControlHeader(
+    public=True,
+    max_age=31_536_000,
+    immutable=True,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: Litestar) -> AsyncGenerator[None]:
-    """Application lifespan context manager.
-
-    Args:
-        app (Litestar): The Litestar application instance.
-
-    Returns:
-        AsyncGenerator: The application lifespan context manager.
-    """
+    """Application lifespan context manager."""
     scheduler: SchedulerClient | None = getattr(app.state, "scheduler", None)
     if scheduler is None:
-        log.info("No scheduler passed; external lifecycle management expected")
+        log.debug("No scheduler passed; external lifecycle management expected")
     else:
         get_app_state().set_scheduler(scheduler)
-        if not scheduler._running:
+        if not scheduler.is_running:
             await scheduler.initialize()
             await scheduler.start()
             log.success("Scheduler started for web UI")
@@ -92,7 +93,7 @@ async def lifespan(app: Litestar) -> AsyncGenerator[None]:
         yield
     finally:
         await get_app_state().shutdown()
-        if scheduler and scheduler._running:
+        if scheduler and scheduler.is_running:
             await scheduler.stop()
 
 
@@ -100,36 +101,28 @@ def litestar_domain_exception_handler(
     request: LitestarRequest, exc: Exception
 ) -> LitestarResponse[dict[str, str]]:
     """Handle AniBridge errors inside the Litestar shell."""
-    status_code = getattr(exc.__class__, "status_code", 500)
     return LitestarResponse(
         content={
             "error": exc.__class__.__name__,
             "detail": str(exc) or exc.__class__.__doc__ or "",
             "path": request.url.path,
         },
-        status_code=status_code,
+        status_code=exc.status_code if isinstance(exc, AnibridgeError) else 500,
     )
 
 
 def _render_frontend_spa(path_prefix: str) -> str:
-    """Render the built SPA entrypoint with a runtime path prefix.
+    """Render the built SPA entrypoint."""
+    html = (FRONTEND_BUILD_DIR / "index.html").read_text(encoding="utf-8")
+    if not path_prefix:
+        return html
 
-    SvelteKit always emits absolute asset paths in SPA fallback pages, even when
-    `kit.paths.relative` is enabled, so the fallback HTML must be rewritten
-    before it is returned from the backend.
-    """
-    index_html = (FRONTEND_BUILD_DIR / "index.html").read_text(encoding="utf-8")
-    safe_path_prefix = msgspec.json.encode(path_prefix).decode()
     runtime_script = (
-        f"<script>window.__ANIBRIDGE_PATH_PREFIX = {safe_path_prefix};</script>"
+        f"<script>window.__ANIBRIDGE_PATH_PREFIX = {json.dumps(path_prefix)};</script>"
     )
-    if "window.__ANIBRIDGE_PATH_PREFIX" not in index_html:
-        index_html = index_html.replace(
-            "</head>", f"        {runtime_script}\n    </head>", 1
-        )
-
-    index_html = _ROOT_RELATIVE_URL_RE.sub(rf"\1{path_prefix}/", index_html)
-    return index_html.replace('base: ""', "base: window.__ANIBRIDGE_PATH_PREFIX", 1)
+    html = html.replace("</head>", f"        {runtime_script}\n    </head>", 1)
+    html = _ROOT_RELATIVE_URL_RE.sub(rf"\1{path_prefix}/", html)
+    return html.replace('base: ""', "base: window.__ANIBRIDGE_PATH_PREFIX", 1)
 
 
 def _serve_frontend_asset(path: str) -> File:
@@ -186,19 +179,10 @@ async def serve_spa(
 
 
 def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
-    """Create the Litestar application.
-
-    Args:
-        scheduler (SchedulerClient | None): The scheduler client instance.
-
-    Returns:
-        Litestar: The created Litestar application.
-    """
+    """Create the Litestar application."""
     config = get_config()
     middleware: list[ASGIMiddleware | DefineMiddleware] = []
-    compression_config = CompressionConfig(backend="gzip")
 
-    # Use Litestar's request/response logging when debug logging is enabled.
     if log.getEffectiveLevel() <= DEBUG:
         middleware.append(
             LoggingMiddlewareConfig(
@@ -210,7 +194,6 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
         )
         log.debug("Request logging enabled in debug mode")
 
-    # Add basic auth middleware if configured
     if config.web.has_auth:
         middleware.append(
             DefineMiddleware(
@@ -220,6 +203,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
                 if config.web.basic_auth.password
                 else None,
                 htpasswd_path=config.web.basic_auth.htpasswd_path,
+                path_prefix=config.web.path_prefix,
                 realm=config.web.basic_auth.realm,
             )
         )
@@ -237,12 +221,33 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
     elif not (FRONTEND_BUILD_DIR / "index.html").exists():
         log.error("Frontend index file does not exist; no SPA will be served")
     else:
+        app_asset_dir = FRONTEND_BUILD_DIR / "_app"
+        immutable_asset_dir = app_asset_dir / "immutable"
+
+        if immutable_asset_dir.exists():
+            route_handlers.append(
+                create_static_files_router(
+                    path="/_app/immutable",
+                    directories=[immutable_asset_dir],
+                    cache_control=_IMMUTABLE_ASSET_CACHE,
+                    name="frontend-immutable-assets",
+                )
+            )
+
+        if app_asset_dir.exists():
+            route_handlers.append(
+                create_static_files_router(
+                    path="/_app",
+                    directories=[app_asset_dir],
+                    cache_control=_DEFAULT_ASSET_CACHE,
+                    name="frontend-assets",
+                )
+            )
+
         route_handlers.append(serve_spa)
 
     if config.web.path_prefix:
-        log.info(
-            "Serving AniBridge web UI under path prefix %s", config.web.path_prefix
-        )
+        log.info("Serving AniBridge web UI under %s", config.web.path_prefix)
         route_handlers = [
             Router(path=config.web.path_prefix, route_handlers=route_handlers)
         ]
@@ -250,7 +255,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
     app = Litestar(
         route_handlers=route_handlers,
         middleware=middleware,
-        compression_config=compression_config,
+        compression_config=CompressionConfig(backend="gzip"),
         lifespan=[lifespan],
         openapi_config=OpenAPIConfig(
             title="AniBridge",
@@ -265,7 +270,5 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
         exception_handlers={AnibridgeError: litestar_domain_exception_handler},
     )
 
-    if scheduler:
-        app.state.scheduler = scheduler
-
+    app.state.scheduler = scheduler
     return app

@@ -14,15 +14,35 @@
 
     import { goto } from "$app/navigation";
     import { resolve } from "$app/paths";
+    import EmptyState from "$lib/components/empty-state.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
+    import Skeleton from "$lib/components/skeleton.svelte";
     import type { ProfileStatus, StatusResponse } from "$lib/types/api";
-    import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
+    import { apiFetch, apiJson } from "$lib/utils/api";
+    import { createJsonWebSocket } from "$lib/utils/json-websocket";
     import { toast } from "$lib/utils/notify";
+    import {
+        progressCount,
+        progressPercent,
+        progressStage,
+        progressSubject,
+    } from "$lib/utils/sync-progress";
+    import { titleCase } from "$lib/utils/text";
 
     let profiles: StatusResponse["profiles"] = $state({});
     let isLoading = $state(true);
-    let lastRefreshed: number | null = $state(null);
-    let ws: WebSocket | null = $state(null);
     let reinitializingProfiles: Record<string, boolean> = $state({});
+
+    const statusSocket = createJsonWebSocket<Partial<StatusResponse>>({
+        path: "/ws/status",
+        reconnectMs: 2000,
+        onMessage: (data) => {
+            if (data.profiles) {
+                profiles = data.profiles;
+                isLoading = false;
+            }
+        },
+    });
 
     function profileEntries() {
         return Object.entries(profiles).sort((a, b) => a[0].localeCompare(b[0]));
@@ -49,9 +69,9 @@
 
     function profileCardClass(profileDisabled: boolean): string {
         if (profileDisabled) {
-            return "group rounded-md border border-slate-800/80 bg-slate-900/50 p-4 text-left transition-colors focus:ring-2 focus:ring-sky-600/40 focus:outline-none cursor-not-allowed";
+            return "group cursor-pointer rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors hover:border-border hover:bg-bg-alt/70 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
         }
-        return "group rounded-md border border-slate-800/80 bg-slate-900/50 p-4 text-left transition-colors focus:ring-2 focus:ring-sky-600/40 focus:outline-none cursor-pointer hover:bg-slate-900/70";
+        return "group rounded-md border border-border/80 bg-bg-alt/50 p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none cursor-pointer hover:bg-bg-alt/70 hover:border-border";
     }
 
     function anyRunning(): boolean {
@@ -80,41 +100,21 @@
             const d = await apiJson<StatusResponse>("/api/status");
             profiles = d.profiles;
             isLoading = false;
-            lastRefreshed = Date.now();
         } catch (e) {
             console.error("Failed to load status", e);
             toast("Failed to load status", "error");
         }
     }
 
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
-        ws.onmessage = (ev) => {
-            try {
-                const data = JSON.parse(ev.data);
-                if (data.profiles) {
-                    profiles = data.profiles;
-                    isLoading = false;
-                    lastRefreshed = Date.now();
-                }
-            } catch {}
-        };
-        ws.onclose = () => {
-            setTimeout(openWs, 2000);
-        };
-    }
-
-    async function syncAll(poll: boolean) {
+    async function syncAll(trigger: "manual" | "poll") {
         await apiFetch(
-            `/api/sync?poll=${poll}`,
+            `/api/sync?trigger=${trigger}`,
             { method: "POST" },
             {
-                successMessage: poll
-                    ? "Triggered poll sync for all profiles"
-                    : "Triggered full sync for all profiles",
+                successMessage:
+                    trigger === "poll"
+                        ? "Triggered poll sync for all profiles"
+                        : "Triggered full sync for all profiles",
             },
         );
         refresh();
@@ -129,14 +129,15 @@
         refresh();
     }
 
-    async function syncProfile(name: string, poll: boolean) {
+    async function syncProfile(name: string, trigger: "manual" | "poll") {
         await apiFetch(
-            `/api/sync/profile/${name}?poll=${poll}`,
+            `/api/sync/profile/${encodeURIComponent(name)}?trigger=${trigger}`,
             { method: "POST" },
             {
-                successMessage: poll
-                    ? `Triggered poll sync for profile ${name}`
-                    : `Triggered full sync for profile ${name}`,
+                successMessage:
+                    trigger === "poll"
+                        ? `Triggered poll sync for profile ${name}`
+                        : `Triggered full sync for profile ${name}`,
             },
         );
         refresh();
@@ -155,7 +156,7 @@
         reinitializingProfiles[name] = true;
         try {
             const response = await apiFetch(
-                `/api/sync/profile/${name}/reinitialize`,
+                `/api/sync/profile/${encodeURIComponent(name)}/reinitialize`,
                 { method: "POST" },
                 { successMessage: `Reinitialized profile ${name}` },
             );
@@ -168,99 +169,75 @@
         }
     }
 
-    function goTimeline(name: string) {
-        goto(resolve(`/timeline/${name}`));
+    function goHistory(name: string) {
+        goto(resolve(`/history/${encodeURIComponent(name)}`));
     }
 
-    function progressPercent(p: ProfileStatus): number | null {
-        const c = p.status?.current_sync;
-        if (!c || c.state !== "running") return null;
-        const secIdx = Math.max(0, (c.section_index || 1) - 1);
-        const secCount = Math.max(1, c.section_count || 1);
-        const total = Math.max(1, c.section_items_total || 1);
-        const done = Math.min(total, c.section_items_processed || 0);
-        const sectionFrac = total > 0 ? done / total : 0;
-        const overall = (secIdx + sectionFrac) / secCount;
-        return Math.max(0, Math.min(1, overall));
+    function accountPair(p: ProfileStatus): string {
+        const source = p.config.source_account || p.config.source_namespace || "source";
+        const target = p.config.target_account || p.config.target_namespace || "target";
+        return `${source} -> ${target}`;
     }
 
     onMount(() => {
         refresh();
-        openWs();
+        statusSocket.connect();
+        return () => statusSocket.close();
     });
 </script>
 
 <div class="space-y-6">
-    <div class="space-y-2">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div class="space-y-1 sm:flex-1">
-                <div class="flex items-center gap-2">
-                    <Users class="inline h-4 w-4 text-slate-300" />
-                    <h2 class="text-lg font-semibold">Profiles</h2>
-                    <span class="hidden text-xs text-slate-500 sm:inline"
-                        >{Object.keys(profiles).length} total {#if lastRefreshed}•
-                            updated {formatTimeAgo(
-                                new Date(lastRefreshed).toISOString(),
-                            )}{/if}</span>
-                </div>
-                <p class="text-xs text-slate-400">Browse your configured profiles.</p>
-            </div>
-            <div class="flex flex-wrap gap-2 sm:justify-end">
-                <button
-                    class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 text-xs font-medium text-amber-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={syncDatabase}>
-                    <DatabaseBackup class="inline h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Sync Database</span>
-                </button>
-                <button
-                    class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-xs font-medium text-emerald-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={() => syncAll(false)}
-                    disabled={anyRunning()}
-                    title={anyRunning()
-                        ? "A sync is currently running. Please wait."
-                        : "Trigger a full sync for all profiles"}>
-                    <RefreshCcw class="inline h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Full Scan All</span>
-                </button>
-                <button
-                    class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-xs font-medium text-sky-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
-                    onclick={() => syncAll(true)}
-                    disabled={anyRunning()}
-                    title={anyRunning()
-                        ? "A sync is currently running. Please wait."
-                        : "Trigger a poll sync for all profiles"}>
-                    <CloudDownload class="inline h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Poll Scan All</span>
-                </button>
-            </div>
-        </div>
-    </div>
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,42rem),1fr))] gap-4">
+    <PageHeader
+        icon={Users}
+        title="Profiles"
+        description="Browse your configured profiles.">
+        {#snippet actions()}
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-amber-600/60 bg-amber-600/30 px-2 py-1 text-xs font-medium text-amber-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-amber-600/40 focus:ring-2 focus:ring-amber-500/40 focus:outline-none sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={syncDatabase}>
+                <DatabaseBackup class="inline h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Sync Database</span>
+            </button>
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-xs font-medium text-emerald-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-emerald-600/40 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={() => syncAll("manual")}
+                disabled={anyRunning()}
+                title={anyRunning()
+                    ? "A sync is currently running. Please wait."
+                    : "Trigger a full sync for all profiles"}>
+                <RefreshCcw class="inline h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Full Scan All</span>
+            </button>
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-xs font-medium text-sky-200 shadow-sm backdrop-blur-sm transition-colors hover:bg-sky-600/40 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-sm"
+                onclick={() => syncAll("poll")}
+                disabled={anyRunning()}
+                title={anyRunning()
+                    ? "A sync is currently running. Please wait."
+                    : "Trigger a poll sync for all profiles"}>
+                <CloudDownload class="inline h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Poll Scan All</span>
+            </button>
+        {/snippet}
+    </PageHeader>
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,36rem),1fr))] gap-4">
         {#if isLoading && Object.keys(profiles).length === 0}
             {#each [1, 2, 3] as i (i)}
                 <div
                     in:fade={{ duration: 150 }}
-                    class="animate-pulse rounded-md border border-slate-800/60 bg-slate-900/40 p-4">
-                    <div class="h-4 w-1/3 rounded-md bg-slate-700/60"></div>
-                    <div class="mt-3 h-3 w-1/2 rounded-md bg-slate-800/60"></div>
-                    <div class="mt-3 flex gap-2">
-                        <div class="h-6 w-20 rounded-md bg-slate-800/60"></div>
-                        <div class="h-6 w-24 rounded-md bg-slate-800/60"></div>
-                        <div class="h-6 w-16 rounded-md bg-slate-800/60"></div>
-                    </div>
+                    class="rounded-md border border-border/80 bg-bg-alt/60 p-4">
+                    <Skeleton lines={3} />
                 </div>
             {/each}
         {/if}
         {#if !isLoading && Object.keys(profiles).length === 0}
             <a
                 href={resolve("/settings")}
-                in:fade={{ duration: 150 }}
-                class="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700/70 bg-slate-900/30 p-6 text-center transition hover:border-slate-500 hover:bg-slate-900/50">
-                <div class="text-sm text-slate-400">
-                    The application is either still initializing or no profiles are
-                    configured yet. Get started by adding a profile in your
-                    configuration
-                </div>
+                in:fade={{ duration: 150 }}>
+                <EmptyState
+                    icon={Users}
+                    title="No profiles configured"
+                    description="Get started by adding a profile in your configuration." />
             </a>
         {/if}
         {#each profileEntries() as [name, p] (name)}
@@ -270,12 +247,10 @@
             <button
                 type="button"
                 class={profileCardClass(profileDisabled)}
-                onclick={() => {
-                    if (!profileDisabled) goTimeline(name);
-                }}
+                onclick={() => goHistory(name)}
                 title={profileDisabled
-                    ? `${name} is unavailable due to a profile initialization error`
-                    : `Open timeline for ${name}`}>
+                    ? `Open history for ${name}; profile initialization failed`
+                    : `Open history for ${name}`}>
                 <div
                     class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div class:opacity-70={profileDisabled}>
@@ -283,14 +258,13 @@
                             <div class="font-medium text-slate-100">{name}</div>
                             <span
                                 class="rounded-md bg-blue-900/50 px-2 py-1 text-xs text-slate-200"
-                                >{p.config.library_user} &rarr; {p.config
-                                    .list_user}</span>
+                                >{accountPair(p)}</span>
                         </div>
                         <div class="mt-1 text-xs text-slate-400">
                             {#if p.status?.last_synced}
                                 <span
                                     title={new Date(
-                                        p.status.last_synced + "Z",
+                                        p.status.last_synced,
                                     ).toLocaleString()}
                                     >Last sync · {formatTimeAgo(
                                         p.status.last_synced,
@@ -331,9 +305,9 @@
                             </span>
                         {:else}
                             <a
-                                href={resolve(`/timeline/${name}`)}
+                                href={resolve(`/history/${encodeURIComponent(name)}`)}
                                 class="inline-flex items-center gap-1 rounded-md border border-indigo-600/60 bg-indigo-600/30 px-2 py-1 text-[11px] font-medium text-indigo-200 shadow-sm hover:bg-indigo-600/40">
-                                <span>Timeline</span>
+                                <span>History</span>
                                 <ChevronRight class="inline h-3 w-3" />
                             </a>
                             <span
@@ -343,7 +317,7 @@
                                 onclick={(e) => {
                                     e.stopPropagation();
                                     if (!isProfileRunning(p) && !profileDisabled)
-                                        syncProfile(name, false);
+                                        syncProfile(name, "manual");
                                 }}
                                 onkeydown={(e) =>
                                     (e.key === "Enter" || e.key === " ") &&
@@ -351,7 +325,7 @@
                                     e.stopPropagation(),
                                     !isProfileRunning(p) &&
                                         !profileDisabled &&
-                                        syncProfile(name, false))}
+                                        syncProfile(name, "manual"))}
                                 class="inline-flex items-center gap-1 rounded-md border border-emerald-600/60 bg-emerald-600/30 px-2 py-1 text-[11px] font-medium text-emerald-200 hover:bg-emerald-600/40"
                                 class:opacity-50={isProfileRunning(p) ||
                                     profileDisabled}
@@ -372,7 +346,7 @@
                                 onclick={(e) => {
                                     e.stopPropagation();
                                     if (!isProfileRunning(p) && !profileDisabled)
-                                        syncProfile(name, true);
+                                        syncProfile(name, "poll");
                                 }}
                                 onkeydown={(e) =>
                                     (e.key === "Enter" || e.key === " ") &&
@@ -380,7 +354,7 @@
                                     e.stopPropagation(),
                                     !isProfileRunning(p) &&
                                         !profileDisabled &&
-                                        syncProfile(name, true))}
+                                        syncProfile(name, "poll"))}
                                 class="inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-600/30 px-2 py-1 text-[11px] font-medium text-sky-200 hover:bg-sky-600/40"
                                 class:opacity-50={isProfileRunning(p) ||
                                     profileDisabled}
@@ -410,32 +384,40 @@
                         <div
                             class="flex items-center justify-between text-[11px] text-slate-400">
                             <div class="truncate">
-                                {#if p.status.current_sync.section_title}
+                                {#if progressSubject(p.status.current_sync)}
                                     <span class="text-slate-300"
-                                        >{p.status.current_sync.section_title}</span>
+                                        >{progressSubject(p.status.current_sync)}</span>
                                     <span class="mx-1">•</span>
                                 {/if}
                                 <span class="tracking-wide uppercase"
-                                    >{p.status.current_sync.stage ||
-                                        "processing"}</span>
+                                    >{progressStage(p.status.current_sync)}</span>
                             </div>
                             <div>
-                                {p.status.current_sync.section_items_processed || 0}/{p
-                                    .status.current_sync.section_items_total || 0}
+                                {progressCount(p.status.current_sync)}
                             </div>
                         </div>
-                        {#key p.status.current_sync.section_index}
-                            <Meter.Root
-                                value={progressPercent(p) ?? 0}
-                                min={0}
-                                max={1}
-                                class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                        {#key p.status.current_sync.started_at}
+                            {@const percent = progressPercent(p.status.current_sync)}
+                            {#if percent !== null}
+                                <Meter.Root
+                                    value={percent}
+                                    min={0}
+                                    max={1}
+                                    class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                                    <div
+                                        class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
+                                        style="transform: translateX(-{100 -
+                                            100 * percent}%)">
+                                    </div>
+                                </Meter.Root>
+                            {:else}
                                 <div
-                                    class="h-full bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400 transition-all duration-300 ease-out"
-                                    style="transform: translateX(-{100 -
-                                        (100 * (progressPercent(p) ?? 0)) / 1}%)">
+                                    class="h-2 w-full overflow-hidden rounded bg-slate-800/80">
+                                    <div
+                                        class="sync-progress-indeterminate h-full w-1/3 bg-linear-to-r from-indigo-500 via-sky-500 to-cyan-400">
+                                    </div>
                                 </div>
-                            </Meter.Root>
+                            {/if}
                         {/key}
                     </div>
                 {/if}
@@ -462,12 +444,27 @@
                             class="rounded-md bg-slate-800/80 px-2 py-1 text-blue-200"
                             >Destructive Sync</span
                         >{/if}
-                    {#if p.config.batch_requests}<span
-                            class="rounded-md bg-slate-800/80 px-2 py-1 text-blue-200"
-                            >Batch Requests</span
-                        >{/if}
+                    <span class="rounded-md bg-slate-800/80 px-2 py-1 text-blue-200"
+                        >{titleCase(p.config.source_namespace)} -> {titleCase(
+                            p.config.target_namespace,
+                        )}</span>
                 </div>
             </button>
         {/each}
     </div>
 </div>
+
+<style>
+    .sync-progress-indeterminate {
+        animation: sync-progress-indeterminate 1.2s ease-in-out infinite;
+    }
+
+    @keyframes sync-progress-indeterminate {
+        0% {
+            transform: translateX(-120%);
+        }
+        100% {
+            transform: translateX(320%);
+        }
+    }
+</style>

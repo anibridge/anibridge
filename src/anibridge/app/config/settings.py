@@ -7,7 +7,14 @@ from typing import Any, Literal, get_args, get_origin
 
 import yaml
 from anibridge.utils.cache import cache, lru_cache
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import (
     DEFAULT_REF_TEMPLATE,
     GenerateJsonSchema,
@@ -22,13 +29,8 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from anibridge.app.config.sync_rules import (
-    BaseStrEnum,
-    SyncRuleDefinition,
-    SyncRulesConfig,
-    SyncRuleTemplateId,
-)
-from anibridge.app.exceptions import ProfileConfigError, ProfileNotFoundError
+from anibridge.app.config.sync_rules import BaseStrEnum, SyncRulesConfig
+from anibridge.app.exceptions import ProfileNotFoundError
 from anibridge.app.logging import get_logger
 from anibridge.app.utils.cron import CronStr
 
@@ -37,9 +39,6 @@ __all__ = [
     "AnibridgeProfileConfig",
     "LogLevel",
     "ScanMode",
-    "SyncField",
-    "SyncRuleDefinition",
-    "SyncRuleTemplateId",
     "SyncRulesConfig",
     "get_config",
 ]
@@ -47,6 +46,8 @@ __all__ = [
 log = get_logger(__name__)
 
 _SCHEMA_EXTRA_BEHAVIOR_KEY = "x-anibridge-extraBehavior"
+ProviderConfigMap = dict[str, object]
+ProviderNamespaceConfigMap = dict[str, ProviderConfigMap]
 
 
 class LogLevel(BaseStrEnum):
@@ -64,27 +65,6 @@ class LogLevel(BaseStrEnum):
     WARNING = "WARNING"  # Potential problems or issues
     ERROR = "ERROR"  # Error that prevented an operation
     CRITICAL = "CRITICAL"  # Error that prevents further program execution
-
-
-class SyncField(BaseStrEnum):
-    """Enumeration of list fields that can be synchronized with the list provider."""
-
-    STATUS = "status"  # Watch status (watching, completed, etc.)
-    PROGRESS = "progress"  # Number of episodes/movies watched
-    REPEATS = "repeats"  # Number of times rewatched
-    REVIEW = "review"  # User's review/comments (text)
-    USER_RATING = "user_rating"  # User's rating/score
-    STARTED_AT = "started_at"  # When the user started watching (date)
-    FINISHED_AT = "finished_at"  # When the user finished watching (date)
-
-    @classmethod
-    def field_names(cls) -> tuple[str, ...]:
-        """Get a tuple of all sync field names.
-
-        Returns:
-            tuple[str, ...]: All sync field names as strings.
-        """
-        return tuple(field.value for field in cls)
 
 
 class ScanMode(BaseStrEnum):
@@ -127,19 +107,14 @@ class WebConfig(BaseModel):
     port: int = Field(default=4848, description="Port for the web server")
     path_prefix: str = Field(
         default="",
-        description="Web serverpath prefix that AniBridge should be served from",
-    )
-    allow_config_without_auth: bool = Field(
-        default=False,
-        description=(
-            "Expose the configuration API (read and write) without requiring "
-            "authentication. Enable only if access is restricted by other means (e.g., "
-            "reverse proxy firewall). Ignored if authentication is configured via "
-            " basic_auth."
-        ),
+        description="Root-relative path prefix for serving the AniBridge web app",
     )
     basic_auth: BasicAuthConfig = Field(
         default_factory=BasicAuthConfig, description="Authentication settings"
+    )
+    allow_config_without_auth: bool = Field(
+        default=False,
+        description="Allow configuration API access without web authentication",
     )
 
     @field_validator("path_prefix", mode="before")
@@ -151,41 +126,39 @@ class WebConfig(BaseModel):
         if not isinstance(value, str):
             return value
 
-        normalized = value.strip()
-        if not normalized or normalized == "/":
-            return ""
-        if not normalized.startswith("/"):
-            normalized = f"/{normalized}"
-        return normalized.rstrip("/")
+        normalized = value.strip().strip("/")
+        return f"/{normalized}" if normalized else ""
 
     @property
     def has_auth(self) -> bool:
-        """Whether web authentication is configured.
-
-        Returns:
-            bool: True if authentication is configured, False otherwise.
-        """
-        return bool(
-            (
-                self.basic_auth.username
-                and self.basic_auth.password is not None
-                and self.basic_auth.password.get_secret_value()
-            )
-            or self.basic_auth.htpasswd_path
+        """Whether web authentication is configured."""
+        has_static_credentials = bool(
+            self.basic_auth.username
+            and self.basic_auth.password is not None
+            and self.basic_auth.password.get_secret_value()
         )
+        return has_static_credentials or self.basic_auth.htpasswd_path is not None
+
+    @property
+    def allows_config_api(self) -> bool:
+        """Whether configuration endpoints may be exposed."""
+        return self.has_auth or self.allow_config_without_auth
 
 
 class AnibridgeProfileConfig(BaseModel):
     """Configuration for a single AniBridge profile."""
 
-    library_provider: str = Field(
+    source_provider: str = Field(
         default="",
-        description="Namespace of the library provider to use",
+        validation_alias=AliasChoices("source_provider", "library_provider"),
+        description="Namespace of the source provider to use",
     )
-    list_provider: str = Field(
+    target_provider: str = Field(
         default="",
-        description="Namespace of the list provider to use",
+        validation_alias=AliasChoices("target_provider", "list_provider"),
+        description="Namespace of the target provider to use",
     )
+
     scan_modes: list[ScanMode] = Field(
         default_factory=lambda: [ScanMode.PERIODIC, ScanMode.POLL, ScanMode.WEBHOOK],
         description="List of enabled scan modes (periodic, poll, webhook)",
@@ -203,22 +176,14 @@ class AnibridgeProfileConfig(BaseModel):
     )
     destructive_sync: bool = Field(
         default=False,
-        description="Allow decreasing watch progress and removing list entries",
-    )
-    empty_sync: bool = Field(
-        default=False,
         description=(
-            "When enabled, entries with no watch activity/history are synced as "
-            "planning instead of being skipped"
+            "Allow target record deletion, destructive record field updates, "
+            "and target event deletion when supported by the provider."
         ),
     )
     sync_rules: SyncRulesConfig = Field(
         default_factory=SyncRulesConfig,
-        description=(
-            "Declarative rule-based sync overrides. Each field can be disabled "
-            "or configured with an ordered list of conditions that decide how "
-            "the computed value should be transformed or whether it should sync."
-        ),
+        description="Ordered sync rule templates and field or event override rules.",
     )
     backup_retention_days: int = Field(
         default=30,
@@ -228,78 +193,55 @@ class AnibridgeProfileConfig(BaseModel):
             "-1 disables backup creation)"
         ),
     )
-    batch_requests: bool = Field(
-        default=False, description="Batch API requests for better performance"
-    )
-    search_fallback_threshold: int = Field(
-        default=-1, ge=-1, le=100, description="Fuzzy search threshold"
-    )
     dry_run: bool = Field(
         default=False, description="Log changes without applying them"
     )
 
-    library_provider_config: dict[str, dict] = Field(
+    source_provider_config: ProviderNamespaceConfigMap = Field(
         default_factory=dict,
-        exclude=True,
-        repr=False,
-        description="Library provider configuration by namespace",
+        validation_alias=AliasChoices(
+            "source_provider_config", "library_provider_config"
+        ),
+        description="Source provider configuration payloads by provider namespace",
     )
-    list_provider_config: dict[str, dict] = Field(
+    target_provider_config: ProviderNamespaceConfigMap = Field(
         default_factory=dict,
-        exclude=True,
-        repr=False,
-        description="List provider configuration by namespace",
+        validation_alias=AliasChoices("target_provider_config", "list_provider_config"),
+        description="Target provider configuration payloads by provider namespace",
     )
 
-    _parent: AnibridgeConfig | None = None
 
-    @property
-    def parent(self) -> AnibridgeConfig:
-        """Get the parent multi-config instance.
+def _merge_provider_config(
+    global_config: ProviderNamespaceConfigMap,
+    profile_config: ProviderNamespaceConfigMap,
+) -> ProviderNamespaceConfigMap:
+    """Merge provider namespace maps one level deep."""
+    merged = {**global_config}
+    for namespace, settings in profile_config.items():
+        global_settings = merged.get(namespace)
+        merged[namespace] = (
+            {**global_settings, **settings}
+            if isinstance(global_settings, dict) and isinstance(settings, dict)
+            else settings
+        )
+    return merged
 
-        Returns:
-            AnibridgeConfig: Parent configuration.
 
-        Raises:
-            ProfileConfigError: If this config is not part of a multi-config.
-        """
-        if not self._parent:
-            raise ProfileConfigError(
-                "This configuration is not part of a multi-config instance"
+def _merge_profile_config(
+    global_config: AnibridgeProfileConfig,
+    profile_config: AnibridgeProfileConfig,
+) -> AnibridgeProfileConfig:
+    """Return a profile with explicit values layered over global defaults."""
+    updates = profile_config.model_dump(mode="python", exclude_unset=True)
+    for field_name in ("source_provider_config", "target_provider_config"):
+        if (
+            field_name in global_config.model_fields_set
+            or field_name in profile_config.model_fields_set
+        ):
+            updates[field_name] = _merge_provider_config(
+                getattr(global_config, field_name), getattr(profile_config, field_name)
             )
-        return self._parent
-
-    def _merge_globals(self) -> AnibridgeProfileConfig:
-        """Merge global settings from the parent config into this profile config."""
-        if not self._parent:
-            return self
-
-        for field in self.__class__.model_fields:
-            if field in ("library_provider_config", "list_provider_config"):
-                # Special handling to merge provider configs one level deep.
-                global_providers = getattr(self._parent.global_config, field)
-                profile_providers = getattr(self, field)
-                merged_providers = {**global_providers}
-                for provider_namespace, provider_settings in profile_providers.items():
-                    global_settings = global_providers.get(provider_namespace)
-                    if isinstance(global_settings, dict) and isinstance(
-                        provider_settings, dict
-                    ):
-                        merged_providers[provider_namespace] = {
-                            **global_settings,
-                            **provider_settings,
-                        }
-                    else:
-                        merged_providers[provider_namespace] = provider_settings
-                setattr(self, field, merged_providers)
-            elif field in self.model_fields_set:  # Field set on profile level
-                continue
-            else:  # Inherit from global if not set
-                if field not in self._parent.global_config.model_fields_set:
-                    continue
-                global_value = getattr(self._parent.global_config, field)
-                setattr(self, field, global_value)
-        return self
+    return global_config.model_copy(update=updates, deep=True)
 
 
 def _iter_model_types(annotation: Any) -> set[type[BaseModel]]:
@@ -344,13 +286,13 @@ class AnibridgeConfig(BaseSettings):
     """Multi-configuration manager for AniBridge application.
 
     Configuration is sourced from a YAML file (optionally combined with
-    parameters passed directly to the model). Global settings are shared across
-    all profiles, while profile-specific settings override those defaults.
+    parameters passed directly to the model). Each profile is explicit and
+    self-contained.
     """
 
     global_config: AnibridgeProfileConfig = Field(
         default_factory=AnibridgeProfileConfig,
-        description="Global configuration settings",
+        description="Default profile settings inherited by configured profiles",
     )
     profiles: dict[str, AnibridgeProfileConfig] = Field(
         default_factory=dict, description="AniBridge profile configurations"
@@ -384,43 +326,19 @@ class AnibridgeConfig(BaseSettings):
 
     @cached_property
     def data_path(self) -> Path:
-        """Get the data path for AniBridge.
-
-        Returns:
-            Path: The data path resolved from the environment or default location.
-        """
+        """Get the data path for AniBridge."""
         return Path(os.getenv("AB_DATA_PATH", "./data")).resolve()
 
     @model_validator(mode="after")
-    def validate_global_config(self) -> AnibridgeConfig:
-        """Validates global configuration settings.
-
-        Returns:
-            AnibridgeConfig: Self with validated settings.
-
-        Raises:
-            ValueError: If required global settings are missing or invalid.
-        """
-        if (
-            not self.model_fields_set
-            and not self.profiles
-            and not self.global_config.model_fields_set
-            and not self.web.has_auth
-        ):
-            self.web.allow_config_without_auth = True
-
-        # If there are no explicit profiles, attempt to bootstrap a default from globals
+    def validate_config(self) -> AnibridgeConfig:
+        """Validate configuration settings."""
         if not self.profiles and self.global_config.model_fields_set:
-            log.info(
-                "No profiles configured; creating implicit 'default' profile from "
-                "globals"
-            )
-            self.profiles["default"] = self.global_config.model_copy()
-
-        # Merge global settings into each profile
-        for profile in self.profiles.values():
-            profile._parent = self
-            profile._merge_globals()
+            self.profiles["default"] = self.global_config.model_copy(deep=True)
+        else:
+            self.profiles = {
+                name: _merge_profile_config(self.global_config, profile)
+                for name, profile in self.profiles.items()
+            }
 
         # Default thread count to len(profiles) + 1 when not explicitly set
         if self.threads is None:
@@ -436,27 +354,17 @@ class AnibridgeConfig(BaseSettings):
             self.web.basic_auth.password = None
 
         if (
-            self.web.basic_auth.htpasswd_path
+            self.web.basic_auth.htpasswd_path is not None
             and not self.web.basic_auth.htpasswd_path.is_file()
         ):
             raise ValueError(
-                "web.basic_auth.htpasswd_path must point to an existing file"
+                f"htpasswd file does not exist: {self.web.basic_auth.htpasswd_path}"
             )
 
         return self
 
     def get_profile(self, name: str) -> AnibridgeProfileConfig:
-        """Get a specific profile configuration.
-
-        Args:
-            name: Profile name
-
-        Returns:
-            AnibridgeProfileConfig: The profile configuration.
-
-        Raises:
-            ProfileNotFoundError: If profile doesn't exist.
-        """
+        """Get a specific profile configuration."""
         if name not in self.profiles:
             raise ProfileNotFoundError(
                 f"Profile '{name}' not found. Available profiles: "
@@ -465,11 +373,7 @@ class AnibridgeConfig(BaseSettings):
         return self.profiles[name]
 
     def __str__(self) -> str:
-        """Creates a human-readable representation of the configuration.
-
-        Returns:
-            str: Configuration summary with profile count and global settings.
-        """
+        """Creates a human-readable representation of the configuration."""
         profile_count = len(self.profiles)
         profile_names = ", ".join(self.profiles.keys())
 
@@ -490,13 +394,13 @@ class AnibridgeConfig(BaseSettings):
         """Customize the order of configuration sources."""
         return (
             init_settings,
-            YamlConfigSettingsSource(settings_cls, yaml_file=find_yaml_config_file()),
             EnvSettingsSource(
                 settings_cls,
                 env_prefix="AB_",
                 env_nested_delimiter="__",
                 env_parse_none_str="null",
             ),
+            YamlConfigSettingsSource(settings_cls, yaml_file=find_yaml_config_file()),
         )
 
     @classmethod
@@ -574,11 +478,7 @@ _ConfigDumper.add_multi_representer(BaseStrEnum, _repr_enum)
 
 
 def find_yaml_config_file() -> Path:
-    """Find the YAML configuration file in the data path.
-
-    Returns:
-        Path: The path to an existing YAML configuration file or the default location.
-    """
+    """Find the YAML configuration file in the data path."""
     data_path = Path(os.getenv("AB_DATA_PATH", "./data")).resolve()
 
     for ext in ("yaml", "yml"):
@@ -647,10 +547,6 @@ def _ensure_default_config_file() -> Path:
 
 @cache
 def get_config() -> AnibridgeConfig:
-    """Get the singleton instance of AnibridgeConfig.
-
-    Returns:
-        AnibridgeConfig: The singleton configuration instance.
-    """
+    """Get the singleton instance of `AnibridgeConfig`."""
     _ensure_default_config_file()
     return AnibridgeConfig()

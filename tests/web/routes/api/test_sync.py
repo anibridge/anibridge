@@ -1,17 +1,18 @@
 """Tests for sync API endpoints."""
 
 from collections.abc import Coroutine
+from types import SimpleNamespace
 
 import pytest
 
+from anibridge.app.core.sync import SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.web.routes.api import sync as sync_api_module
-from tests.web.support import SchedulerStub
 
 
 @pytest.fixture
-def scheduler() -> SchedulerStub:
-    return SchedulerStub()
+def scheduler(scheduler_stub_cls):
+    return scheduler_stub_cls()
 
 
 @pytest.fixture
@@ -24,7 +25,11 @@ def scheduled_tasks(
         tasks.append((name, coro))
         coro.close()
 
-    monkeypatch.setattr(sync_api_module, "schedule_task", _schedule_task)
+    monkeypatch.setattr(
+        sync_api_module,
+        "_background_tasks",
+        SimpleNamespace(create=_schedule_task),
+    )
     return tasks
 
 
@@ -39,7 +44,7 @@ def scheduled_tasks(
 )
 async def test_sync_routes_schedule_background_tasks(
     patch_app_state,
-    scheduler: SchedulerStub,
+    scheduler,
     scheduled_tasks,
     operation: str,
     expected_task_name: str,
@@ -47,11 +52,13 @@ async def test_sync_routes_schedule_background_tasks(
     patch_app_state(sync_api_module, scheduler=scheduler)
 
     if operation == "all":
-        response = await sync_api_module.sync_all.fn(poll=True)
+        response = await sync_api_module.sync_all.fn(trigger=SyncTrigger.POLL)
     elif operation == "database":
         response = await sync_api_module.sync_database.fn()
     else:
-        response = await sync_api_module.sync_profile.fn("broken", poll=True)
+        response = await sync_api_module.sync_profile.fn(
+            "broken", trigger=SyncTrigger.POLL
+        )
 
     assert response.ok is True
     assert [name for name, _ in scheduled_tasks] == [expected_task_name]
@@ -60,7 +67,7 @@ async def test_sync_routes_schedule_background_tasks(
 @pytest.mark.asyncio
 async def test_reinitialize_profile_calls_scheduler(
     patch_app_state,
-    scheduler: SchedulerStub,
+    scheduler,
 ) -> None:
     """Reinitialize endpoint should target the requested profile."""
     patch_app_state(sync_api_module, scheduler=scheduler)

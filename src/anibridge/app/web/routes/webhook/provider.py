@@ -2,19 +2,23 @@
 
 from typing import Annotated
 
+from anibridge.utils.tasks import BackgroundTaskGroup
 from litestar.connection.request import Request
 from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter
 from litestar.router import Router
 
+from anibridge.app.core.sync import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
 from anibridge.app.logging import get_logger
-from anibridge.app.utils.async_tasks import schedule_task
 from anibridge.app.web.state import get_app_state
 
 __all__ = ["router"]
 
 log = get_logger(__name__)
+_background_tasks = BackgroundTaskGroup(
+    on_error=lambda name, _exc: log.exception("Background task '%s' failed", name)
+)
 
 
 @post(path="/{provider_namespace:str}", status_code=200)
@@ -22,37 +26,34 @@ async def provider_webhook(
     provider_namespace: Annotated[str, PathParameter()],
     request: Request,
 ) -> None:
-    """Receive Provider webhook and trigger a targeted sync.
-
-    Args:
-        provider_namespace (str): The provider namespace from the URL path.
-        request (Request): The incoming HTTP request.
-    """
+    """Receive Provider webhook and trigger a targeted sync."""
     log.info("Received webhook for provider '%s'", provider_namespace)
     scheduler = get_app_state().scheduler
     if not scheduler:
         log.warning("Scheduler not available")
         raise SchedulerNotInitializedError("Scheduler not available")
 
-    candidates = scheduler.get_profiles_for_library_provider(provider_namespace)
+    candidates = scheduler.get_profiles_for_source_provider(provider_namespace)
     for profile_name in candidates:
         try:
-            is_valid, library_keys = await scheduler.bridge_clients[
+            is_valid, source_refs = await scheduler.bridge_clients[
                 profile_name
             ].parse_webhook(request)
             if not is_valid:
                 continue
 
             log.info(
-                "Triggering sync for profile '%s' and library keys: %s",
+                "Triggering sync for profile '%s' and source refs: %s",
                 profile_name,
-                library_keys,
+                source_refs,
             )
-            schedule_task(
+            _background_tasks.create(
                 scheduler.trigger_profile_sync(
                     profile_name,
-                    poll=False,
-                    library_keys=library_keys,
+                    request=SyncRequest(
+                        trigger=SyncTrigger.WEBHOOK,
+                        source_refs=tuple(source_refs) if source_refs else None,
+                    ),
                     source="webhook:provider",
                 ),
                 name=f"webhook_sync:{profile_name}",

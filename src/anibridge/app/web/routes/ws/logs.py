@@ -12,11 +12,7 @@ __all__ = ["router"]
 
 @websocket(path="")
 async def logs_ws(socket: WebSocket) -> None:
-    """Websocket endpoint for live logs.
-
-    Args:
-        socket (WebSocket): The WebSocket connection instance.
-    """
+    """Websocket endpoint for live logs."""
     log_ws_handler = get_log_ws_handler()
 
     await socket.accept()

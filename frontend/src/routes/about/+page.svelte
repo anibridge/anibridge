@@ -14,11 +14,19 @@
         RefreshCcw,
         ServerCog,
     } from "@lucide/svelte";
+    import { fade } from "svelte/transition";
 
     import GitHubIcon from "$lib/components/icons/github-icon.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
+    import Skeleton from "$lib/components/skeleton.svelte";
     import type { AboutResponse, ProfileStatus } from "$lib/types/api";
     import { apiJson } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import {
+        progressCount,
+        progressStage,
+        progressSubject,
+    } from "$lib/utils/sync-progress";
 
     let info: AboutResponse["info"] | null = $state(null);
     let processInfo: AboutResponse["process"] | null = $state(null);
@@ -81,42 +89,37 @@
     function currentSyncLabel(profile: ProfileStatus): string | null {
         const current = profile.status?.current_sync;
         if (!current) return null;
-        if (current.stage) return current.stage;
-        if (current.state) return current.state;
-        return "Running";
+        return progressStage(current);
     }
 
     function currentSyncProgress(profile: ProfileStatus): string | null {
         const current = profile.status?.current_sync;
         if (!current) return null;
-        const processed = current.section_items_processed ?? 0;
-        const total = current.section_items_total ?? 0;
-        if (!total) return null;
-        return `${processed}/${total} items`;
+        return progressCount(current);
     }
 
     onMount(load);
 </script>
 
-<div class="space-y-8">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-center gap-2">
-            <Activity class="inline h-4 w-4 text-slate-300" />
-            <h2 class="text-lg font-semibold">About</h2>
-        </div>
-        <button
-            class="inline-flex items-center gap-1 rounded-md border border-slate-800/70 bg-slate-900/60 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-900/80 focus:ring-2 focus:ring-sky-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-            onclick={load}
-            disabled={loading}>
-            {#if loading}
-                <LoaderCircle class="h-3 w-3 animate-spin" />
-                <span>Refreshing…</span>
-            {:else}
-                <RefreshCcw class="h-3 w-3" />
-                <span>Refresh</span>
-            {/if}
-        </button>
-    </div>
+<div class="space-y-6">
+    <PageHeader
+        icon={Activity}
+        title="About">
+        {#snippet actions()}
+            <button
+                class="inline-flex items-center gap-1 rounded-md border border-border bg-surface/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                onclick={load}
+                disabled={loading}>
+                {#if loading}
+                    <LoaderCircle class="h-3 w-3 animate-spin" />
+                    <span>Refreshing…</span>
+                {:else}
+                    <RefreshCcw class="h-3 w-3" />
+                    <span>Refresh</span>
+                {/if}
+            </button>
+        {/snippet}
+    </PageHeader>
     {#if error}<p class="text-sm text-rose-400">Failed: {error}</p>{/if}
     <p class="max-w-prose text-xs text-slate-400">
         Diagnostics about the runtime environment, scheduler status, and per-profile
@@ -135,7 +138,9 @@
                     </span>{/if}
             </div>
             {#if loading}
-                <p class="mt-3 text-[11px] text-slate-500">Loading…</p>
+                <div class="mt-3">
+                    <Skeleton lines={4} />
+                </div>
             {:else}
                 <dl class="mt-3 space-y-2 text-[11px] text-slate-300">
                     <div class="flex items-center justify-between gap-2">
@@ -182,7 +187,9 @@
                 </span>
             </div>
             {#if loading}
-                <p class="mt-3 text-[11px] text-slate-500">Loading…</p>
+                <div class="mt-3">
+                    <Skeleton lines={6} />
+                </div>
             {:else}
                 <dl class="mt-3 space-y-2 text-[11px] text-slate-300">
                     <div class="flex items-center justify-between gap-2">
@@ -251,7 +258,9 @@
                 <ChartColumn class="h-4 w-4 text-slate-500" />
             </div>
             {#if loading}
-                <p class="mt-3 text-[11px] text-slate-500">Loading…</p>
+                <div class="mt-3">
+                    <Skeleton lines={6} />
+                </div>
             {:else}
                 <dl class="mt-3 space-y-2 text-[11px] text-slate-300">
                     <div class="flex items-center justify-between gap-2">
@@ -310,9 +319,10 @@
         </div>
 
         {#if loading}
-            <div class="flex items-center gap-2 text-xs text-slate-500">
-                <LoaderCircle class="h-3 w-3 animate-spin" />
-                <span>Loading profiles…</span>
+            <div
+                in:fade={{ duration: 150 }}
+                class="rounded-md border border-border/80 bg-bg-alt/60 p-4">
+                <Skeleton lines={4} />
             </div>
         {:else if profileEntries().length === 0}
             <p class="text-sm text-slate-400">
@@ -322,35 +332,39 @@
             <div
                 class="overflow-hidden rounded-md border border-slate-800/70 bg-slate-950/40">
                 <table
-                    class="min-w-full divide-y divide-slate-800/70 text-left text-[12px] text-slate-200">
+                    class="min-w-full divide-y divide-slate-800/70 text-left text-[11px] text-slate-200">
                     <thead
-                        class="bg-slate-900/60 text-[10px] tracking-wide text-slate-500 uppercase">
+                        class="bg-surface-alt/60 text-[11px] tracking-wide text-dimmed uppercase">
                         <tr>
-                            <th class="px-4 py-3 font-semibold">Profile</th>
-                            <th class="px-4 py-3 font-semibold">Sync Modes</th>
-                            <th class="px-4 py-3 font-semibold">Last Sync</th>
-                            <th class="px-4 py-3 font-semibold">Status</th>
+                            <th class="px-3 py-2 font-medium">Profile</th>
+                            <th class="px-3 py-2 font-medium">Sync Modes</th>
+                            <th class="px-3 py-2 font-medium">Last Sync</th>
+                            <th class="px-3 py-2 font-medium">Status</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-800/60">
                         {#each profileEntries() as [name, profile] (name)}
                             <tr class="hover:bg-slate-900/40">
-                                <td class="px-4 py-3">
+                                <td class="px-3 py-2">
                                     <div class="font-medium text-slate-100">{name}</div>
-                                    {#if profile.config?.library_user}
+                                    {#if profile.config?.source_namespace}
                                         <div class="text-[11px] text-slate-400">
-                                            {profile.config.library_namespace} · {profile
-                                                .config.library_user}
+                                            {profile.config.source_namespace}
+                                            {#if profile.config.source_account}
+                                                · {profile.config.source_account}
+                                            {/if}
                                         </div>
                                     {/if}
-                                    {#if profile.config?.list_user}
+                                    {#if profile.config?.target_namespace}
                                         <div class="text-[11px] text-slate-500">
-                                            {profile.config.list_namespace} · {profile
-                                                .config.list_user}
+                                            {profile.config.target_namespace}
+                                            {#if profile.config.target_account}
+                                                · {profile.config.target_account}
+                                            {/if}
                                         </div>
                                     {/if}
                                 </td>
-                                <td class="px-4 py-3">
+                                <td class="px-3 py-2">
                                     <div class="flex flex-wrap gap-1">
                                         {#if profile.config?.scan_modes?.length}
                                             {#each profile.config.scan_modes as mode (mode)}
@@ -365,7 +379,7 @@
                                         {/if}
                                     </div>
                                 </td>
-                                <td class="px-4 py-3">
+                                <td class="px-3 py-2">
                                     <div
                                         class="text-slate-200"
                                         title={formatDateTime(
@@ -377,15 +391,16 @@
                                         {formatDateTime(profile.status?.last_synced)}
                                     </div>
                                 </td>
-                                <td class="px-4 py-3">
+                                <td class="px-3 py-2">
                                     {#if profile.status?.current_sync}
                                         <div
                                             class="rounded-md bg-amber-500/15 px-2 py-1 text-[11px] font-medium text-amber-200">
                                             {currentSyncLabel(profile)}
-                                            {#if profile.status.current_sync.section_title}
+                                            {#if progressSubject(profile.status.current_sync)}
                                                 <span class="text-amber-300">
-                                                    · {profile.status.current_sync
-                                                        .section_title}
+                                                    · {progressSubject(
+                                                        profile.status.current_sync,
+                                                    )}
                                                 </span>
                                             {/if}
                                         </div>

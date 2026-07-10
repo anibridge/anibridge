@@ -376,6 +376,9 @@ def lint() -> None:
                     cwd=package_dir,
                     check=True,
                 )
+                subprocess.run(
+                    [_python_tool("ty"), "check", "."], cwd=package_dir, check=True
+                )
                 print_success(f"{package_dir.name} linting passed!")
 
         if target in ("both", "frontend"):
@@ -413,10 +416,9 @@ def meta_setup() -> None:
         "anibridge-anilist-provider": "https://github.com/anibridge/anibridge-anilist-provider",
         "anibridge-emby-provider": "https://github.com/anibridge/anibridge-emby-provider",
         "anibridge-jellyfin-provider": "https://github.com/anibridge/anibridge-jellyfin-provider",
-        "anibridge-library-base": "https://github.com/anibridge/anibridge-library-base",
-        "anibridge-list-base": "https://github.com/anibridge/anibridge-list-base",
         "anibridge-mal-provider": "https://github.com/anibridge/anibridge-mal-provider",
         "anibridge-plex-provider": "https://github.com/anibridge/anibridge-plex-provider",
+        "anibridge-provider-base": "https://github.com/anibridge/anibridge-provider-base",
         "anibridge-simkl-provider": "https://github.com/anibridge/anibridge-simkl-provider",
         "anibridge-trakt-provider": "https://github.com/anibridge/anibridge-trakt-provider",
         "anibridge-utils": "https://github.com/anibridge/anibridge-utils",
@@ -437,7 +439,10 @@ def meta_setup() -> None:
         if (dest / ".git").exists():
             print_info(f"Updating {name}...")
             _run(["git", "fetch", "--all", "--prune"], cwd=dest)
-            _run(["git", "pull", "--ff-only"], cwd=dest)
+            try:
+                _run(["git", "pull", "--ff-only"], cwd=dest)
+            except subprocess.CalledProcessError:
+                print_error(f"Failed to update {name}.")
         else:
             print_info(f"Cloning {name}...")
             _run(["git", "clone", url, str(dest)], cwd=packages_dir)
@@ -518,40 +523,6 @@ def start() -> None:
         sys.exit(1)
 
 
-def docs_build() -> None:
-    """Build the documentation."""
-    print_task("Building documentation...")
-
-    try:
-        subprocess.run(["mkdocs", "build"], cwd=ROOT_DIR, check=True)
-        print_success("Documentation built successfully!")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Documentation build failed: {e}")
-        sys.exit(1)
-    except FileNotFoundError:
-        print_error(
-            "mkdocs not found! Please ensure MkDocs is installed and in your PATH."
-        )
-        sys.exit(1)
-
-
-def docs_serve() -> None:
-    """Serve the documentation locally."""
-    print_task("Serving documentation locally...")
-
-    try:
-        subprocess.run(["mkdocs", "serve"], cwd=ROOT_DIR, check=True)
-        print_success("Documentation server started successfully!")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Documentation server failed to start: {e}")
-        sys.exit(1)
-    except FileNotFoundError:
-        print_error(
-            "mkdocs not found! Please ensure MkDocs is installed and in your PATH."
-        )
-        sys.exit(1)
-
-
 def main() -> None:
     """Main entry point for direct script execution."""
     parser = argparse.ArgumentParser(description="Development scripts for AniBridge.")
@@ -565,6 +536,7 @@ def main() -> None:
             "dev",
             "format",
             "lint",
+            "meta-setup",
             "test",
             "start",
         ],

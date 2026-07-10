@@ -54,8 +54,7 @@ export default defineConfig({
                 display: "standalone",
                 background_color: "#05070d",
                 theme_color: "#020618",
-                description:
-                    "The smart way to keep your anime lists perfectly synchronized.",
+                description: "Sync what you watch, wherever you watch.",
             },
         }),
         compression({ algorithms: ["gzip", "brotli"] }),

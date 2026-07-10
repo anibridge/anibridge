@@ -4,7 +4,14 @@ from anibridge.app.models.db.animap import AnimapEntry, AnimapMapping, AnimapPro
 from anibridge.app.models.db.base import Base
 from anibridge.app.models.db.housekeeping import Housekeeping
 from anibridge.app.models.db.pin import Pin
-from anibridge.app.models.db.sync_history import SyncHistory
+from anibridge.app.models.db.sync_history import (
+    SyncHistoryGroup,
+    SyncHistoryOperation,
+    SyncHistoryRun,
+    SyncOperationAction,
+    SyncOutcome,
+    SyncResourceKind,
+)
 
 __all__ = [
     "AnimapEntry",
@@ -13,5 +20,10 @@ __all__ = [
     "Base",
     "Housekeeping",
     "Pin",
-    "SyncHistory",
+    "SyncHistoryGroup",
+    "SyncHistoryOperation",
+    "SyncHistoryRun",
+    "SyncOperationAction",
+    "SyncOutcome",
+    "SyncResourceKind",
 ]

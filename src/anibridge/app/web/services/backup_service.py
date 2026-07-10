@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 import msgspec
 import msgspec.json
+from anibridge.provider.base import SupportsBackupImports
 from anibridge.utils.cache import cache
 
 from anibridge.app.exceptions import (
@@ -85,18 +86,7 @@ class BackupService:
     """Service for listing and restoring provider-managed backups."""
 
     def list_backups(self, profile: str) -> list[BackupMeta]:
-        """Enumerate available backups for a profile.
-
-        Args:
-            profile: Profile name.
-
-        Returns:
-            list[BackupMeta]: List of backup metadata, newest first.
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-        """
+        """Enumerate available backups for a profile."""
         scheduler = get_app_state().scheduler
         if not scheduler:
             raise SchedulerNotInitializedError("Scheduler not available")
@@ -113,20 +103,23 @@ class BackupService:
         now = datetime.now(UTC)
 
         bridge = scheduler.bridge_clients.get(profile)
-        list_provider = bridge.list_provider if bridge is not None else None
-        provider_user = list_provider.user() if list_provider is not None else None
+        target_provider = bridge.target_provider if bridge is not None else None
+        provider_user = (
+            target_provider.account() if target_provider is not None else None
+        )
 
         count = 0
         provider_namespace = (
-            list_provider.NAMESPACE if list_provider is not None else None
+            target_provider.NAMESPACE if target_provider is not None else None
         )
+        configured_provider = profile_config.target_provider
         pattern = (
-            f"anibridge_{profile}_{provider_namespace}_*.json"
+            f"anibridge_{profile}_{provider_namespace}_*"
             if provider_namespace
-            else f"anibridge_{profile}_{profile_config.list_provider}_*.json"
+            else f"anibridge_{profile}_{configured_provider}_*"
         )
         if scheduler.failed_profile_errors.get(profile):
-            pattern = f"anibridge_{profile}_*.json"
+            pattern = f"anibridge_{profile}_*"
         for f in sorted(bdir.glob(pattern)):
             try:
                 parts = f.name.split(".")
@@ -162,21 +155,7 @@ class BackupService:
         return list(reversed(metas))  # Newest first
 
     def read_backup_raw(self, profile: str, filename: str) -> Any:
-        """Return the raw JSON content of a backup file.
-
-        Args:
-            profile: Profile name
-            filename: Backup filename (basename only)
-
-        Returns:
-            Any: Parsed JSON content.
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-            InvalidBackupFilenameError: If the filename is invalid.
-            BackupFileNotFoundError: If the file does not exist.
-        """
+        """Return the raw JSON content of a backup file."""
         scheduler = get_app_state().scheduler
         if not scheduler:
             raise SchedulerNotInitializedError("Scheduler not available")
@@ -191,7 +170,15 @@ class BackupService:
         bdir = scheduler.global_config.data_path / "backups" / profile
         path = self._resolve_backup_path(bdir, filename)
 
-        return msgspec.json.decode(path.read_text(encoding="utf-8"))
+        payload = path.read_bytes()
+        try:
+            return msgspec.json.decode(payload)
+        except Exception:
+            return {
+                "binary": True,
+                "size_bytes": len(payload),
+                "filename": path.name,
+            }
 
     def _resolve_backup_path(self, bdir: Path, filename: str) -> Path:
         """Resolve and validate a backup filename for a profile."""
@@ -205,20 +192,7 @@ class BackupService:
         return path
 
     async def restore_backup(self, profile: str, filename: str) -> None:
-        """Restore a backup file for a profile.
-
-        Args:
-            profile: Profile name
-            filename: Backup filename (basename only)
-
-        Raises:
-            SchedulerNotInitializedError: If the scheduler is not running.
-            ProfileNotFoundError: If the profile is unknown.
-            SchedulerUnavailableError: If the profile failed initialization.
-            InvalidBackupFilenameError: If the filename is invalid.
-            BackupFileNotFoundError: If the file does not exist.
-            BackupParseError: If there was an error parsing or restoring the backup.
-        """
+        """Restore a backup file for a profile."""
         scheduler = get_app_state().scheduler
         if not scheduler:
             raise SchedulerNotInitializedError("Scheduler not available")
@@ -243,12 +217,17 @@ class BackupService:
         bdir = scheduler.global_config.data_path / "backups" / profile
         path = self._resolve_backup_path(bdir, filename)
 
-        raw_backup = path.read_text(encoding="utf-8")
+        raw_backup = path.read_bytes()
+        target_provider = bridge.target_provider
+        if not isinstance(target_provider, SupportsBackupImports):
+            raise BackupParseError(
+                "Target provider does not support backup restoration"
+            )
         try:
-            await bridge.list_provider.restore_list(raw_backup)
+            await target_provider.import_backup(raw_backup)
         except NotImplementedError as exc:
             raise BackupParseError(
-                "List provider does not support backup restoration"
+                "Target provider does not support backup restoration"
             ) from exc
         except Exception as exc:
             raise BackupParseError(f"Error during backup restoration: {exc}") from exc
@@ -261,9 +240,5 @@ class BackupService:
 
 @cache
 def get_backup_service() -> BackupService:
-    """Get the singleton BackupService instance.
-
-    Returns:
-        BackupService: The singleton BackupService instance.
-    """
+    """Get the singleton BackupService instance."""
     return BackupService()

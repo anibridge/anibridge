@@ -3,22 +3,26 @@
 import pytest
 
 from anibridge.app.web.routes.api import history as history_api_module
-from anibridge.app.web.services.history_service import HistoryItem, HistoryPage
+from anibridge.app.web.services.history_service import HistoryGroup, HistoryPage
 
 
 class _FakeHistoryService:
     def __init__(self) -> None:
         self.deleted: list[tuple[str, int]] = []
-        self.undone: list[tuple[str, int]] = []
+        self.deleted_operations: list[tuple[str, int]] = []
         self.retried: list[tuple[str, int]] = []
+        self.undone: list[tuple[str, int]] = []
         self.page_requests: list[dict] = []
 
     async def get_page(self, **kwargs) -> HistoryPage:
         self.page_requests.append(kwargs)
+        if kwargs["outcome"] == "invalid":
+            raise ValueError("'invalid' is not a valid SyncOutcome")
         return HistoryPage(
-            items=[
-                HistoryItem(
+            groups=[
+                HistoryGroup(
                     id=1,
+                    run_id=1,
                     profile_name=kwargs["profile"],
                     outcome="synced",
                     timestamp="2026-01-01T00:00:00+00:00",
@@ -26,24 +30,21 @@ class _FakeHistoryService:
             ],
             limit=kwargs["limit"],
             has_more=False,
-            latest_id=1,
+            latest_group_id=1,
             stats={"synced": 1} if kwargs["include_stats"] else None,
         )
 
-    async def delete_item(self, profile: str, item_id: int) -> None:
-        self.deleted.append((profile, item_id))
+    async def delete_group(self, profile: str, group_id: int) -> None:
+        self.deleted.append((profile, group_id))
 
-    async def undo_item(self, profile: str, item_id: int) -> HistoryItem:
-        self.undone.append((profile, item_id))
-        return HistoryItem(
-            id=item_id,
-            profile_name=profile,
-            outcome="deleted",
-            timestamp="2026-01-01T00:00:00+00:00",
-        )
+    async def delete_operation(self, profile: str, operation_id: int) -> None:
+        self.deleted_operations.append((profile, operation_id))
 
-    async def retry_item(self, profile: str, item_id: int) -> None:
-        self.retried.append((profile, item_id))
+    async def retry_group(self, profile: str, group_id: int) -> None:
+        self.retried.append((profile, group_id))
+
+    async def undo_operation(self, profile: str, operation_id: int) -> None:
+        self.undone.append((profile, operation_id))
 
 
 @pytest.fixture
@@ -67,17 +68,43 @@ def test_history_page_route_delegates_filters_to_service(
         params={
             "limit": 10,
             "before_id": 5,
-            "after_id": 2,
             "include_stats": "false",
             "outcome": "synced",
-            "library_namespace": "plex",
-            "list_namespace": "anilist",
+            "source_namespace": "plex",
+            "target_namespace": "anilist",
+            "resource_kind": "record",
         },
     )
 
     assert page.status_code == 200
-    assert page.json()["items"][0]["profile_name"] == "default"
+    assert page.json()["groups"][0]["profile_name"] == "default"
     assert history_service.page_requests[0]["include_stats"] is False
+    assert history_service.page_requests[0]["resource_kind"] == "record"
+
+
+def test_history_page_route_rejects_conflicting_cursors(history_client) -> None:
+    response = history_client.get(
+        "/api/history/default",
+        params={"before_id": 5, "after_id": 2},
+    )
+
+    assert response.status_code == 400
+
+
+def test_history_page_route_rejects_invalid_limit(history_client) -> None:
+    response = history_client.get("/api/history/default", params={"limit": 0})
+
+    assert response.status_code == 400
+
+
+def test_history_page_route_rejects_invalid_filters(history_client) -> None:
+    response = history_client.get(
+        "/api/history/default",
+        params={"outcome": "invalid"},
+    )
+
+    assert response.status_code == 400
+    assert "SyncOutcome" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -92,30 +119,39 @@ def test_history_page_route_delegates_filters_to_service(
     [
         pytest.param(
             "delete",
-            "/api/history/default/12",
+            "/api/history/default/groups/12",
             "deleted",
             ("default", 12),
             None,
             {"ok": True},
-            id="delete",
+            id="delete-group",
+        ),
+        pytest.param(
+            "delete",
+            "/api/history/default/operations/12",
+            "deleted_operations",
+            ("default", 12),
+            None,
+            {"ok": True},
+            id="delete-operation",
         ),
         pytest.param(
             "post",
-            "/api/history/default/13/undo",
-            "undone",
-            ("default", 13),
-            "item",
-            13,
-            id="undo",
-        ),
-        pytest.param(
-            "post",
-            "/api/history/default/14/retry",
+            "/api/history/default/groups/12/retry",
             "retried",
-            ("default", 14),
+            ("default", 12),
             None,
             {"ok": True},
             id="retry",
+        ),
+        pytest.param(
+            "post",
+            "/api/history/default/operations/12/undo",
+            "undone",
+            ("default", 12),
+            None,
+            {"ok": True},
+            id="undo",
         ),
     ],
 )

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from anibridge.provider.base import Account, Provider
 
 import anibridge.app.core.providers as providers_module
 from anibridge.app.exceptions import ProfileConfigError
@@ -44,17 +45,19 @@ def test_register_classes_skips_duplicates_and_blanks(
     """Only new, non-empty classes should be imported once."""
     calls: list[str] = []
 
-    class FakeLibraryProvider:
+    class FakeProvider(Provider):
+        DISPLAY_NAME = "Fake"
         NAMESPACE = "fake"
+
+        def account(self) -> Account | None:
+            return None
 
     def fake_import(module: str) -> SimpleNamespace:
         calls.append(module)
-        return SimpleNamespace(Provider=FakeLibraryProvider)
+        return SimpleNamespace(Provider=FakeProvider)
 
     monkeypatch.setattr(providers_module, "import_module", fake_import)
     monkeypatch.setattr(providers_module, "_LOADED_CLASSES", set())
-    monkeypatch.setattr(providers_module, "LibraryProvider", object)
-    monkeypatch.setattr(providers_module, "ListProvider", type("ListBase", (), {}))
 
     register_calls: list[type] = []
 
@@ -62,8 +65,7 @@ def test_register_classes_skips_duplicates_and_blanks(
         def register(self, provider_cls: type) -> None:
             register_calls.append(provider_cls)
 
-    monkeypatch.setattr(providers_module, "library_registry", DummyRegistry())
-    monkeypatch.setattr(providers_module, "list_registry", DummyRegistry())
+    monkeypatch.setattr(providers_module, "provider_registry", DummyRegistry())
 
     providers_module._register_classes(
         ["mod.a.Provider", "", "mod.a.Provider", "mod.b.Provider"]
@@ -73,46 +75,92 @@ def test_register_classes_skips_duplicates_and_blanks(
     assert len(register_calls) == 2
 
 
-def test_build_library_provider_raises_when_missing(
+def test_build_provider_raises_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing library providers should raise ProfileConfigError."""
-    profile = SimpleNamespace(
-        library_provider="missing",
-        library_provider_config={},
-        parent=DummyConfig(provider_classes=[]),
-    )
+    """Missing providers should raise ProfileConfigError."""
 
     def fake_create(_namespace: str, logger: Logger, config=None):
         raise LookupError("missing")
 
-    monkeypatch.setattr(providers_module.library_registry, "create", fake_create)
+    monkeypatch.setattr(providers_module.provider_registry, "create", fake_create)
 
     with pytest.raises(ProfileConfigError):
-        providers_module.build_library_provider(
-            cast("providers_module.AnibridgeProfileConfig", profile)
+        providers_module.build_provider(
+            "missing",
+            {},
         )
 
 
-def test_build_list_provider_raises_when_missing(
+def test_build_provider_registers_default_providers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing list providers should raise ProfileConfigError."""
-    profile = SimpleNamespace(
-        list_provider="missing",
-        list_provider_config={},
-        parent=DummyConfig(provider_classes=[]),
-    )
+    """AniList and Plex should be available without explicit provider_classes."""
+    registered: list[str] = []
 
-    def fake_create(_namespace: str, logger: Logger, config=None):
-        raise LookupError("missing")
+    def fake_register_classes(class_paths) -> None:
+        registered.extend(class_paths)
 
-    monkeypatch.setattr(providers_module.list_registry, "create", fake_create)
+    class DummyRegistry:
+        def get(self, namespace: str) -> type[Provider]:
+            raise LookupError(namespace)
+
+        def create(self, namespace: str, **_kwargs) -> Provider:
+            raise LookupError(namespace)
+
+    monkeypatch.setattr(providers_module, "_register_classes", fake_register_classes)
+    monkeypatch.setattr(providers_module, "provider_registry", DummyRegistry())
 
     with pytest.raises(ProfileConfigError):
-        providers_module.build_list_provider(
-            cast("providers_module.AnibridgeProfileConfig", profile)
+        providers_module.build_provider(
+            "missing",
+            {},
         )
+
+    assert registered == list(providers_module._DEFAULT_PROVIDER_CLASSES)
+
+
+def test_build_provider_selects_namespace_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider instances should receive only their namespace-specific config."""
+    captured_config: dict[str, object] | None = None
+
+    class FakeProvider(Provider):
+        DISPLAY_NAME = "Fake"
+        NAMESPACE = "plex"
+
+        def account(self) -> Account | None:
+            return None
+
+    class DummyRegistry:
+        def get(self, namespace: str) -> type[Provider]:
+            assert namespace == "plex"
+            return FakeProvider
+
+        def create(self, namespace: str, **kwargs) -> Provider:
+            nonlocal captured_config
+            assert namespace == "plex"
+            captured_config = kwargs["config"]
+            return FakeProvider(
+                logger=kwargs["logger"],
+                config=cast(dict[str, object], kwargs["config"]),
+            )
+
+    monkeypatch.setattr(providers_module, "_register_classes", lambda _classes: None)
+    monkeypatch.setattr(providers_module, "provider_registry", DummyRegistry())
+
+    provider = providers_module.build_provider(
+        "plex",
+        {
+            "plex": {"url": "http://plex:32400", "token": "plex-token"},
+            "emby": {"url": "http://emby:8096"},
+        },
+    )
+
+    assert isinstance(provider, FakeProvider)
+    assert captured_config == {"url": "http://plex:32400", "token": "plex-token"}
+    assert provider.config == {"url": "http://plex:32400", "token": "plex-token"}
 
 
 @pytest.mark.parametrize(
@@ -160,10 +208,5 @@ def test_register_classes_rejects_non_class_and_unknown_bases(
         "import_module",
         lambda _module: SimpleNamespace(Provider=Other),
     )
-    monkeypatch.setattr(
-        providers_module, "LibraryProvider", type("LibraryBase", (), {})
-    )
-    monkeypatch.setattr(providers_module, "ListProvider", type("ListBase", (), {}))
-
     with pytest.raises(ProfileConfigError, match="must inherit from"):
         providers_module._register_classes(["pkg.module.Provider"])

@@ -1,14 +1,19 @@
 """AniBridge Initialization Module."""
+# ruff: noqa: PLC0415
+
+from typing import TYPE_CHECKING
 
 from anibridge.utils.cache import set_default_cache_dir
 
-from anibridge.app.config.settings import AnibridgeConfig
 from anibridge.app.utils.terminal import supports_utf8
 from anibridge.app.utils.version import (
     get_docker_status,
     get_git_hash,
     get_pyproject_version,
 )
+
+if TYPE_CHECKING:
+    from anibridge.app.config.settings import AnibridgeConfig
 
 __author__ = "Elias Benbourenane <eliasbenbourenane@gmail.com>"
 __credits__ = ["eliasbenb"]
@@ -19,7 +24,7 @@ __version__ = get_pyproject_version()
 __git_hash__ = get_git_hash()
 
 if supports_utf8():
-    ANIBDRIGE_HEADER = f"""
+    ANIBRIDGE_HEADER = f"""
 ╔═══════════════════════════════════════════════════════════════════════════════╗
 ║                               A N I B R I D G E                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -34,7 +39,7 @@ if supports_utf8():
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝""".strip()
 else:
-    ANIBDRIGE_HEADER = f"""
+    ANIBRIDGE_HEADER = f"""
 +-------------------------------------------------------------------------------+
 |                               A N I B R I D G E                               |
 +-------------------------------------------------------------------------------+

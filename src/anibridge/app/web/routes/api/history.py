@@ -3,15 +3,12 @@
 from typing import Annotated
 
 import msgspec
+from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import delete, get, post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
-from anibridge.app.web.services.history_service import (
-    HistoryItem,
-    HistoryPage,
-    get_history_service,
-)
+from anibridge.app.web.services.history_service import HistoryPage, get_history_service
 
 __all__ = ["router"]
 
@@ -30,25 +27,6 @@ class OkResponse(msgspec.Struct):
     ] = True
 
 
-class UndoResponse(msgspec.Struct):
-    """Response model for undo operation."""
-
-    item: Annotated[
-        HistoryItem,
-        msgspec.Meta(
-            description="History item that was undone and re-recorded.",
-            examples=[
-                {
-                    "id": 42,
-                    "profile_name": "default",
-                    "outcome": "undone",
-                    "timestamp": "2026-01-01T00:00:00+00:00",
-                }
-            ],
-        ),
-    ]
-
-
 class RetryResponse(msgspec.Struct):
     """Response model for retry operation."""
 
@@ -61,117 +39,100 @@ class RetryResponse(msgspec.Struct):
     ] = True
 
 
+class UndoResponse(msgspec.Struct):
+    """Response model for undo operation."""
+
+    ok: Annotated[
+        bool,
+        msgspec.Meta(
+            description="Whether the undo request was accepted.",
+            examples=[True],
+        ),
+    ] = True
+
+
 @get(path="/{profile:str}")
 async def get_history(
     profile: Annotated[str, PathParameter()],
-    limit: Annotated[int, QueryParameter()] = 25,
+    limit: Annotated[int, QueryParameter(ge=1, le=250)] = 25,
     before_id: Annotated[int | None, QueryParameter()] = None,
     after_id: Annotated[int | None, QueryParameter()] = None,
     include_stats: Annotated[bool, QueryParameter()] = True,
     outcome: Annotated[str | None, QueryParameter()] = None,
-    library_namespace: Annotated[str | None, QueryParameter()] = None,
-    list_namespace: Annotated[str | None, QueryParameter()] = None,
+    source_namespace: Annotated[str | None, QueryParameter()] = None,
+    target_namespace: Annotated[str | None, QueryParameter()] = None,
+    resource_kind: Annotated[str | None, QueryParameter()] = None,
 ) -> GetHistoryResponse:
-    """Get paginated timeline for profile.
+    """Get paginated grouped history for profile."""
+    if before_id is not None and after_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="before_id and after_id are mutually exclusive",
+        )
 
-    Args:
-        profile (str): The profile name.
-        limit (int): Maximum number of items to return.
-        before_id (int | None): Cursor for loading older items.
-        after_id (int | None): Cursor for loading newer items.
-        include_stats (bool): Include grouped outcome stats when true.
-        outcome (str | None): Filter by outcome.
-        library_namespace (str | None): Filter by library provider namespace.
-        list_namespace (str | None): Filter by list provider namespace.
-
-    Returns:
-        GetHistoryResponse: The paginated history response.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile is unknown.
-    """
-    return await get_history_service().get_page(
-        profile=profile,
-        limit=limit,
-        before_id=before_id,
-        after_id=after_id,
-        outcome=outcome,
-        library_namespace=library_namespace,
-        list_namespace=list_namespace,
-        include_stats=include_stats,
-    )
+    try:
+        return await get_history_service().get_page(
+            profile=profile,
+            limit=limit,
+            before_id=before_id,
+            after_id=after_id,
+            outcome=outcome,
+            source_namespace=source_namespace,
+            target_namespace=target_namespace,
+            resource_kind=resource_kind,
+            include_stats=include_stats,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@delete(path="/{profile:str}/{item_id:int}", status_code=200)
-async def delete_history(
+@delete(path="/{profile:str}/groups/{group_id:int}", status_code=200)
+async def delete_history_group(
     profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
+    group_id: Annotated[int, PathParameter()],
 ) -> OkResponse:
-    """Delete a history item.
-
-    Args:
-        profile (str): The profile name.
-        item_id (int): The ID of the history item to delete.
-
-    Returns:
-        OkResponse: The response indicating success.
-
-    Raises:
-        HistoryItemNotFoundError: If the specified item does not exist.
-    """
-    await get_history_service().delete_item(profile, item_id)
+    """Delete a history group."""
+    await get_history_service().delete_group(profile, group_id)
     return OkResponse()
 
 
-@post(path="/{profile:str}/{item_id:int}/undo", status_code=200)
-async def undo_history(
+@delete(path="/{profile:str}/operations/{operation_id:int}", status_code=200)
+async def delete_history_operation(
     profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
-) -> UndoResponse:
-    """Undo a history item if possible.
-
-    Args:
-        profile (str): The profile name.
-        item_id (int): The ID of the history item to undo.
-
-    Returns:
-        UndoResponse: The response containing the undone item.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile is unknown.
-        HistoryItemNotFoundError: If the specified item does not exist.
-    """
-    item = await get_history_service().undo_item(profile, item_id)
-    return UndoResponse(item=item)
+    operation_id: Annotated[int, PathParameter()],
+) -> OkResponse:
+    """Delete a history operation."""
+    await get_history_service().delete_operation(profile, operation_id)
+    return OkResponse()
 
 
-@post(path="/{profile:str}/{item_id:int}/retry", status_code=200)
-async def retry_history(
+@post(path="/{profile:str}/groups/{group_id:int}/retry", status_code=200)
+async def retry_history_group(
     profile: Annotated[str, PathParameter()],
-    item_id: Annotated[int, PathParameter()],
+    group_id: Annotated[int, PathParameter()],
 ) -> RetryResponse:
-    """Retry a failed or missing history item.
-
-    Args:
-        profile (str): The profile name.
-        item_id (int): The ID of the history item to retry.
-
-    Returns:
-        RetryResponse: The response indicating success.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile is unknown.
-        HistoryItemNotFoundError: If the specified item does not exist.
-        HistoryPermissionError: If the user does not have permission to retry the item.
-    """
-    await get_history_service().retry_item(profile, item_id)
+    """Retry a failed or missing history group."""
+    await get_history_service().retry_group(profile, group_id)
     return RetryResponse()
+
+
+@post(path="/{profile:str}/operations/{operation_id:int}/undo", status_code=200)
+async def undo_history_operation(
+    profile: Annotated[str, PathParameter()],
+    operation_id: Annotated[int, PathParameter()],
+) -> UndoResponse:
+    """Undo a synced or deleted record operation."""
+    await get_history_service().undo_operation(profile, operation_id)
+    return UndoResponse()
 
 
 router = Router(
     path="/history",
-    route_handlers=[get_history, delete_history, undo_history, retry_history],
+    route_handlers=[
+        get_history,
+        delete_history_group,
+        delete_history_operation,
+        retry_history_group,
+        undo_history_operation,
+    ],
 )

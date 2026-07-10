@@ -36,7 +36,6 @@ class FakeMappingsClient:
     async def load_mappings(self) -> dict[str, Any]:
         """Return the predefined mappings."""
         self.load_calls += 1
-        from hashlib import md5
 
         self._content_hash = md5(
             json.dumps(self.mappings, sort_keys=True).encode("utf-8")
@@ -104,8 +103,8 @@ def _fetch_edges(ctx) -> list[AnimapEdge]:
         dst = entries[mapping.destination_entry_id]
         edges.append(
             AnimapEdge(
-                source=(src.provider, src.entry_id, src.entry_scope),
-                destination=(dst.provider, dst.entry_id, dst.entry_scope),
+                source=(src.authority, src.value, src.scope),
+                destination=(dst.authority, dst.value, dst.scope),
                 source_range=mapping.source_range,
                 destination_range=mapping.destination_range,
             )
@@ -129,7 +128,7 @@ def test_resolve_edges_and_grouping(
 
     descriptors = [("anilist", "1", None)]
     edges = animap_client.resolve_edges(descriptors)
-    filtered = animap_client.resolve_edges(descriptors, target_providers={"tmdb"})
+    filtered = animap_client.resolve_edges(descriptors, target_authorities={"tmdb"})
     grouped = animap_client.resolve_edges_grouped(descriptors)
 
     assert len(edges) == 1
@@ -192,7 +191,7 @@ def test_sync_db_creates_entries_mappings_and_provenance(
     with in_memory_db as ctx:
         entries = (
             ctx.session.execute(
-                select(AnimapEntry).order_by(AnimapEntry.provider, AnimapEntry.entry_id)
+                select(AnimapEntry).order_by(AnimapEntry.authority, AnimapEntry.value)
             )
             .scalars()
             .all()
@@ -212,7 +211,7 @@ def test_sync_db_creates_entries_mappings_and_provenance(
     assert hash_entry is not None
     assert hash_entry.value == expected_hash
 
-    assert {(e.provider, e.entry_id, e.entry_scope) for e in entries} == {
+    assert {(e.authority, e.value, e.scope) for e in entries} == {
         ("anilist", "1", None),
         ("tmdb", "10", None),
         ("anilist", "2", "s1"),

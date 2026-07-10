@@ -3,40 +3,36 @@
 from collections.abc import Iterable
 from importlib import import_module
 
-from anibridge.library import LibraryProvider
-from anibridge.list import ListProvider
+from anibridge.provider.base import Provider, Role
 from anibridge.utils.registry import ProviderRegistry
 
-from anibridge.app.config.settings import AnibridgeConfig, AnibridgeProfileConfig
+from anibridge.app.config.settings import (
+    AnibridgeConfig,
+    AnibridgeProfileConfig,
+    ProviderNamespaceConfigMap,
+)
 from anibridge.app.exceptions import ProfileConfigError
 from anibridge.app.logging import get_logger
 
 __all__ = [
-    "build_library_provider",
-    "build_list_provider",
+    "build_profile_providers",
+    "build_provider",
 ]
 
 log = get_logger(__name__)
 
-_ROOT_LIBRARY_PACKAGE = "anibridge.providers.library"
-_ROOT_LIST_PACKAGE = "anibridge.providers.list"
-
-# Map provider namespaces to their default class paths for on-demand loading.
-_DEFAULT_LIBRARY_CLASSES_BY_NS: dict[str, str] = {
-    "emby": f"{_ROOT_LIBRARY_PACKAGE}.emby.EmbyLibraryProvider",
-    "jellyfin": f"{_ROOT_LIBRARY_PACKAGE}.jellyfin.JellyfinLibraryProvider",
-    "plex": f"{_ROOT_LIBRARY_PACKAGE}.plex.PlexLibraryProvider",
-}
-_DEFAULT_LIST_CLASSES_BY_NS: dict[str, str] = {
-    "anilist": f"{_ROOT_LIST_PACKAGE}.anilist.AnilistListProvider",
-    "mal": f"{_ROOT_LIST_PACKAGE}.mal.MalListProvider",
-    "simkl": f"{_ROOT_LIST_PACKAGE}.simkl.SimklListProvider",
-    "trakt": f"{_ROOT_LIST_PACKAGE}.trakt.TraktListProvider",
-}
 _LOADED_CLASSES: set[str] = set()
+_DEFAULT_PROVIDER_CLASSES: tuple[str, ...] = (
+    "anibridge.providers.anilist.provider.AnilistProvider",
+    "anibridge.providers.emby.provider.EmbyProvider",
+    "anibridge.providers.jellyfin.provider.JellyfinProvider",
+    "anibridge.providers.mal.provider.MalProvider",
+    "anibridge.providers.plex.provider.PlexProvider",
+    "anibridge.providers.simkl.provider.SimklProvider",
+    "anibridge.providers.trakt.provider.TraktProvider",
+)
 
-library_registry: ProviderRegistry[LibraryProvider] = ProviderRegistry()
-list_registry: ProviderRegistry[ListProvider] = ProviderRegistry()
+provider_registry: ProviderRegistry[Provider] = ProviderRegistry()
 
 
 def _register_classes(class_paths: Iterable[str]) -> None:
@@ -55,10 +51,14 @@ def _register_classes(class_paths: Iterable[str]) -> None:
 
         try:
             module = import_module(module_path)
-            provider_cls = getattr(module, class_name)
+            module_exports = vars(module)
+            if class_name not in module_exports:
+                raise AttributeError(class_name)
+            provider_cls = module_exports[class_name]
         except Exception as exc:
             log.error("Failed to import provider class '%s'", class_path)
             log.exception("Provider class import error details")
+
             raise ProfileConfigError(
                 f"Failed to import provider class '{class_path}'. "
                 "Ensure the dependency is installed and the class path is valid."
@@ -70,15 +70,11 @@ def _register_classes(class_paths: Iterable[str]) -> None:
             )
 
         try:
-            if issubclass(provider_cls, LibraryProvider):
-                library_registry.register(provider_cls)
-            elif issubclass(provider_cls, ListProvider):
-                list_registry.register(provider_cls)
-            else:
+            if not issubclass(provider_cls, Provider):
                 raise ProfileConfigError(
-                    f"Provider class '{class_path}' must inherit from "
-                    "LibraryProvider or ListProvider."
+                    f"Provider class '{class_path}' must inherit from Provider."
                 )
+            provider_registry.register(provider_cls)
         except ValueError as exc:
             raise ProfileConfigError(
                 f"Failed to register provider class '{class_path}': {exc}"
@@ -87,81 +83,56 @@ def _register_classes(class_paths: Iterable[str]) -> None:
         _LOADED_CLASSES.add(class_path)
 
 
-def _collect_class_overrides(config: AnibridgeConfig) -> set[str]:
-    """Gather class paths requested globally and by the profile."""
-    classes: set[str] = set(config.provider_classes or [])
-    if not config.provider_classes:
-        return classes
-    classes.update(config.provider_classes)
-    return classes
+def _collect_class_overrides(config: AnibridgeConfig | None) -> set[str]:
+    """Return custom provider class paths from root configuration."""
+    return set(config.provider_classes or ()) if config is not None else set()
 
 
-def _ensure_default_provider(namespace: str) -> None:
-    """Import the default provider class for a namespace if not yet loaded."""
-    class_path = _DEFAULT_LIBRARY_CLASSES_BY_NS.get(
-        namespace
-    ) or _DEFAULT_LIST_CLASSES_BY_NS.get(namespace)
-    if class_path and class_path not in _LOADED_CLASSES:
-        _register_classes((class_path,))
+def build_provider(
+    namespace: str,
+    config: ProviderNamespaceConfigMap,
+    provider_classes: Iterable[str] = (),
+) -> Provider:
+    """Instantiate provider endpoint for a profile."""
+    _register_classes(_DEFAULT_PROVIDER_CLASSES)
+    _register_classes(set(provider_classes))
 
+    if not namespace:
+        raise ProfileConfigError("Provider namespace must be configured")
 
-def build_library_provider(profile: AnibridgeProfileConfig) -> LibraryProvider:
-    """Instantiate the configured library provider for the profile.
+    provider_config = config.get(namespace, {})
 
-    Args:
-        profile (AnibridgeProfileConfig): The profile configuration.
-
-    Returns:
-        LibraryProvider: The instantiated library provider.
-    """
-    _register_classes(_collect_class_overrides(profile.parent))
-    _ensure_default_provider(profile.library_provider)
-
-    namespace = profile.library_provider
-    config = profile.library_provider_config.get(namespace)
     try:
-        provider_cls = library_registry.get(namespace)
+        provider_cls = provider_registry.get(namespace)
     except LookupError:
         logger = log
     else:
         logger = get_logger(provider_cls.__module__)
 
     try:
-        return library_registry.create(namespace, logger=logger, config=config)
+        return provider_registry.create(
+            namespace,
+            logger=logger,
+            config=provider_config,
+        )
     except LookupError as exc:
         raise ProfileConfigError(
-            f"No library provider registered for namespace '{namespace or 'None'}'. "
+            f"No provider registered for namespace '{namespace or 'None'}'. "
             "Ensure the provider package is installed and listed under "
             "provider_classes."
         ) from exc
 
 
-def build_list_provider(profile: AnibridgeProfileConfig) -> ListProvider:
-    """Instantiate the configured list provider for the profile.
-
-    Args:
-        profile (AnibridgeProfileConfig): The profile configuration.
-
-    Returns:
-        ListProvider: The instantiated list provider.
-    """
-    _register_classes(_collect_class_overrides(profile.parent))
-    _ensure_default_provider(profile.list_provider)
-
-    namespace = profile.list_provider
-    config = profile.list_provider_config.get(namespace)
-    try:
-        provider_cls = list_registry.get(namespace)
-    except LookupError:
-        logger = log
-    else:
-        logger = get_logger(provider_cls.__module__)
-
-    try:
-        return list_registry.create(namespace, logger=logger, config=config)
-    except LookupError as exc:
-        raise ProfileConfigError(
-            f"No list provider registered for namespace '{namespace}'. "
-            "Ensure the provider package is installed and listed under "
-            "provider_classes."
-        ) from exc
+def build_profile_providers(
+    profile: AnibridgeProfileConfig,
+    config: AnibridgeConfig | None = None,
+) -> dict[Role, Provider]:
+    """Instantiate the configured source and target providers for a profile."""
+    provider_classes = _collect_class_overrides(config)
+    source_provider = build_provider(
+        profile.source_provider, profile.source_provider_config, provider_classes
+    )
+    target_provider = build_provider(
+        profile.target_provider, profile.target_provider_config, provider_classes
+    )
+    return {Role.SOURCE: source_provider, Role.TARGET: target_provider}

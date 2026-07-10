@@ -1,623 +1,456 @@
 """Tests for the sync history service."""
 
-from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from anibridge.library import MediaKind
+from anibridge.provider.base import (
+    Artwork,
+    Event,
+    FacetName,
+    Node,
+    NodeQuery,
+    Page,
+    Progress,
+    Query,
+    Record,
+    RecordField,
+    Ref,
+    SupportsReads,
+)
 
-from anibridge.app.config.database import db
+import anibridge.app.web.services.history_service as history_service_module
+from anibridge.app.core.sync import SyncRequest
+from anibridge.app.core.sync.history import to_builtins
+from anibridge.app.core.sync.stats import RecordSnapshot
 from anibridge.app.exceptions import (
     HistoryItemNotFoundError,
     HistoryPermissionError,
     ProfileNotFoundError,
-    SchedulerNotInitializedError,
 )
 from anibridge.app.models.db.pin import Pin
-from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
+from anibridge.app.models.db.sync_history import (
+    SyncHistoryGroup,
+    SyncHistoryOperation,
+    SyncHistoryRun,
+    SyncOperationAction,
+    SyncOutcome,
+    SyncResourceKind,
+)
 from anibridge.app.web.services.history_service import (
     HistoryService,
     get_history_service,
 )
-from anibridge.app.web.state import get_app_state, get_bridge
 
 
-@dataclass
-class DummyMedia:
-    """Minimal provider media representation used in tests."""
+class FakeNodeProvider(SupportsReads):
+    """Provider double that returns node metadata by ref."""
 
-    key: str
-    title: str
-    poster_image: str
-    external_url: str
-    labels: dict[str, str]
+    def __init__(self, namespace: str) -> None:
+        self.NAMESPACE = namespace
 
-
-class DummyListEntry:
-    """List provider entry that exposes rich media."""
-
-    def __init__(self, key: str, title: str | None = None) -> None:
-        """Store the derived media information for a given key."""
-        self._media = DummyMedia(
-            key=key,
-            title=title or f"List {key}",
-            poster_image=f"L-{key}",
-            external_url=f"http://list/{key}",
-            labels={"format": "movie"},
-        )
-        self.title = self._media.title
-        self.status = None
-        self.progress = None
-        self.repeats = None
-        self.review = None
-        self.user_rating = None
-        self.started_at = None
-        self.finished_at = None
-
-    def media(self) -> DummyMedia:
-        """Return the provider-native media object."""
-        return self._media
-
-
-class DummyListProvider:
-    """List provider double returning deterministic entries."""
-
-    NAMESPACE = "alist"
-
-    def __init__(self) -> None:
-        """Initialize deletion tracking for undo operations."""
-        self.deleted_entries: list[str] = []
-        self.updated_entries: list[tuple[str, DummyListEntry]] = []
-        self.entries: dict[str, DummyListEntry] = {}
-        self.titles: dict[str, str] = {}
-        self._missing_keys: set[str] = set()
-
-    def user(self):
-        """Return pseudo user metadata."""
-        return SimpleNamespace(title="ListUser")
-
-    def _get_or_create_entry(self, key: str) -> DummyListEntry | None:
-        key = str(key)
-        if key in self._missing_keys:
-            return None
-        entry = self.entries.get(key)
-        if entry is None:
-            entry = DummyListEntry(key, title=self.titles.get(key))
-            self.entries[key] = entry
-        return entry
-
-    async def get_entries_batch(self, keys):
-        """Return entries for all requested keys."""
-        return [self._get_or_create_entry(key) for key in keys]
-
-    async def get_entry(self, key: str):
-        """Return one entry by key."""
-        return self._get_or_create_entry(key)
-
-    async def update_entry(self, key: str, entry: DummyListEntry):
-        """Track updated entries requested by undo operations."""
-        key = str(key)
-        self._missing_keys.discard(key)
-        self.entries[key] = entry
-        self.updated_entries.append((key, entry))
-
-    async def delete_entry(self, key: str):
-        """Track deletions requested by undo operations."""
-        key = str(key)
-        self.deleted_entries.append(key)
-        self.entries.pop(key, None)
-        self._missing_keys.add(key)
-
-
-@dataclass
-class DummyLibraryItem:
-    """Library item metadata used for enrichment."""
-
-    key: str
-    title: str
-    _media: DummyMedia
-
-    def media(self) -> DummyMedia:
-        """Return the provider-native media object."""
-        return self._media
-
-
-@dataclass
-class DummyLibrarySection:
-    """Library section metadata with media kind."""
-
-    key: str
-    title: str
-    media_kind: MediaKind = MediaKind.MOVIE
-
-
-class DummyLibraryProvider:
-    """Library provider double that scopes to a single section."""
-
-    NAMESPACE = "_dummy-library"
-
-    def __init__(self) -> None:
-        """Initialize the provider with one default section."""
-        self.sections = [DummyLibrarySection(key="1", title="Movies")]
-        self.titles: dict[str, str] = {}
-
-    async def get_sections(self):
-        """Return available sections."""
-        return self.sections
-
-    async def list_items(self, section, keys):
-        """Return fake library items for the requested keys."""
-        return [
-            DummyLibraryItem(
-                key=k,
-                title=self.titles.get(k, f"Library {k}"),
-                _media=DummyMedia(
-                    key=k,
-                    title=self.titles.get(k, f"Library {k}"),
-                    poster_image=f"P-{k}",
-                    external_url=f"http://library/{k}",
-                    labels={"genre": "drama"},
-                ),
+    async def fetch(self, query: Query) -> Page[Node | Record | Event]:
+        assert isinstance(query, NodeQuery)
+        return Page(
+            items=tuple(
+                Node(
+                    ref=ref,
+                    kind="anime",
+                    title=f"{self.NAMESPACE}:{ref.key}",
+                    url=f"https://example.test/{self.NAMESPACE}/{ref.key}",
+                    labels=(self.NAMESPACE,),
+                    facets={
+                        FacetName.ARTWORK: Artwork(
+                            images={"poster": f"https://img.test/{ref.key}.jpg"}
+                        )
+                    },
+                )
+                for ref in query.refs
             )
-            for k in keys
-        ]
+        )
 
 
-class DummyBridge(SimpleNamespace):
-    """Bridge container connecting providers to the scheduler stub."""
+class FakeScheduler:
+    """Scheduler double that records targeted retry requests."""
 
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, SyncRequest, str]] = []
 
-class DummyScheduler(SimpleNamespace):
-    """Scheduler test double for retry-item scheduling."""
-
-    async def trigger_profile_sync(self, profile: str, **kwargs):
-        self.calls.append({"profile": profile, **kwargs})
+    async def trigger_profile_sync(
+        self,
+        profile: str,
+        *,
+        request: SyncRequest,
+        source: str,
+    ) -> None:
+        self.calls.append((profile, request, source))
 
 
 @pytest.fixture()
-def history_env(monkeypatch: pytest.MonkeyPatch):
-    """Attach a scheduler containing a single bridge for history tests."""
-    list_provider = DummyListProvider()
-    library_provider = DummyLibraryProvider()
-    bridge = DummyBridge(
-        list_provider=list_provider,
-        library_provider=library_provider,
-        profile_config=SimpleNamespace(dry_run=False, destructive_sync=False),
+def history_env(
+    monkeypatch: pytest.MonkeyPatch,
+    in_memory_db_factory,
+):
+    """Patch history service dependencies for isolated DB-backed tests."""
+    in_memory_db_factory(monkeypatch, history_service_module)
+    bridge = SimpleNamespace(
+        source_provider=FakeNodeProvider("source"),
+        target_provider=FakeNodeProvider("target"),
     )
-    scheduler = SimpleNamespace(bridge_clients={"profile": bridge})
-    state = get_app_state()
-    state.scheduler = cast(Any, scheduler)
-    yield SimpleNamespace(
-        scheduler=scheduler,
-        bridge=bridge,
-        list_provider=list_provider,
+    monkeypatch.setattr(history_service_module, "get_bridge", lambda _profile: bridge)
+    scheduler = FakeScheduler()
+    monkeypatch.setattr(
+        history_service_module,
+        "get_app_state",
+        lambda: SimpleNamespace(scheduler=scheduler),
     )
-    state.scheduler = None
+    monkeypatch.setattr(
+        history_service_module,
+        "_background_tasks",
+        SimpleNamespace(create=lambda coro, *, name: coro.close()),
+    )
+    return SimpleNamespace(bridge=bridge, scheduler=scheduler)
 
 
-def _seed_history_row(*, clear: bool = True, **overrides) -> int:
-    with db() as ctx:
+def _ref_payload(
+    key: str,
+    path: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {"key": key, "path": path or []}
+
+
+def _snapshot_payload(key: str, progress: int) -> dict[str, object]:
+    return to_builtins(
+        RecordSnapshot.from_record(
+            Record(
+                ref=Ref.anchor(key),
+                surface="target_state",
+                values={RecordField.PROGRESS: Progress(current=progress, total=12)},
+            )
+        )
+    )
+
+
+def _seed_history_row(
+    *,
+    clear: bool = True,
+    pin: bool = True,
+    **overrides: Any,
+) -> int:
+    with history_service_module.db() as ctx:
         if clear:
-            ctx.session.query(SyncHistory).delete()
+            ctx.session.query(SyncHistoryOperation).delete()
+            ctx.session.query(SyncHistoryGroup).delete()
+            ctx.session.query(SyncHistoryRun).delete()
             ctx.session.query(Pin).delete()
             ctx.session.commit()
+
         payload = {
             "profile_name": "profile",
-            "library_namespace": "_dummy-library",
-            "library_section_key": "1",
-            "library_media_key": "lib1",
-            "list_namespace": "alist",
-            "list_media_key": "lst1",
-            "media_kind": MediaKind.MOVIE,
+            "source_namespace": "source",
+            "source_ref": _ref_payload("src1"),
+            "target_namespace": "target",
+            "target_ref": _ref_payload("tgt1"),
+            "source_surface": "source_state",
+            "target_surface": "target_state",
             "outcome": SyncOutcome.SYNCED,
-            "before_state": {"progress": 0},
-            "after_state": {"progress": 1},
+            "before_state": {
+                "ref": _ref_payload("tgt1"),
+                "surface": "target_state",
+                "values": {"progress": {"current": 0, "total": 12}},
+            },
+            "after_state": {
+                "ref": _ref_payload("tgt1"),
+                "surface": "target_state",
+                "values": {"progress": {"current": 1, "total": 12}},
+            },
             "info": {"source": "test-seed"},
             "error_message": None,
+            "ephemeral": False,
         }
         payload.update(overrides)
-        row = SyncHistory(**payload)
-        ctx.session.add(row)
-        if payload.get("list_media_key"):
+
+        row_number = (
+            ctx.session.query(SyncHistoryGroup).count()
+            + ctx.session.query(SyncHistoryOperation).count()
+            + 1
+        )
+        timestamp = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=row_number)
+        run = SyncHistoryRun(
+            profile_name=payload["profile_name"],
+            source_namespace=payload["source_namespace"],
+            target_namespace=payload["target_namespace"],
+            outcome=payload["outcome"],
+            info={},
+            ephemeral=payload["ephemeral"],
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+        ctx.session.add(run)
+        ctx.session.flush()
+        source_ref = payload["source_ref"]
+        target_ref = cast(dict[str, object] | None, payload.get("target_ref"))
+        group = SyncHistoryGroup(
+            run_id=run.id,
+            profile_name=payload["profile_name"],
+            source_namespace=payload["source_namespace"],
+            source_parent_ref=_ref_payload(cast(str, source_ref["key"])),
+            target_namespace=payload["target_namespace"],
+            target_parent_ref=_ref_payload(cast(str, target_ref["key"]))
+            if target_ref
+            else None,
+            outcome=payload["outcome"],
+            operation_count=1,
+            record_count=1,
+            event_count=0,
+            node_count=0,
+            error_count=1
+            if payload["outcome"] in (SyncOutcome.FAILED, SyncOutcome.NOT_FOUND)
+            else 0,
+            info=payload["info"],
+            ephemeral=payload["ephemeral"],
+            timestamp=timestamp,
+        )
+        ctx.session.add(group)
+        ctx.session.flush()
+        operation = SyncHistoryOperation(
+            group_id=group.id,
+            profile_name=payload["profile_name"],
+            resource_kind=SyncResourceKind.RECORD,
+            action=SyncOperationAction.UPSERT,
+            source_namespace=payload["source_namespace"],
+            source_ref=payload["source_ref"],
+            target_namespace=payload["target_namespace"],
+            target_ref=payload.get("target_ref"),
+            source_surface=payload["source_surface"],
+            target_surface=payload["target_surface"],
+            outcome=payload["outcome"],
+            before_state=payload["before_state"],
+            after_state=payload["after_state"],
+            info=payload["info"],
+            error_message=payload["error_message"],
+            ephemeral=payload["ephemeral"],
+            timestamp=timestamp,
+        )
+        ctx.session.add(operation)
+        if pin and payload.get("target_ref"):
             ctx.session.add(
                 Pin(
                     profile_name=payload["profile_name"],
-                    list_namespace=payload["list_namespace"],
-                    list_media_key=payload["list_media_key"],
-                    fields=["status"],
+                    target_namespace=payload["target_namespace"],
+                    target_parent_ref=_ref_payload(str(payload["target_ref"]["key"])),
                 )
             )
         ctx.session.commit()
-        return row.id
+        return group.id
 
 
 @pytest.mark.asyncio
-async def test_history_service_get_page_enriches_metadata(history_env):
-    """History pages include provider metadata and cached pin data."""
-    _seed_history_row()
-    service = HistoryService()
-
-    page = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=True,
-        include_list_media=True,
-        include_stats=True,
-    )
-    assert len(page.items) == 1
-    assert page.has_more is False
-    assert page.latest_id is not None
-    item = page.items[0]
-    assert item.library_media is not None
-    assert item.library_media.title == "Library lib1"
-    assert item.list_media is not None
-    assert item.list_media.title == "List lst1"
-    assert item.pinned_fields == ["status"]
-    assert item.info == {"source": "test-seed"}
-    assert item.ephemeral is False
-
-
-@pytest.mark.asyncio
-async def test_history_service_get_page_includes_ephemeral_flag(history_env):
-    """History pages should expose whether a row is ephemeral."""
-    _seed_history_row(ephemeral=True)
-    service = HistoryService()
-
-    page = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=False,
-        include_list_media=False,
-    )
-
-    assert len(page.items) == 1
-    assert page.items[0].ephemeral is True
-
-
-@pytest.mark.asyncio
-async def test_history_service_delete_item_removes_row(history_env):
-    """delete_item removes the record and flushes caches."""
+async def test_history_service_get_page_enriches_metadata_and_pins(history_env):
+    """History pages include provider metadata, snapshots, stats, and pins."""
     row_id = _seed_history_row()
     service = HistoryService()
 
-    await service.delete_item("profile", row_id)
-
-    with db() as ctx:
-        assert ctx.session.query(SyncHistory).count() == 0
-
-
-def test_history_serviceget_bridge_requires_scheduler():
-    """get_bridge raises when the scheduler is missing."""
-    state = get_app_state()
-    original = state.scheduler
-    state.scheduler = None
-    try:
-        with pytest.raises(SchedulerNotInitializedError):
-            get_bridge("profile")
-    finally:
-        state.scheduler = original
-
-
-def test_history_serviceget_bridge_requires_known_profile(history_env):
-    """get_bridge raises when the profile is not configured."""
-    history_env.scheduler.bridge_clients = {}
-    try:
-        with pytest.raises(ProfileNotFoundError):
-            get_bridge("missing")
-    finally:
-        history_env.scheduler.bridge_clients = {"profile": history_env.bridge}
-
-
-@pytest.mark.asyncio
-async def test_history_service_get_page_filters_by_outcome(history_env):
-    """Outcome filters should constrain the query results."""
-    _seed_history_row(outcome=SyncOutcome.SYNCED)
-    _seed_history_row(
-        clear=False,
-        library_media_key="lib2",
-        list_media_key="lst2",
-        outcome=SyncOutcome.SKIPPED,
-    )
-    service = HistoryService()
-
     page = await service.get_page(
         profile="profile",
         limit=10,
-        outcome=SyncOutcome.SKIPPED.value,
-        include_library_media=False,
-        include_list_media=False,
-    )
-
-    assert len(page.items) == 1
-    assert all(item.outcome == SyncOutcome.SKIPPED.value for item in page.items)
-
-
-@pytest.mark.asyncio
-async def test_history_service_get_page_stats_are_fresh_after_write(history_env):
-    """Stats should reflect newly written rows without requiring cache clears."""
-    _seed_history_row(outcome=SyncOutcome.SYNCED)
-    service = HistoryService()
-
-    first_page = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=False,
-        include_list_media=False,
+        include_source_media=True,
+        include_target_media=True,
         include_stats=True,
     )
 
-    _seed_history_row(
-        clear=False,
-        library_media_key="lib2",
-        list_media_key="lst2",
-        outcome=SyncOutcome.FAILED,
-    )
-
-    second_page = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=False,
-        include_list_media=False,
-        include_stats=True,
-    )
-
-    assert first_page.stats == {SyncOutcome.SYNCED.value: 1}
-    assert len(second_page.items) == 2
-    assert second_page.stats == {
-        SyncOutcome.SYNCED.value: 1,
-        SyncOutcome.FAILED.value: 1,
-    }
+    assert page.latest_group_id == row_id
+    assert page.has_more is False
+    assert page.stats == {SyncOutcome.SYNCED.value: 1}
+    assert page.resource_stats == {SyncResourceKind.RECORD.value: 1}
+    group = page.groups[0]
+    operation = group.operations[0]
+    assert group.source_media is not None
+    assert group.source_media.title == "source:src1"
+    assert group.target_media is not None
+    assert group.target_media.poster_url == "https://img.test/tgt1.jpg"
+    assert operation.before_state is not None
+    assert operation.after_state is not None
+    assert operation.source_surface == "source_state"
+    assert operation.target_surface == "target_state"
+    assert operation.pinned is True
+    assert operation.info == {"source": "test-seed"}
 
 
 @pytest.mark.asyncio
-async def test_history_service_delete_item_missing_row(history_env):
-    """delete_item raises when the record does not exist."""
-    service = HistoryService()
-
-    with pytest.raises(HistoryItemNotFoundError):
-        await service.delete_item("profile", 9999)
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_requires_list_key(history_env):
-    """undo_item rejects history rows lacking a list media key."""
-    row_id = _seed_history_row(list_media_key=None)
-    service = HistoryService()
-
-    with pytest.raises(HistoryItemNotFoundError):
-        await service.undo_item("profile", row_id)
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_deletes_entry_and_fails(history_env):
-    """undo_item deletion raises permission error when destructive sync is disabled."""
-    row_id = _seed_history_row(before_state=None)
-    service = HistoryService()
-
-    with pytest.raises(HistoryPermissionError):
-        await service.undo_item("profile", row_id)
-
-    assert history_env.list_provider.deleted_entries == []
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_records_info(history_env):
-    """Undo entries keep an audit trail in the info payload."""
-    history_env.bridge.profile_config.destructive_sync = True
-    row_id = _seed_history_row(before_state=None)
-    service = HistoryService()
-
-    item = await service.undo_item("profile", row_id)
-
-    assert item.info is not None
-    assert item.info.get("source_history_id") == str(row_id)
-    assert item.info.get("source_outcome") == SyncOutcome.SYNCED.value
-    assert history_env.list_provider.deleted_entries == ["lst1"]
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_in_dry_run_is_ephemeral(history_env):
-    """Undo history rows should be ephemeral when the profile is in dry-run mode."""
-    history_env.bridge.profile_config.destructive_sync = True
-    history_env.bridge.profile_config.dry_run = True
-    row_id = _seed_history_row(before_state=None)
-    service = HistoryService()
-
-    item = await service.undo_item("profile", row_id)
-
-    assert item.ephemeral is True
-    assert item.info is not None
-    assert history_env.list_provider.deleted_entries == []
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_clears_cached_list_metadata(history_env):
-    """Undoing a deletion should evict cached metadata for removed list entries."""
-    history_env.bridge.profile_config.destructive_sync = True
-    row_id = _seed_history_row(before_state=None)
-    service = HistoryService()
-
-    page_before = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=False,
-        include_list_media=True,
-    )
-    assert page_before.items[0].list_media is not None
-
-    await service.undo_item("profile", row_id)
-
-    page_after = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=False,
-        include_list_media=True,
-    )
-
-    assert history_env.list_provider.deleted_entries == ["lst1"]
-    assert all(
-        item.list_media is None
-        for item in page_after.items
-        if item.list_media_key == "lst1"
-    )
-
-
-@pytest.mark.asyncio
-async def test_history_service_fetch_helpers_handle_mismatches(history_env):
-    """Metadata helpers should return list metadata and filter library sections."""
-    service = HistoryService()
-
-    list_result = await service._fetch_list_metadata_batch(
-        "profile", "alist", ("lst1",)
-    )
-    assert list_result["lst1"].title == "List lst1"
-
-    library_result = await service._fetch_library_metadata_batch(
-        "profile", "_dummy-library", "missing", ("lib1",)
-    )
-    assert library_result == {}
-
-
-@pytest.mark.asyncio
-async def test_history_service_library_metadata_uses_library_key(history_env):
-    """Library metadata enrichment should resolve by provider library key."""
-    row_library_key = "entry-key"
-    _seed_history_row(library_media_key=row_library_key)
-
-    async def _list_items_with_mismatched_media_key(section, keys):
-        entry_key = str(keys[0])
-        return [
-            DummyLibraryItem(
-                key=entry_key,
-                title=f"Library {entry_key}",
-                _media=DummyMedia(
-                    key="guid://lib-entry-key",
-                    title=f"Library {entry_key}",
-                    poster_image=f"P-{entry_key}",
-                    external_url=f"http://library/{entry_key}",
-                    labels={"genre": "drama"},
-                ),
-            )
-        ]
-
-    history_env.bridge.library_provider.list_items = (
-        _list_items_with_mismatched_media_key
-    )
-
-    service = HistoryService()
-    page = await service.get_page(
-        profile="profile",
-        limit=10,
-        include_library_media=True,
-        include_list_media=False,
-    )
-
-    assert len(page.items) == 1
-    assert page.items[0].library_media is not None
-    assert page.items[0].library_media.key == row_library_key
-    assert page.items[0].library_media.external_url == "http://library/entry-key"
-
-
-@pytest.mark.asyncio
-async def test_history_service_purge_ephemeral_items_removes_only_ephemeral(
+async def test_history_service_get_page_works_without_initialized_bridge(
     history_env,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    """Purging ephemeral items should keep persisted history rows intact."""
-    _seed_history_row(ephemeral=True)
-    _seed_history_row(
-        clear=False,
-        library_media_key="lib2",
-        list_media_key="lst2",
-        ephemeral=False,
+    """Saved history remains readable when provider clients failed to initialize."""
+    _seed_history_row(pin=False)
+    monkeypatch.setattr(
+        history_service_module,
+        "get_bridge",
+        lambda _profile: (_ for _ in ()).throw(ProfileNotFoundError("profile")),
     )
-    service = HistoryService()
+    monkeypatch.setattr(
+        history_service_module,
+        "get_config",
+        lambda: SimpleNamespace(
+            get_profile=lambda _profile: SimpleNamespace(
+                source_provider="source",
+                target_provider="target",
+            )
+        ),
+    )
 
-    removed = await service.purge_ephemeral_items()
+    page = await HistoryService().get_page("profile", include_stats=True)
 
-    assert removed == 1
-    with db() as ctx:
-        rows = (
-            ctx.session.query(SyncHistory)
-            .order_by(SyncHistory.library_media_key.asc())
-            .all()
-        )
-        assert len(rows) == 1
-        assert rows[0].library_media_key == "lib2"
-        assert rows[0].ephemeral is False
-
-
-def test_get_history_service_returns_singleton():
-    """The cached service factory should return a singleton."""
-    assert get_history_service() is get_history_service()
+    assert len(page.groups) == 1
+    assert page.groups[0].source_media is None
+    assert page.groups[0].target_media is None
+    assert page.latest_group_id == page.groups[0].id
+    assert page.stats == {SyncOutcome.SYNCED.value: 1}
 
 
 @pytest.mark.asyncio
-async def test_history_service_helper_short_circuits(history_env):
-    """Empty batches and mismatched namespaces should return no metadata."""
-    service = HistoryService()
+async def test_history_service_pins_cover_child_refs(history_env):
+    """History pin display should mark child refs by target parent pin."""
+    episode_1 = _ref_payload("tgt1", [{"axis": "episode", "value": 1}])
+    episode_2 = _ref_payload("tgt1", [{"axis": "episode", "value": 2}])
+    _seed_history_row(pin=False, target_ref=episode_1)
+    _seed_history_row(clear=False, pin=False, target_ref=episode_2)
+    with history_service_module.db() as ctx:
+        ctx.session.add_all(
+            [
+                Pin(
+                    profile_name="profile",
+                    target_namespace="target",
+                    target_parent_ref=_ref_payload("tgt1"),
+                ),
+            ]
+        )
+        ctx.session.commit()
 
-    assert await service._build_history_items("profile", []) == []
-    assert await service._fetch_list_metadata_batch("profile", "alist", ()) == {}
-    assert await service._fetch_list_metadata_batch("profile", "wrong", ("lst1",)) == {}
-    assert (
-        await service._fetch_library_metadata_batch(
-            "profile",
-            "_dummy-library",
-            None,
-            ("lib1",),
-        )
-        == {}
+    page = await HistoryService().get_page(
+        profile="profile",
+        limit=10,
+        include_source_media=False,
+        include_target_media=False,
     )
-    assert (
-        await service._fetch_library_metadata_batch(
-            "profile",
-            "wrong",
-            "1",
-            ("lib1",),
-        )
-        == {}
-    )
+
+    pinned_by_episode = {
+        operation.target_ref.path[0].value: operation.pinned
+        for group in page.groups
+        for operation in group.operations
+        if operation.target_ref is not None
+    }
+    assert pinned_by_episode == {1: True, 2: True}
 
 
 @pytest.mark.asyncio
-async def test_history_service_get_latest_id_and_cursor_filters(history_env):
-    """Latest-id lookups and cursor paging should honor the requested bounds."""
-    row1 = _seed_history_row(
-        library_media_key="lib1",
-        list_media_key="lst1",
-        outcome=SyncOutcome.SYNCED,
+async def test_history_service_pathful_pins_do_not_cover_siblings(history_env):
+    """Exact child pins should not mark sibling provider refs as pinned."""
+    episode_1 = _ref_payload("tgt1", [{"axis": "episode", "value": 1}])
+    episode_2 = _ref_payload("tgt1", [{"axis": "episode", "value": 2}])
+    _seed_history_row(pin=False, target_ref=episode_1)
+    _seed_history_row(clear=False, pin=False, target_ref=episode_2)
+    with history_service_module.db() as ctx:
+        ctx.session.add(
+            Pin(
+                profile_name="profile",
+                target_namespace="target",
+                target_parent_ref=episode_1,
+            )
+        )
+        ctx.session.commit()
+
+    page = await HistoryService().get_page(
+        profile="profile",
+        limit=10,
+        include_source_media=False,
+        include_target_media=False,
     )
+
+    pinned = {
+        operation.target_ref.path[0].value: operation.pinned
+        for group in page.groups
+        for operation in group.operations
+        if operation.target_ref is not None
+    }
+    assert pinned == {1: True, 2: False}
+
+
+@pytest.mark.asyncio
+async def test_history_service_get_page_paginates_and_filters(history_env):
+    """Cursor pagination and outcome filters should apply to history rows."""
+    row1 = _seed_history_row(target_ref=_ref_payload("tgt1"))
     row2 = _seed_history_row(
         clear=False,
-        library_media_key="lib2",
-        list_media_key="lst2",
+        source_ref=_ref_payload("src2"),
+        target_ref=_ref_payload("tgt2"),
+        outcome=SyncOutcome.FAILED,
+        error_message="boom",
+    )
+    service = HistoryService()
+
+    failed_page = await service.get_page(
+        profile="profile",
+        limit=10,
+        outcome=SyncOutcome.FAILED.value,
+        include_source_media=False,
+        include_target_media=False,
+    )
+    after_page = await service.get_page(
+        profile="profile",
+        limit=10,
+        after_id=row1,
+        include_source_media=False,
+        include_target_media=False,
+    )
+
+    assert [group.id for group in failed_page.groups] == [row2]
+    assert failed_page.groups[0].operations[0].error_message == "boom"
+    assert [group.id for group in after_page.groups] == [row2]
+
+
+@pytest.mark.asyncio
+async def test_history_service_resource_stats_follow_provider_scope(history_env):
+    """Resource stats should use the same source/target scope as outcome stats."""
+    _seed_history_row(target_ref=_ref_payload("tgt1"))
+    _seed_history_row(
+        clear=False,
+        source_ref=_ref_payload("other-src"),
+        target_ref=_ref_payload("other-tgt"),
+        source_namespace="other-source",
+        target_namespace="other-target",
+    )
+
+    page = await HistoryService().get_page(
+        profile="profile",
+        limit=10,
+        include_source_media=False,
+        include_target_media=False,
+        include_stats=True,
+    )
+
+    assert page.stats == {SyncOutcome.SYNCED.value: 1}
+    assert page.resource_stats == {SyncResourceKind.RECORD.value: 1}
+
+
+@pytest.mark.asyncio
+async def test_history_service_get_latest_id_uses_provider_scope(history_env):
+    """Latest-id lookups should honor profile/source/target filters."""
+    row1 = _seed_history_row(target_ref=_ref_payload("tgt1"))
+    row2 = _seed_history_row(
+        clear=False,
+        source_ref=_ref_payload("src2"),
+        target_ref=_ref_payload("tgt2"),
         outcome=SyncOutcome.FAILED,
     )
     service = HistoryService()
 
     assert await service.get_latest_id("profile") == row2
     assert (
-        await service.get_latest_id("profile", outcome=SyncOutcome.FAILED.value) == row2
+        await service.get_latest_id("profile", outcome=SyncOutcome.SYNCED.value) == row1
     )
-
-    before_page = await service.get_page(
-        profile="profile",
-        limit=10,
-        before_id=row2,
-        include_library_media=False,
-        include_list_media=False,
-    )
-    after_page = await service.get_page(
-        profile="profile",
-        limit=10,
-        after_id=row1,
-        include_library_media=False,
-        include_list_media=False,
-    )
-
-    assert [item.id for item in before_page.items] == [row1]
-    assert [item.id for item in after_page.items] == [row2]
 
 
 @pytest.mark.asyncio
@@ -630,136 +463,140 @@ async def test_history_service_get_latest_id_and_cursor_filters(history_env):
     ],
 )
 async def test_history_service_get_page_validates_inputs(
+    history_env,
     kwargs: dict[str, Any],
     message: str,
-    history_env,
 ) -> None:
-    """Invalid page parameters should raise a clear ValueError."""
+    """Invalid page parameters should raise clear ValueError messages."""
     service = HistoryService()
 
     with pytest.raises(ValueError, match=message):
-        await service.get_page(
-            profile="profile",
-            include_library_media=False,
-            include_list_media=False,
-            **kwargs,
-        )
+        await service.get_page(profile="profile", **kwargs)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"list_namespace": "other"}, "different list provider"),
-        ({"library_namespace": "other"}, "different library provider"),
-        ({"outcome": SyncOutcome.SKIPPED}, "only supported"),
-        ({"before_state": None, "after_state": None}, "does not contain undo data"),
-    ],
-)
-async def test_history_service_undo_item_permission_branches(
-    overrides: dict[str, Any],
-    message: str,
-    history_env,
-) -> None:
-    """Undo should reject rows that do not meet the provider and state requirements."""
-    row_id = _seed_history_row(**overrides)
-    service = HistoryService()
-
-    with pytest.raises(HistoryPermissionError, match=message):
-        await service.undo_item("profile", row_id)
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_restore_dry_run_skips_provider_write(
-    history_env,
-):
-    """Dry-run undo restores should not mutate the remote list provider."""
-    history_env.bridge.profile_config.dry_run = True
-    service = HistoryService()
+async def test_history_service_delete_group_removes_row(history_env):
+    """delete_group should remove only the requested profile group."""
     row_id = _seed_history_row()
-
-    item = await service.undo_item("profile", row_id)
-
-    assert item.ephemeral is True
-    assert history_env.list_provider.updated_entries == []
-
-
-@pytest.mark.asyncio
-async def test_history_service_undo_item_restore_requires_provider_entry(history_env):
-    """Undo restore should fail if the provider entry no longer exists."""
-    row_id = _seed_history_row(before_state={"media_key": "lst1", "progress": 0})
-    history_env.list_provider._missing_keys.add("lst1")
     service = HistoryService()
 
-    with pytest.raises(HistoryItemNotFoundError, match="no longer exists"):
-        await service.undo_item("profile", row_id)
+    await service.delete_group("profile", row_id)
+
+    with pytest.raises(HistoryItemNotFoundError):
+        await service.delete_group("profile", row_id)
 
 
 @pytest.mark.asyncio
-async def test_history_service_retry_item_branches(
+async def test_history_service_retry_group_targets_source_ref(
     history_env,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retry should validate scheduler state and schedule targeted syncs."""
-    service = HistoryService()
-    state = get_app_state()
-    original_scheduler = state.scheduler
-    state.scheduler = None
-    try:
-        with pytest.raises(SchedulerNotInitializedError):
-            await service.retry_item("profile", 1)
-    finally:
-        state.scheduler = original_scheduler
+    """retry_group should resubmit failed groups as targeted provider scans."""
+    row_id = _seed_history_row(outcome=SyncOutcome.FAILED)
+    scheduled: list[tuple[Any, str]] = []
 
-    with pytest.raises(HistoryItemNotFoundError):
-        await service.retry_item("profile", 9999)
+    async def fake_trigger(profile: str, *, request: SyncRequest, source: str) -> None:
+        history_env.scheduler.calls.append((profile, request, source))
 
-    wrong_ns_id = _seed_history_row(
-        library_namespace="wrong",
-        outcome=SyncOutcome.FAILED,
-    )
-    with pytest.raises(HistoryPermissionError, match="different library provider"):
-        await service.retry_item("profile", wrong_ns_id)
-
-    wrong_outcome_id = _seed_history_row(
-        clear=False,
-        library_media_key="lib2",
-        list_media_key="lst2",
-        outcome=SyncOutcome.SYNCED,
-    )
-    with pytest.raises(HistoryPermissionError, match="only available"):
-        await service.retry_item("profile", wrong_outcome_id)
-
-    scheduled: dict[str, Any] = {}
-
-    def fake_schedule_task(coro, *, name: str) -> None:
-        scheduled["name"] = name
-        scheduled["coro"] = coro
-        coro.close()
-
-    scheduler = DummyScheduler(bridge_clients={"profile": history_env.bridge}, calls=[])
-    state.scheduler = cast(Any, scheduler)
+    history_env.scheduler.trigger_profile_sync = fake_trigger
     monkeypatch.setattr(
-        "anibridge.app.web.services.history_service.schedule_task",
-        fake_schedule_task,
+        history_service_module,
+        "_background_tasks",
+        SimpleNamespace(create=lambda coro, *, name: scheduled.append((coro, name))),
     )
 
-    retry_id = _seed_history_row(
-        clear=False,
-        library_media_key="lib4",
-        list_media_key="lst4",
-        outcome=SyncOutcome.FAILED,
-    )
-    await service.retry_item("profile", retry_id)
+    await HistoryService().retry_group("profile", row_id)
 
-    assert scheduled["name"] == f"retry_history_item:profile:{retry_id}"
+    coro, name = scheduled[0]
+    assert name == f"retry_history_group:profile:{row_id}"
+    await coro
+    profile, request, source = history_env.scheduler.calls[0]
+    assert profile == "profile"
+    assert source == "history:retry_group"
+    assert request.source_refs == (Ref.anchor("src1"),)
 
 
 @pytest.mark.asyncio
-async def test_history_service_purge_ephemeral_items_returns_zero_when_empty(
+async def test_history_service_undo_operation_schedules_record_undo(
     history_env,
-):
-    """Purge should return zero when there are no ephemeral rows to delete."""
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """undo_operation should submit restorable target states through SyncRequest."""
+    row_id = _seed_history_row(
+        before_state=_snapshot_payload("tgt1", 0),
+        after_state=_snapshot_payload("tgt1", 1),
+    )
+    scheduled: list[tuple[Any, str]] = []
+
+    async def fake_trigger(profile: str, *, request: SyncRequest, source: str) -> None:
+        history_env.scheduler.calls.append((profile, request, source))
+
+    history_env.scheduler.trigger_profile_sync = fake_trigger
+    monkeypatch.setattr(
+        history_service_module,
+        "_background_tasks",
+        SimpleNamespace(create=lambda coro, *, name: scheduled.append((coro, name))),
+    )
+
+    await HistoryService().undo_operation("profile", row_id)
+
+    coro, name = scheduled[0]
+    assert name == f"undo_history_operation:profile:{row_id}"
+    await coro
+    profile, request, source = history_env.scheduler.calls[0]
+    assert profile == "profile"
+    assert source == "history:undo_operation"
+    assert request.source_refs == ()
+    undo = request.record_undos[0]
+    assert undo.source_ref == Ref.anchor("src1")
+    assert undo.target_ref == Ref.anchor("tgt1")
+    assert undo.before is not None
+    assert undo.before.values_for_restore() == {
+        RecordField.PROGRESS: Progress(current=0, total=12)
+    }
+
+
+@pytest.mark.asyncio
+async def test_history_service_retry_group_rejects_synced_rows(history_env) -> None:
+    """Retry should remain limited to failed and not-found rows."""
+    row_id = _seed_history_row(outcome=SyncOutcome.SYNCED)
+
+    with pytest.raises(HistoryPermissionError, match="failed or not found"):
+        await HistoryService().retry_group("profile", row_id)
+
+
+@pytest.mark.asyncio
+async def test_history_service_purge_ephemeral_items(history_env):
+    """Purge should delete only dry-run history rows."""
+    _seed_history_row(ephemeral=True)
+    _seed_history_row(
+        clear=False,
+        source_ref=_ref_payload("src2"),
+        target_ref=_ref_payload("tgt2"),
+        ephemeral=False,
+    )
     service = HistoryService()
 
-    assert await service.purge_ephemeral_items() == 0
+    assert await service.purge_ephemeral_items() == 1
+
+    page = await service.get_page(
+        profile="profile",
+        limit=10,
+        include_source_media=False,
+        include_target_media=False,
+    )
+    assert len(page.groups) == 1
+    operation = page.groups[0].operations[0]
+    assert operation.target_ref is not None
+    assert operation.target_ref.key == "tgt2"
+
+
+@pytest.mark.asyncio
+async def test_history_service_build_history_groups_short_circuits(history_env):
+    """Empty history row batches should avoid provider work."""
+    assert await HistoryService()._build_history_groups("profile", []) == []
+
+
+def test_get_history_service_returns_singleton() -> None:
+    """The cached service factory should return a singleton."""
+    assert get_history_service() is get_history_service()

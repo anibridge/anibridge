@@ -45,7 +45,7 @@ RUN apk add --no-cache shadow su-exec tzdata
 
 LABEL maintainer="Elias Benbourenane <eliasbenbourenane@gmail.com>" \
     org.opencontainers.image.title="AniBridge" \
-    org.opencontainers.image.description="The smart way to keep your anime lists perfectly synchronized." \
+    org.opencontainers.image.description="Sync what you watch, wherever you watch." \
     org.opencontainers.image.authors="Elias Benbourenane <eliasbenbourenane@gmail.com>" \
     org.opencontainers.image.url="https://anibridge.eliasbenb.dev" \
     org.opencontainers.image.documentation="https://anibridge.eliasbenb.dev" \

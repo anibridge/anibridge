@@ -15,7 +15,7 @@
         children,
         trigger,
         delay = 100,
-        class: className = "z-20 w-min min-w-[8rem] rounded-md border border-slate-800/70 bg-slate-900/95 p-2 shadow-xl",
+        class: className = "z-20 w-min min-w-[8rem] rounded-md border border-border bg-surface-alt/95 p-2 shadow-xl",
         sideOffset = 8,
     }: Props = $props();
 </script>

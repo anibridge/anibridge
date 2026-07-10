@@ -27,12 +27,18 @@ _TEST_CONFIG_FILE = _TEST_DATA_DIR / "config.yaml"
 _TEST_CONFIG_FILE.write_text(
     yaml.safe_dump(
         {
-            "providers": {
-                "anilist": {"token": "anilist-token"},
-                "plex": {
-                    "token": "plex-token",
-                    "user": "eliasbenb",
-                    "url": "http://plex:32400",
+            "profiles": {
+                "default": {
+                    "source_provider": "plex",
+                    "target_provider": "anilist",
+                    "source_provider_config": {
+                        "plex": {
+                            "token": "plex-token",
+                            "user": "eliasbenb",
+                            "url": "http://plex:32400",
+                        }
+                    },
+                    "target_provider_config": {"anilist": {"token": "anilist-token"}},
                 },
             },
         },

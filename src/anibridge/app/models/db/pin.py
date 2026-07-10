@@ -1,4 +1,4 @@
-"""Pin model for per-profile AniList field pinning."""
+"""Pin model for per-profile target parent pinning."""
 
 from datetime import UTC, datetime
 
@@ -12,17 +12,15 @@ __all__ = ["Pin"]
 
 
 class Pin(Base):
-    """Model representing pinned AniList fields for a profile entry."""
+    """Model representing a pinned target parent entry."""
 
     __tablename__ = "pin"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     profile_name: Mapped[str] = mapped_column(String, index=True)
 
-    list_namespace: Mapped[str] = mapped_column(String, index=True)
-    list_media_key: Mapped[str] = mapped_column(String, index=True)
-
-    fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    target_namespace: Mapped[str] = mapped_column(String, index=True)
+    target_parent_ref: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -34,6 +32,11 @@ class Pin(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("profile_name", "list_namespace", "list_media_key"),
+        UniqueConstraint(
+            "profile_name",
+            "target_namespace",
+            "target_parent_ref",
+            name="uq_pin_profile_target_parent_ref",
+        ),
         Index("ix_pin_profile_updated_at", "profile_name", "updated_at"),
     )

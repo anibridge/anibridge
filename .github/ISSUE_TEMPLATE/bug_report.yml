@@ -8,7 +8,7 @@ body:
           description: |
               Do not open a bug report for mappings not being found.
 
-              If you have a problem with a mapping, you can [create your own custom mapping](https://anibridge.eliasbenb.dev/mappings/custom-mappings/) or contribute to the [community mappings repo](https://github.com/anibridge/anibrdige-mappings).
+              If you have a problem with a mapping, you can [create your own custom mapping](https://anibridge.eliasbenb.dev/mappings/custom-mappings/) or contribute to the [community mappings repo](https://github.com/anibridge/anibridge-mappings).
 
               ⚠️ If you open a bug report for a mapping issue, it will be closed without review.
           options:
@@ -72,7 +72,7 @@ body:
       attributes:
           label: Configuration
           description: |
-              Paste your AniBridge configuration here. Make sure to redact any sensitive information. Generally, omitting the `list_provider_config`, `library_provider_config`, and `web.basic_auth` sections of your configuration is sufficient to redact sensitive information.
+              Paste your AniBridge configuration here. Make sure to redact any sensitive information. Generally, omitting provider configuration sections and `web.basic_auth` is sufficient to redact sensitive information.
           render: yaml
       validations:
           required: true

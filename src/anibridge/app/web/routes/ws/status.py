@@ -17,11 +17,7 @@ _ACTIVE_SYNC_INTERVAL = 0.5
 
 @websocket(path="")
 async def status_ws(socket: WebSocket) -> None:
-    """Websocket endpoint for periodic status snapshots.
-
-    Args:
-        socket (WebSocket): The WebSocket connection instance.
-    """
+    """Websocket endpoint for periodic status snapshots."""
     await socket.accept()
     app_state = get_app_state()
     try:

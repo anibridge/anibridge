@@ -5,6 +5,7 @@ route handlers and websocket endpoints.
 """
 
 import asyncio
+import inspect
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -19,7 +20,7 @@ __all__ = ["AppState", "get_app_state", "get_bridge"]
 
 if TYPE_CHECKING:
     from anibridge.app.core.bridge import BridgeClient
-    from anibridge.app.core.sched import SchedulerClient
+    from anibridge.app.core.sched.client import SchedulerClient
 
 
 class AppState:
@@ -52,19 +53,11 @@ class AppState:
         self._status_changed.clear()
 
     def set_scheduler(self, scheduler: SchedulerClient) -> None:
-        """Set the scheduler client.
-
-        Args:
-            scheduler (SchedulerClient): The scheduler client instance to set.
-        """
+        """Set the scheduler client."""
         self.scheduler = scheduler
 
     def add_shutdown_callback(self, cb: Callable[[], Any]) -> None:
-        """Register a shutdown callback executed during app shutdown.
-
-        Args:
-            cb (Callable[[], Any]): The callback function to register.
-        """
+        """Register a shutdown callback executed during app shutdown."""
         self.on_shutdown_callbacks.append(cb)
 
     def request_restart(self) -> None:
@@ -72,26 +65,18 @@ class AppState:
         self.restart_requested = True
 
     async def ensure_public_anilist(self) -> AnilistClient:
-        """Get or create the shared public AniList client.
-
-        Returns:
-            AnilistClient: A tokenless AniList client suitable for public queries.
-        """
+        """Get or create the shared public AniList client."""
         if self.public_anilist is None:
             self.public_anilist = AnilistClient(anilist_token=None)
             await self.public_anilist.initialize()
         return self.public_anilist
 
     async def shutdown(self) -> None:
-        """Run registered shutdown callbacks (ignore individual errors).
-
-        Args:
-            self (AppState): The application state instance.
-        """
+        """Run registered shutdown callbacks (ignore individual errors)."""
         for cb in self.on_shutdown_callbacks:
             try:
                 res = cb()
-                if hasattr(res, "__await__"):
+                if inspect.isawaitable(res):
                     await res
             except Exception:
                 pass
@@ -101,14 +86,12 @@ class AppState:
                 await self.public_anilist.close()
             self.public_anilist = None
 
+        self.scheduler = None
+
 
 @cache
 def get_app_state() -> AppState:
-    """Get the singleton application state instance.
-
-    Returns:
-        AppState: The application state instance.
-    """
+    """Get the singleton application state instance."""
     return AppState()
 
 

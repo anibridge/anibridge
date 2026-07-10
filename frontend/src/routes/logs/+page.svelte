@@ -16,8 +16,10 @@
     } from "@lucide/svelte";
     import { Tabs } from "bits-ui";
 
+    import PageHeader from "$lib/components/page-header.svelte";
     import type { LogEntry, LogFile } from "$lib/types/api";
-    import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
+    import { apiFetch, buildAppPath } from "$lib/utils/api";
+    import { createJsonWebSocket } from "$lib/utils/json-websocket";
     import { toast } from "$lib/utils/notify";
 
     let tab = $state<"live" | "history">("live");
@@ -27,7 +29,6 @@
     let autoScroll = $state(true);
     let logs: LogEntry[] = $state([]);
     let filtered: LogEntry[] = $state([]);
-    let ws: WebSocket | null = null;
     let isWsOpen = $state(false);
     let lastReceived: number | null = $state(null);
     let files: LogFile[] = $state([]);
@@ -48,6 +49,23 @@
         WARNING: 30,
         ERROR: 40,
     };
+
+    const logSocket = createJsonWebSocket<LogEntry>({
+        path: "/ws/logs",
+        reconnectMs: 2000,
+        onOpen: () => {
+            isWsOpen = true;
+        },
+        onClose: () => {
+            isWsOpen = false;
+        },
+        onMessage: (data) => {
+            logs.push(data);
+            lastReceived = Date.now();
+            applyFilter();
+            if (autoScroll && tab === "live") scrollToBottom("live");
+        },
+    });
 
     function levelRank(l: string) {
         return LEVEL_ORDER[l] ?? 0;
@@ -118,29 +136,6 @@
         if (el) el.scrollTop = el.scrollHeight;
     }
 
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/logs"));
-        ws.onopen = () => {
-            isWsOpen = true;
-        };
-        ws.onmessage = (ev) => {
-            try {
-                const d = JSON.parse(ev.data);
-                logs.push(d);
-                lastReceived = Date.now();
-                applyFilter();
-                if (autoScroll && tab === "live") scrollToBottom("live");
-            } catch {}
-        };
-        ws.onclose = () => {
-            isWsOpen = false;
-            setTimeout(openWs, 2000);
-        };
-    }
-
     async function refreshFiles() {
         try {
             const r = await apiFetch("/api/logs/files", undefined, { silent: true });
@@ -181,18 +176,15 @@
         }
     }
 
-    function downloadLive() {
-        if (!logs.length) return;
+    function downloadLog(entries: LogEntry[], filename: string) {
+        if (!entries.length) return;
         const blob = new Blob(
-            [logs.map((l) => `[${l.level}] ${l.message}`).join("\n")],
+            [entries.map((l) => `[${l.level}] ${l.message}`).join("\n")],
             { type: "text/plain" },
         );
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download =
-            "logs-" +
-            new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19) +
-            ".txt";
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
@@ -201,25 +193,8 @@
         }, 100);
     }
 
-    function downloadHistory() {
-        if (!historyEntries.length) return;
-        const blob = new Blob(
-            [historyEntries.map((l) => `[${l.level}] ${l.message}`).join("\n")],
-            { type: "text/plain" },
-        );
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download =
-            (currentFile ? currentFile.name.replace(/\.log.*/, "") : "history") +
-            "-excerpt-" +
-            new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19) +
-            ".txt";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-            URL.revokeObjectURL(a.href);
-            a.remove();
-        }, 100);
+    function logFileDownloadPath(file: LogFile) {
+        return buildAppPath(`/api/logs/file/${encodeURIComponent(file.name)}/download`);
     }
 
     function clearLive() {
@@ -299,7 +274,7 @@
 
     onMount(() => {
         loadPrefs();
-        openWs();
+        logSocket.connect();
         refreshFiles();
         const updateIsMobile = () => {
             isMobile = window.innerWidth < 640; // Tailwind sm breakpoint
@@ -309,7 +284,10 @@
         };
         updateIsMobile();
         window.addEventListener("resize", updateIsMobile);
-        return () => window.removeEventListener("resize", updateIsMobile);
+        return () => {
+            logSocket.close();
+            window.removeEventListener("resize", updateIsMobile);
+        };
     });
 
     $effect(() => {
@@ -319,6 +297,10 @@
 </script>
 
 <div class="space-y-6">
+    <PageHeader
+        icon={Activity}
+        title="Logs"
+        description="View live log streams and browse log file history." />
     <!-- Toolbar -->
     <div class="space-y-2 border-b border-slate-800/70 py-2 text-sm font-medium">
         <!-- Tabs -->
@@ -377,7 +359,7 @@
                             aria-label="Clear search"
                             type="button"
                             onclick={() => ((search = ""), applyFilter())}
-                            class="absolute top-1/2 right-1 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="absolute top-1/2 right-1 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             <X class="h-3.5 w-3.5 text-[14px]" />
                         </button>
                     {/if}
@@ -425,7 +407,7 @@
                             aria-label="Clear live logs"
                             title="Clear live logs"
                             onclick={clearLive}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             <Trash2 class="inline h-4 w-4" />
                         </button>
                         <button
@@ -435,7 +417,7 @@
                                 ? "Auto-scroll enabled"
                                 : "Auto-scroll paused"}
                             onclick={() => ((autoScroll = !autoScroll), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             {#if autoScroll}
                                 <ChevronsDown class="inline h-4 w-4" />
                             {:else}
@@ -447,7 +429,7 @@
                             aria-label="Toggle wrap"
                             title={wrap ? "Disable wrap" : "Enable wrap"}
                             onclick={() => ((wrap = !wrap), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             {#if wrap}
                                 <TextWrap class="inline h-4 w-4" />
                             {:else}
@@ -458,15 +440,24 @@
                             type="button"
                             aria-label="Download live logs"
                             title="Download live logs"
-                            onclick={downloadLive}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            onclick={() =>
+                                downloadLog(
+                                    logs,
+                                    "logs-" +
+                                        new Date()
+                                            .toISOString()
+                                            .replace(/[:T]/g, "-")
+                                            .slice(0, 19) +
+                                        ".txt",
+                                )}
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             <Download class="inline h-4 w-4" />
                         </button>
                     </div>
                 </div>
                 <div
                     bind:this={liveScroller}
-                    class="scrollbar-thin flex-1 overflow-y-auto p-1 font-mono text-[11px] leading-normal"
+                    class="flex-1 scrollbar-thin overflow-y-auto p-1 font-mono text-[11px] leading-normal"
                     class:overflow-x-auto={!wrap}
                     class:overflow-x-hidden={wrap}
                     style="touch-action: auto;">
@@ -542,7 +533,7 @@
                             aria-label="Toggle wrap"
                             title={wrap ? "Disable wrap" : "Enable wrap"}
                             onclick={() => ((wrap = !wrap), persistPrefs())}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground">
                             {#if wrap}
                                 <TextWrap class="inline h-4 w-4" />
                             {:else}
@@ -553,15 +544,28 @@
                             type="button"
                             aria-label="Refresh"
                             onclick={() => currentFile && loadFile(currentFile, true)}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700"
+                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground"
                             ><RefreshCw class="inline h-4 w-4" /></button>
-                        <button
-                            type="button"
-                            aria-label="Download file excerpt"
-                            disabled={!historyEntries.length}
-                            onclick={downloadHistory}
-                            class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
-                            ><Download class="inline h-4 w-4" /></button>
+                        {#if currentFile}
+                            <form
+                                method="GET"
+                                action={logFileDownloadPath(currentFile)}>
+                                <button
+                                    type="submit"
+                                    aria-label="Download full log file"
+                                    title="Download full log file"
+                                    class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground"
+                                    ><Download class="inline h-4 w-4" /></button>
+                            </form>
+                        {:else}
+                            <button
+                                type="button"
+                                aria-label="Download full log file"
+                                title="Download full log file"
+                                disabled
+                                class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-surface text-muted-foreground opacity-40"
+                                ><Download class="inline h-4 w-4" /></button>
+                        {/if}
                     </div>
                 </div>
                 <div class="flex min-w-0 flex-1 overflow-hidden">
@@ -579,7 +583,7 @@
                                     <button
                                         type="button"
                                         aria-label="Close file list"
-                                        class="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 sm:hidden"
+                                        class="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md bg-surface text-muted-foreground transition-colors hover:bg-surface-alt hover:text-foreground sm:hidden"
                                         onclick={() => (showFiles = false)}>
                                         <X class="h-3.5 w-3.5" />
                                     </button>
@@ -625,7 +629,7 @@
                     <div class="flex min-w-0 flex-1 flex-col">
                         <div
                             bind:this={historyScroller}
-                            class="scrollbar-thin min-w-0 flex-1 overflow-y-auto p-1 font-mono text-[11px] leading-normal"
+                            class="min-w-0 flex-1 scrollbar-thin overflow-y-auto p-1 font-mono text-[11px] leading-normal"
                             class:overflow-x-auto={!wrap}
                             class:overflow-x-hidden={wrap}
                             style="touch-action: auto;">

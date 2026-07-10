@@ -22,43 +22,44 @@ def test_query_field_map_contains_core_fields() -> None:
     field_map = get_query_field_map()
     core_keys = {
         "source.descriptor",
-        "source.provider",
-        "source.id",
+        "source.authority",
+        "source.value",
         "source.scope",
         "target.descriptor",
     }
     assert core_keys.issubset(set(field_map.keys()))
     assert "descriptor" not in field_map
     assert (
-        field_map["source.descriptor"].desc == "Source descriptor (provider:id[:scope])"
+        field_map["source.descriptor"].desc
+        == "Source descriptor (authority:value[:scope])"
     )
     assert (
         field_map["target.descriptor"].desc
-        == "Destination descriptor (provider:id[:scope])"
+        == "Destination descriptor (authority:value[:scope])"
     )
-    assert field_map["source.provider"].desc == "Source provider"
+    assert field_map["source.authority"].desc == "Source authority"
 
 
-def test_query_field_specs_include_distinct_provider_values() -> None:
-    """Provider field specs include sorted values from the database."""
+def test_query_field_specs_include_distinct_authority_values() -> None:
+    """Authority field specs include sorted values from the database."""
     _clear_tables()
     try:
         with db() as ctx:
             ctx.session.add_all(
                 [
-                    AnimapEntry(provider="tmdb", entry_id="10", entry_scope=None),
-                    AnimapEntry(provider="anilist", entry_id="1", entry_scope=None),
-                    AnimapEntry(provider="tmdb", entry_id="11", entry_scope="s1"),
+                    AnimapEntry(authority="tmdb", value="10", scope=None),
+                    AnimapEntry(authority="anilist", value="1", scope=None),
+                    AnimapEntry(authority="tmdb", value="11", scope="s1"),
                 ]
             )
             ctx.session.commit()
 
         field_map = {spec.key: spec for spec in get_query_field_specs()}
-        assert list(field_map["source.provider"].values or []) == [
+        assert list(field_map["source.authority"].values or []) == [
             "anilist",
             "tmdb",
         ]
-        assert list(field_map["target.provider"].values or []) == [
+        assert list(field_map["target.authority"].values or []) == [
             "anilist",
             "tmdb",
         ]

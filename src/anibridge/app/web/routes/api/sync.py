@@ -3,15 +3,22 @@
 from typing import Annotated
 
 import msgspec
+from anibridge.utils.tasks import BackgroundTaskGroup
 from litestar.handlers.http_handlers.decorators import post
 from litestar.params import PathParameter, QueryParameter
 from litestar.router import Router
 
+from anibridge.app.core.sync import SyncRequest, SyncTrigger
 from anibridge.app.exceptions import SchedulerNotInitializedError
-from anibridge.app.utils.async_tasks import schedule_task
+from anibridge.app.logging import get_logger
 from anibridge.app.web.state import get_app_state
 
 __all__ = ["router"]
+
+log = get_logger(__name__)
+_background_tasks = BackgroundTaskGroup(
+    on_error=lambda name, _exc: log.exception("Background task '%s' failed", name)
+)
 
 
 class OkResponse(msgspec.Struct):
@@ -25,23 +32,18 @@ class OkResponse(msgspec.Struct):
 
 
 @post(path="")
-async def sync_all(poll: Annotated[bool, QueryParameter()] = False) -> OkResponse:
-    """Trigger a sync for all profiles.
-
-    Args:
-        poll (bool): Whether to poll for updates.
-
-    Returns:
-        OkResponse: The response containing the sync status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-    """
+async def sync_all(
+    trigger: Annotated[SyncTrigger, QueryParameter()] = SyncTrigger.MANUAL,
+) -> OkResponse:
+    """Trigger a sync for all profiles."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
-    schedule_task(
-        scheduler.trigger_all_profiles_sync(poll=poll, source="api:sync_all"),
+    _background_tasks.create(
+        scheduler.trigger_all_profiles_sync(
+            request=SyncRequest(trigger=trigger),
+            source="api:sync_all",
+        ),
         name="sync_all_profiles",
     )
     return OkResponse(ok=True)
@@ -49,18 +51,11 @@ async def sync_all(poll: Annotated[bool, QueryParameter()] = False) -> OkRespons
 
 @post(path="/database")
 async def sync_database() -> OkResponse:
-    """Trigger a sync for the database.
-
-    Returns:
-        OkResponse: The response containing the sync status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-    """
+    """Trigger a sync for the database."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
-    schedule_task(
+    _background_tasks.create(
         scheduler.trigger_database_sync(source="api:sync_database"),
         name="sync_database",
     )
@@ -70,29 +65,16 @@ async def sync_database() -> OkResponse:
 @post(path="/profile/{profile:str}")
 async def sync_profile(
     profile: Annotated[str, PathParameter()],
-    poll: Annotated[bool, QueryParameter()] = False,
+    trigger: Annotated[SyncTrigger, QueryParameter()] = SyncTrigger.MANUAL,
 ) -> OkResponse:
-    """Trigger a sync for a specific profile.
-
-    Args:
-        profile (str): The profile to sync.
-        poll (bool): Whether to poll for updates.
-
-    Returns:
-        OkResponse: The response containing the sync status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile does not exist.
-    """
+    """Trigger a sync for a specific profile."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")
-    schedule_task(
+    _background_tasks.create(
         scheduler.trigger_profile_sync(
             profile,
-            poll=poll,
-            library_keys=None,
+            request=SyncRequest(trigger=trigger),
             source="api:sync_profile",
         ),
         name=f"sync_profile:{profile}",
@@ -102,19 +84,7 @@ async def sync_profile(
 
 @post(path="/profile/{profile:str}/reinitialize")
 async def reinitialize_profile(profile: Annotated[str, PathParameter()]) -> OkResponse:
-    """Rebuild and restart a single profile.
-
-    Args:
-        profile (str): The profile to reinitialize.
-
-    Returns:
-        OkResponse: The response containing the reinitialization status.
-
-    Raises:
-        SchedulerNotInitializedError: If the scheduler is not running.
-        ProfileNotFoundError: If the profile does not exist.
-        SchedulerUnavailableError: If the profile fails during reinitialization.
-    """
+    """Rebuild and restart a single profile."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         raise SchedulerNotInitializedError("Scheduler not available")

@@ -34,39 +34,23 @@ class WebsocketLogHandler(logging.Handler):
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Record the main event loop to schedule tasks from other threads.
-
-        Args:
-            loop: The application's main asyncio event loop.
-        """
+        """Record the main event loop to schedule tasks from other threads."""
         self._loop = loop
 
     async def add(self, ws: LogSocket) -> None:
-        """Add a websocket connection to the handler.
-
-        Args:
-            ws (WebSocket): The websocket connection to add.
-        """
+        """Add a websocket connection to the handler."""
         with self._lock:
             self._connections.add(ws)
         log.debug("Client added (%s total)", len(self._connections))
 
     async def remove(self, ws: LogSocket) -> None:
-        """Remove a websocket connection from the handler.
-
-        Args:
-            ws (WebSocket): The websocket connection to remove.
-        """
+        """Remove a websocket connection from the handler."""
         with self._lock:
             self._connections.discard(ws)
         log.debug("Client removed (%s total)", len(self._connections))
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Emit a log record to all connected websocket clients.
-
-        Args:
-            record (logging.LogRecord): The log record to emit.
-        """
+        """Emit a log record to all connected websocket clients."""
         try:
             msg = self.format(record)
         except Exception:
@@ -108,14 +92,7 @@ class WebsocketLogHandler(logging.Handler):
     async def _safe_send(
         self, ws: LogSocket, msg: str, level: str, created: float | None
     ) -> None:
-        """Send a message to a websocket connection.
-
-        Args:
-            ws (WebSocket): The websocket connection to send the message to.
-            msg (str): The message to send.
-            level (str): The log level of the message.
-            created (float | None): Epoch seconds when the record was created.
-        """
+        """Send a message to a websocket connection."""
         try:
             timestamp = None
             if created is not None:
@@ -131,9 +108,5 @@ class WebsocketLogHandler(logging.Handler):
 
 @cache
 def get_log_ws_handler() -> WebsocketLogHandler:
-    """Get the singleton WebsocketLogHandler instance.
-
-    Returns:
-        WebsocketLogHandler: The singleton WebsocketLogHandler instance.
-    """
+    """Get the singleton WebsocketLogHandler instance."""
     return WebsocketLogHandler()

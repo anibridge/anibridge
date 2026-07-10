@@ -10,7 +10,6 @@ from litestar.router import Router
 from pydantic import ValidationError
 
 from anibridge.app.config.settings import AnibridgeConfig, get_config
-from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.services.configuration_service import get_configuration_service
 
 __all__ = ["router"]
@@ -54,7 +53,7 @@ class ConfigDocumentResponse(msgspec.Struct):
                     "Parsed configuration mapping for the guided UI. Null when the "
                     "current YAML cannot be parsed into a mapping."
                 ),
-                examples=[{"global_config": {}, "profiles": {}}],
+                examples=[{"profiles": {}}],
             ),
         ]
         | None
@@ -117,7 +116,7 @@ class ConfigStructuredUpdateRequest(msgspec.Struct):
         dict[str, object],
         msgspec.Meta(
             description="Structured AniBridge configuration payload for the guided UI.",
-            examples=[{"global_config": {}, "profiles": {}}],
+            examples=[{"profiles": {}}],
         ),
     ]
     expected_mtime: (
@@ -175,33 +174,28 @@ class ConfigUpdateResponse(msgspec.Struct):
 
 
 def require_config_api_access() -> None:
-    """Ensure configuration API access is not exposed without explicit opt-in."""
-    web_config = getattr(globals().get("runtime_config"), "web", None)
-    if web_config is None:
-        web_config = get_config().web
-    if web_config.has_auth or web_config.allow_config_without_auth:
+    """Ensure configuration API access is only exposed with configured auth."""
+    config = globals().get("runtime_config") or get_config()
+    web_config = config.web
+    if getattr(web_config, "allows_config_api", web_config.has_auth):
         return
 
     raise HTTPException(
         status_code=403,
         detail=(
             "Configuration API is disabled when web authentication is not configured. "
-            "Configure web.basic_auth or set "
-            "web.allow_config_without_auth=true to override."
+            "Configure web.basic_auth or set web.allow_config_without_auth to enable "
+            "configuration editing."
         ),
     )
 
 
 @get(path="", sync_to_thread=True)
 def get_configuration() -> ConfigDocumentResponse:
-    """Return the current configuration as raw YAML text.
-
-    Returns:
-        ConfigDocumentResponse: The configuration document details.
-    """
+    """Return the current configuration as raw YAML text."""
     require_config_api_access()
     try:
-        payload = get_configuration_service().load_document_text()
+        payload = get_configuration_service().read()
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -222,21 +216,10 @@ def get_configuration() -> ConfigDocumentResponse:
 async def update_configuration(
     data: Annotated[ConfigDocumentUpdateRequest, Body()],
 ) -> ConfigUpdateResponse:
-    """Persist the provided configuration document.
-
-    Args:
-        data (ConfigDocumentUpdateRequest): The configuration update request.
-
-    Returns:
-        ConfigUpdateResponse: The result of the update operation.
-    """
+    """Persist the provided configuration document."""
     require_config_api_access()
     try:
-        (
-            config,
-            requires_restart,
-            mtime,
-        ) = await get_configuration_service().save_document_text(
+        result = await get_configuration_service().save_text(
             data.content,
             expected_mtime=data.expected_mtime,
         )
@@ -250,11 +233,6 @@ async def update_configuration(
             status_code=422,
             detail=str(exc.errors()),
         ) from exc
-    except SchedulerUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -263,9 +241,9 @@ async def update_configuration(
 
     return ConfigUpdateResponse(
         ok=True,
-        profiles=sorted(config.profiles.keys()),
-        requires_restart=requires_restart,
-        mtime=mtime,
+        profiles=sorted(result["config"].profiles.keys()),
+        requires_restart=result["requires_restart"],
+        mtime=result["mtime"],
     )
 
 
@@ -273,21 +251,10 @@ async def update_configuration(
 async def update_configuration_structured(
     data: Annotated[ConfigStructuredUpdateRequest, Body()],
 ) -> ConfigUpdateResponse:
-    """Persist the provided structured configuration payload.
-
-    Args:
-        data (ConfigStructuredUpdateRequest): The structured configuration update.
-
-    Returns:
-        ConfigUpdateResponse: The result of the update operation.
-    """
+    """Persist the provided structured configuration payload."""
     require_config_api_access()
     try:
-        (
-            config,
-            requires_restart,
-            mtime,
-        ) = await get_configuration_service().save_settings_payload(
+        result = await get_configuration_service().save_settings(
             data.settings,
             expected_mtime=data.expected_mtime,
         )
@@ -301,11 +268,6 @@ async def update_configuration_structured(
             status_code=422,
             detail=str(exc.errors()),
         ) from exc
-    except SchedulerUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -314,9 +276,9 @@ async def update_configuration_structured(
 
     return ConfigUpdateResponse(
         ok=True,
-        profiles=sorted(config.profiles.keys()),
-        requires_restart=requires_restart,
-        mtime=mtime,
+        profiles=sorted(result["config"].profiles.keys()),
+        requires_restart=result["requires_restart"],
+        mtime=result["mtime"],
     )
 
 

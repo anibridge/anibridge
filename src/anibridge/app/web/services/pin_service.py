@@ -1,59 +1,42 @@
-"""Service for managing provider-specific field pins per profile."""
+"""Service for managing target parent pins per profile."""
 
-from collections.abc import Iterable
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, cast
 
 import msgspec
+from anibridge.provider.base import (
+    Artwork,
+    FacetName,
+    Node,
+    NodeQuery,
+    Page,
+    Ref,
+    SupportsNodeSearch,
+    SupportsReads,
+)
 from anibridge.utils.cache import cache
 
 from anibridge.app.config.database import db
-from anibridge.app.config.settings import SyncField
+from anibridge.app.config.settings import get_config
+from anibridge.app.core.sync import (
+    RefKey,
+    RefPayload,
+    ref_from_payload,
+    ref_payload_from_json,
+    ref_to_json,
+    ref_to_key,
+)
 from anibridge.app.models.db.pin import Pin
 from anibridge.app.models.schemas.provider import ProviderMediaMetadata
 from anibridge.app.web.state import get_bridge
 
 __all__ = [
     "PinEntry",
-    "PinFieldOption",
+    "PinSearchResult",
     "PinService",
     "get_pin_service",
 ]
-
-
-_PIN_LABELS: dict[str, str] = {
-    SyncField.STATUS.value: "Status",
-    SyncField.USER_RATING.value: "User Rating",
-    SyncField.PROGRESS.value: "Progress",
-    SyncField.REVIEW.value: "Review",
-    SyncField.REPEATS.value: "Rewatch Count",
-    SyncField.STARTED_AT.value: "Started Date",
-    SyncField.FINISHED_AT.value: "Finished Date",
-}
-
-_SYNC_FIELD_VALUES: tuple[str, ...] = tuple(field.value for field in SyncField)
-_SYNC_FIELD_SET: frozenset[str] = frozenset(_SYNC_FIELD_VALUES)
-
-
-class PinFieldOption(msgspec.Struct):
-    """Metadata for a selectable pin field."""
-
-    value: Annotated[
-        str,
-        msgspec.Meta(
-            min_length=1,
-            description="Sync field identifier that can be pinned.",
-            examples=["status"],
-        ),
-    ]
-    label: Annotated[
-        str,
-        msgspec.Meta(
-            min_length=1,
-            description="Human-friendly label for the pin field option.",
-            examples=["Status"],
-        ),
-    ]
 
 
 class PinEntry(msgspec.Struct):
@@ -67,28 +50,19 @@ class PinEntry(msgspec.Struct):
             examples=["default"],
         ),
     ]
-    list_namespace: Annotated[
+    target_namespace: Annotated[
         str,
         msgspec.Meta(
             min_length=1,
-            description="List provider namespace for the pinned entry.",
+            description="Target provider namespace for the pinned entry.",
             examples=["anilist"],
         ),
     ]
-    list_media_key: Annotated[
-        str,
+    target_parent_ref: Annotated[
+        RefPayload,
         msgspec.Meta(
-            min_length=1,
-            description="Provider-specific media key for the pinned entry.",
-            examples=["5114"],
-        ),
-    ]
-    fields: Annotated[
-        list[str],
-        msgspec.Meta(
-            min_length=1,
-            description="Ordered set of normalized sync fields pinned for the entry.",
-            examples=[["status", "progress"]],
+            description="Normalized target parent ref for the pinned entry.",
+            examples=[{"key": "5114", "path": []}],
         ),
     ]
     created_at: Annotated[
@@ -97,20 +71,41 @@ class PinEntry(msgspec.Struct):
             description="UTC timestamp when the pin was first created.",
             examples=["2026-01-01T00:00:00Z"],
         ),
-    ]
+    ] = msgspec.field(default_factory=lambda: datetime.now(UTC))
     updated_at: Annotated[
         datetime,
         msgspec.Meta(
             description="UTC timestamp when the pin was last updated.",
             examples=["2026-01-01T00:05:00Z"],
         ),
-    ]
+    ] = msgspec.field(default_factory=lambda: datetime.now(UTC))
     media: (
         Annotated[
             ProviderMediaMetadata,
             msgspec.Meta(
-                description="Resolved provider metadata for the pinned media item.",
+                description="Resolved provider metadata for the pinned target ref.",
                 examples=[{"namespace": "anilist", "key": "5114"}],
+            ),
+        ]
+        | None
+    ) = None
+
+
+class PinSearchResult(msgspec.Struct):
+    """Serialized provider search result with current pin state."""
+
+    media: Annotated[
+        ProviderMediaMetadata,
+        msgspec.Meta(
+            description="Provider metadata for the matched target media.",
+            examples=[{"namespace": "anilist", "key": "5114"}],
+        ),
+    ]
+    pin: (
+        Annotated[
+            PinEntry,
+            msgspec.Meta(
+                description="Existing pin state for the matched item when present.",
             ),
         ]
         | None
@@ -120,25 +115,22 @@ class PinEntry(msgspec.Struct):
 class PinService:
     """Service encapsulating pin CRUD operations."""
 
-    allowed_fields: ClassVar[tuple[str, ...]] = _SYNC_FIELD_VALUES
-    allowed_field_set: ClassVar[frozenset[str]] = _SYNC_FIELD_SET
+    parent_ref_path: ClassVar[tuple[object, ...]] = ()
 
-    def list_options(self) -> list[PinFieldOption]:
-        """Return metadata for selectable fields."""
-        return [
-            PinFieldOption(value=value, label=_PIN_LABELS.get(value, value.title()))
-            for value in self.allowed_fields
-        ]
+    @staticmethod
+    def _target_namespace(profile: str) -> str:
+        """Return the configured target provider namespace for a profile."""
+        return get_config().get_profile(profile).target_provider
 
     def _list_pins(self, profile: str) -> list[PinEntry]:
         """Return all pins for a profile ordered by most recent."""
-        bridge = get_bridge(profile)
+        target_namespace = self._target_namespace(profile)
         with db() as ctx:
             rows = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.list_namespace == bridge.list_provider.NAMESPACE,
+                    Pin.target_namespace == target_namespace,
                 )
                 .order_by(Pin.updated_at.desc())
                 .all()
@@ -147,15 +139,20 @@ class PinService:
         return [self._serialize(row) for row in rows]
 
     def _get_pin(self, profile: str, media_key: str) -> PinEntry | None:
-        """Return a single pin entry if it exists."""
-        bridge = get_bridge(profile)
+        """Return a single target parent pin entry if it exists."""
+        return self._get_pin_by_ref(profile, RefPayload(media_key))
+
+    def _get_pin_by_ref(self, profile: str, ref: RefPayload) -> PinEntry | None:
+        """Return a single target parent pin entry by exact ref."""
+        target_namespace = self._target_namespace(profile)
+        target_parent_ref = RefKey.from_payload(ref).to_json()
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.list_namespace == bridge.list_provider.NAMESPACE,
-                    Pin.list_media_key == media_key,
+                    Pin.target_namespace == target_namespace,
+                    Pin.target_parent_ref == target_parent_ref,
                 )
                 .first()
             )
@@ -163,21 +160,25 @@ class PinService:
         return self._serialize(pin) if pin else None
 
     def _upsert_pin(
-        self, profile: str, media_key: str, fields: Iterable[str]
+        self,
+        profile: str,
+        media_key: str,
     ) -> PinEntry:
-        """Create or update a pin configuration."""
-        sanitized = self._sanitize_fields(fields)
-        if not sanitized:
-            raise ValueError("At least one field must be provided")
-        bridge = get_bridge(profile)
+        """Create or update a target parent pin."""
+        return self._upsert_pin_by_ref(profile, RefPayload(media_key))
+
+    def _upsert_pin_by_ref(self, profile: str, ref: RefPayload) -> PinEntry:
+        """Create or update a target parent pin by exact ref."""
+        target_namespace = self._target_namespace(profile)
+        target_parent_ref = RefKey.from_payload(ref).to_json()
 
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.list_namespace == bridge.list_provider.NAMESPACE,
-                    Pin.list_media_key == media_key,
+                    Pin.target_namespace == target_namespace,
+                    Pin.target_parent_ref == target_parent_ref,
                 )
                 .first()
             )
@@ -186,15 +187,13 @@ class PinService:
             if not pin:
                 pin = Pin(
                     profile_name=profile,
-                    list_namespace=bridge.list_provider.NAMESPACE,
-                    list_media_key=media_key,
-                    fields=sanitized,
+                    target_namespace=target_namespace,
+                    target_parent_ref=target_parent_ref,
                     created_at=now,
                     updated_at=now,
                 )
                 ctx.session.add(pin)
             else:
-                pin.fields = sanitized
                 pin.updated_at = now
 
             ctx.session.commit()
@@ -202,77 +201,150 @@ class PinService:
 
         return self._serialize(pin)
 
-    async def _fetch_list_metadata(
-        self, profile: str, media_keys: list[str]
-    ) -> dict[str, ProviderMediaMetadata]:
-        if not media_keys:
+    async def _fetch_target_metadata(
+        self,
+        profile: str,
+        refs: Sequence[RefPayload],
+    ) -> dict[RefKey, ProviderMediaMetadata]:
+        """Fetch target node metadata for pinned parent refs when supported."""
+        if not refs:
             return {}
         bridge = get_bridge(profile)
-        entries = await bridge.list_provider.get_entries_batch(media_keys)
-        metadata: dict[str, ProviderMediaMetadata] = {}
-        for entry in entries:
-            if entry is None:
-                continue
-            media = entry.media()
-            metadata[media.key] = ProviderMediaMetadata(
-                namespace=bridge.list_provider.NAMESPACE,
-                key=media.key,
-                title=media.title,
-                poster_url=media.poster_image,
-                external_url=media.external_url,
-                labels=(list(media.labels) if media.labels else None),
+        provider_refs: list[Ref] = []
+        for item in refs:
+            ref = ref_from_payload(item)
+            if ref is not None:
+                provider_refs.append(ref)
+        if not isinstance(bridge.target_provider, SupportsReads):
+            return {}
+
+        page = cast(
+            Page[Node],
+            await bridge.target_provider.fetch(
+                NodeQuery(
+                    refs=tuple(provider_refs),
+                    facets=frozenset({FacetName.ARTWORK}),
+                )
+            ),
+        )
+        metadata: dict[RefKey, ProviderMediaMetadata] = {}
+        for node in page.items:
+            metadata[ref_to_key(node.ref)] = self._metadata_from_node(
+                bridge.target_provider.NAMESPACE,
+                node,
             )
         return metadata
 
-    async def list_pins(self, profile: str, with_media: bool = False) -> list[PinEntry]:
-        """Return all pins for a profile ordered by most recent.
+    async def search_pins(
+        self,
+        profile: str,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[PinSearchResult]:
+        """Search target provider media and attach existing pin state."""
+        text = query.strip()
+        if not text:
+            return []
 
-        Args:
-            profile (str): Profile name.
-            with_media (bool): When True, include provider metadata.
-        """
+        bridge = get_bridge(profile)
+        target = bridge.target_provider
+        if not isinstance(target, SupportsNodeSearch):
+            raise ValueError(
+                f"Target provider '{target.NAMESPACE}' does not support media search"
+            )
+
+        bounded_limit = min(max(limit, 1), 50)
+        page = await target.search_nodes(
+            text,
+            limit=bounded_limit,
+            facets=frozenset({FacetName.ARTWORK}),
+        )
+
+        refs = [node.ref for node in page.items if node.ref.is_anchor]
+        pins_by_key = self._get_pins_for_refs(profile, target.NAMESPACE, refs)
+        return [
+            PinSearchResult(
+                media=self._metadata_from_node(target.NAMESPACE, node),
+                pin=pins_by_key.get(ref_to_key(node.ref)),
+            )
+            for node in page.items
+            if node.ref.is_anchor
+        ]
+
+    def _get_pins_for_refs(
+        self,
+        profile: str,
+        target_namespace: str,
+        refs: Sequence[Ref],
+    ) -> dict[RefKey, PinEntry]:
+        """Return existing pins keyed by target parent ref."""
+        if not refs:
+            return {}
+        ref_json = [ref_to_json(ref) for ref in refs]
+        with db() as ctx:
+            rows = (
+                ctx.session.query(Pin)
+                .filter(
+                    Pin.profile_name == profile,
+                    Pin.target_namespace == target_namespace,
+                    Pin.target_parent_ref.in_(ref_json),
+                )
+                .all()
+            )
+        pins: dict[RefKey, PinEntry] = {}
+        for row in rows:
+            entry = self._serialize(row)
+            pins[RefKey.from_payload(entry.target_parent_ref)] = entry
+        return pins
+
+    async def list_pins(self, profile: str, with_media: bool = False) -> list[PinEntry]:
+        """Return all pins for a profile ordered by most recent."""
         pins = self._list_pins(profile)
         if with_media and pins:
-            metadata = await self._fetch_list_metadata(
-                profile, [pin.list_media_key for pin in pins]
+            metadata = await self._fetch_target_metadata(
+                profile,
+                [pin.target_parent_ref for pin in pins],
             )
             return [
                 PinEntry(
                     profile_name=pin.profile_name,
-                    list_namespace=pin.list_namespace,
-                    list_media_key=pin.list_media_key,
-                    fields=list(pin.fields),
+                    target_namespace=pin.target_namespace,
+                    target_parent_ref=pin.target_parent_ref,
                     created_at=pin.created_at,
                     updated_at=pin.updated_at,
-                    media=metadata.get(pin.list_media_key),
+                    media=metadata.get(RefKey.from_payload(pin.target_parent_ref)),
                 )
                 for pin in pins
             ]
         return pins
 
     async def get_pin(
-        self, profile: str, media_key: str, with_media: bool = False
+        self,
+        profile: str,
+        media_key: str,
+        with_media: bool = False,
+        target_ref: RefPayload | None = None,
     ) -> PinEntry | None:
-        """Return a single pin entry if it exists.
-
-        Args:
-            profile (str): Profile name.
-            media_key (str): Media key.
-            with_media (bool): When True, include provider metadata.
-        """
-        entry = self._get_pin(profile, media_key)
+        """Return a single pin entry if it exists."""
+        entry = (
+            self._get_pin_by_ref(profile, target_ref)
+            if target_ref is not None
+            else self._get_pin(profile, media_key)
+        )
         if not entry:
             return None
         if with_media:
-            metadata = await self._fetch_list_metadata(profile, [entry.list_media_key])
+            metadata = await self._fetch_target_metadata(
+                profile, [entry.target_parent_ref]
+            )
             return PinEntry(
                 profile_name=entry.profile_name,
-                list_namespace=entry.list_namespace,
-                list_media_key=entry.list_media_key,
-                fields=list(entry.fields),
+                target_namespace=entry.target_namespace,
+                target_parent_ref=entry.target_parent_ref,
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
-                media=metadata.get(entry.list_media_key),
+                media=metadata.get(RefKey.from_payload(entry.target_parent_ref)),
             )
         return entry
 
@@ -280,41 +352,47 @@ class PinService:
         self,
         profile: str,
         media_key: str,
-        fields: Iterable[str],
         with_media: bool = False,
+        target_ref: RefPayload | None = None,
     ) -> PinEntry:
-        """Create or update a pin configuration.
-
-        Args:
-            profile (str): Profile name.
-            media_key (str): Media key.
-            fields (Iterable[str]): Pin field list.
-            with_media (bool): When True, include provider metadata.
-        """
-        entry = self._upsert_pin(profile, media_key, fields)
+        """Create or update a target parent pin."""
+        entry = (
+            self._upsert_pin_by_ref(profile, target_ref)
+            if target_ref is not None
+            else self._upsert_pin(profile, media_key)
+        )
         if with_media:
-            metadata = await self._fetch_list_metadata(profile, [entry.list_media_key])
+            metadata = await self._fetch_target_metadata(
+                profile, [entry.target_parent_ref]
+            )
             return PinEntry(
                 profile_name=entry.profile_name,
-                list_namespace=entry.list_namespace,
-                list_media_key=entry.list_media_key,
-                fields=list(entry.fields),
+                target_namespace=entry.target_namespace,
+                target_parent_ref=entry.target_parent_ref,
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
-                media=metadata.get(entry.list_media_key),
+                media=metadata.get(RefKey.from_payload(entry.target_parent_ref)),
             )
         return entry
 
-    def delete_pin(self, profile: str, media_key: str) -> None:
-        """Remove a pin configuration if it exists."""
-        bridge = get_bridge(profile)
+    def delete_pin(
+        self,
+        profile: str,
+        media_key: str,
+        target_ref: RefPayload | None = None,
+    ) -> None:
+        """Remove a target parent pin if it exists."""
+        target_namespace = self._target_namespace(profile)
+        target_parent_ref = RefKey.from_payload(
+            target_ref if target_ref is not None else RefPayload(media_key)
+        ).to_json()
         with db() as ctx:
             pin = (
                 ctx.session.query(Pin)
                 .filter(
                     Pin.profile_name == profile,
-                    Pin.list_namespace == bridge.list_provider.NAMESPACE,
-                    Pin.list_media_key == media_key,
+                    Pin.target_namespace == target_namespace,
+                    Pin.target_parent_ref == target_parent_ref,
                 )
                 .first()
             )
@@ -323,29 +401,32 @@ class PinService:
             ctx.session.delete(pin)
             ctx.session.commit()
 
-    def _sanitize_fields(self, fields: Iterable[str]) -> list[str]:
-        requested: list[str] = []
-        for field in fields:
-            value = str(field).strip().lower()
-            if not value:
-                continue
-            if value not in self.allowed_field_set:
-                raise ValueError(f"Unsupported field '{field}'")
-            if value not in requested:
-                requested.append(value)
-
-        return [field for field in self.allowed_fields if field in requested]
-
     @staticmethod
     def _serialize(pin: Pin, media: ProviderMediaMetadata | None = None) -> PinEntry:
+        """Serialize a database pin row."""
+        target_parent_ref = ref_payload_from_json(pin.target_parent_ref)
+        if target_parent_ref is None:
+            raise ValueError("Pin row is missing a target parent ref")
         return PinEntry(
             profile_name=pin.profile_name,
-            list_namespace=pin.list_namespace,
-            list_media_key=pin.list_media_key,
-            fields=list(pin.fields or []),
+            target_namespace=pin.target_namespace,
+            target_parent_ref=target_parent_ref,
             created_at=pin.created_at,
             updated_at=pin.updated_at,
             media=media,
+        )
+
+    @staticmethod
+    def _metadata_from_node(namespace: str, node: Node) -> ProviderMediaMetadata:
+        """Serialize provider node metadata for web responses."""
+        artwork = node.facets.get(FacetName.ARTWORK)
+        return ProviderMediaMetadata(
+            namespace=namespace,
+            key=node.ref.key,
+            title=node.title,
+            poster_url=artwork.poster if isinstance(artwork, Artwork) else None,
+            external_url=node.url,
+            labels=list(node.labels) if node.labels else None,
         )
 
 

@@ -66,8 +66,8 @@ async def test_save_override_writes_file_and_syncs_db(
         descriptor="anilist:101",
         targets=[
             {
-                "provider": "tmdb",
-                "entry_id": "202",
+                "authority": "tmdb",
+                "value": "202",
                 "ranges": [
                     {
                         "source_range": "1",
@@ -102,8 +102,8 @@ async def test_get_mapping_detail_layers_upstream_and_custom(
         descriptor="anilist:909",
         targets=[
             {
-                "provider": "tmdb",
-                "entry_id": "777",
+                "authority": "tmdb",
+                "value": "777",
                 "ranges": [
                     {
                         "source_range": "1",
@@ -146,8 +146,8 @@ async def test_save_override_rejects_invalid_source_range(
             descriptor="anilist:500",
             targets=[
                 {
-                    "provider": "tmdb",
-                    "entry_id": "900",
+                    "authority": "tmdb",
+                    "value": "900",
                     "ranges": [
                         {
                             "source_range": "1,2",
@@ -171,8 +171,8 @@ async def test_save_override_allows_ratio_ranges(
         descriptor="anilist:501",
         targets=[
             {
-                "provider": "tmdb",
-                "entry_id": "901",
+                "authority": "tmdb",
+                "value": "901",
                 "ranges": [
                     {
                         "source_range": "1-6",
@@ -298,8 +298,8 @@ def test_mapping_overrides_service_validation_errors() -> None:
         service._validate_ranges([{"source_range": "1", "destination_range": 1}])
     with pytest.raises(MappingError, match="source_range must match"):
         service._validate_ranges([{"source_range": "1,2", "destination_range": "1"}])
-    with pytest.raises(MappingError, match="provider and entry_id are required"):
-        service._validate_targets([{"provider": "", "entry_id": ""}])
+    with pytest.raises(MappingError, match="authority and value are required"):
+        service._validate_targets([{"authority": "", "value": ""}])
 
 
 @pytest.mark.asyncio

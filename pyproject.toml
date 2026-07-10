@@ -1,7 +1,7 @@
 [project]
 name = "anibridge"
 version = "2.1.4"
-description = "The smart way to keep your anime lists perfectly synchronized."
+description = "Sync what you watch, wherever you watch."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
@@ -34,32 +34,31 @@ classifiers = [
 ]
 
 dependencies = [
-    "aiohttp>=3.13.3",
-    "alembic>=1.18.4",
-    "anibridge-anilist-provider>=0.2.0",
-    "anibridge-emby-provider>=0.2.0",
-    "anibridge-jellyfin-provider>=0.2.0",
-    "anibridge-library-base>=0.2.1,<1.0.0",
-    "anibridge-list-base>=0.2.0,<1.0.0",
-    "anibridge-mal-provider>=0.2.0",
-    "anibridge-plex-provider>=0.2.0",
+    "aiohttp>=3.14.1",
+    "alembic>=1.18.5",
+    "anibridge-anilist-provider>=0.2.2",
+    "anibridge-emby-provider>=0.2.3",
+    "anibridge-jellyfin-provider>=0.2.3",
+    "anibridge-mal-provider>=0.2.2",
+    "anibridge-plex-provider>=0.2.2",
+    "anibridge-provider-base>=0.1.0a3",
     "anibridge-simkl-provider>=0.1.0",
     "anibridge-trakt-provider>=0.2.0",
-    "anibridge-utils>=0.2.1,<1.0.0",
+    "anibridge-utils>=0.2.2,<1.0.0",
     "bcrypt>=5.0.0",
     "colorama>=0.4.6",
-    "croniter>=6.2.2",
-    "litestar>=2.21.1",
+    "croniter>=6.2.3",
+    "litestar>=2.24.0",
     "msgspec>=0.21.1",
     "psutil>=7.2.2",
-    "pydantic-settings>=2.13.1",
-    "pydantic>=2.12.5",
+    "pydantic-settings>=2.14.2",
+    "pydantic>=2.13.4",
     "pyparsing>=3.3.2",
-    "python-multipart>=0.0.26",
+    "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
-    "rapidfuzz>=3.14.3",
-    "sqlalchemy>=2.0.47",
-    "uvicorn[standard]>=0.44.0",
+    "rapidfuzz>=3.14.5",
+    "sqlalchemy>=2.0.51",
+    "uvicorn[standard]>=0.51.0",
 ]
 
 [project.scripts]
@@ -81,7 +80,6 @@ Issues = "https://github.com/anibridge/anibridge/issues"
 Source = "https://github.com/anibridge/anibridge"
 
 [tool.ruff]
-extend-exclude = ["alembic", "packages"]
 indent-width = 4
 line-length = 88
 
@@ -95,26 +93,26 @@ select = [
     "A",
     "ASYNC",
     "B",
+    "C4",
     "D",
     "E",
     "F",
-    "FAST",
+    "FURB",
+    "G",
     "I",
+    "N",
     "PERF",
+    "PLC",
+    "PLE",
     "RUF",
     "SIM",
     "UP",
     "W",
 ]
 
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = [
-    "litestar.params.Body",
-    "litestar.params.Dependency",
-    "litestar.params.Parameter",
-]
-
 [tool.ruff.lint.per-file-ignores]
+"alembic/**/*.py" = ["ALL"]
+"packages/**/*.py" = ["I001"]
 "tests/**/*.py" = ["D"]
 
 [tool.ruff.lint.pydocstyle]
@@ -123,8 +121,11 @@ convention = "google"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "--cov=src"
+addopts = "--cov=src --import-mode=importlib"
 filterwarnings = []
+
+[tool.uv]
+python-preference = "only-managed"
 
 [tool.uv.build-backend]
 module-name = "anibridge"
@@ -134,26 +135,24 @@ namespace = true
 anibridge-anilist-provider = { git = "https://github.com/anibridge/anibridge-anilist-provider.git", tag = "main" }
 anibridge-emby-provider = { git = "https://github.com/anibridge/anibridge-emby-provider.git", tag = "main" }
 anibridge-jellyfin-provider = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git", tag = "main" }
-anibridge-library-base = { git = "https://github.com/anibridge/anibridge-library-base.git", tag = "main" }
-anibridge-list-base = { git = "https://github.com/anibridge/anibridge-list-base.git", tag = "main" }
 anibridge-mal-provider = { git = "https://github.com/anibridge/anibridge-mal-provider.git", tag = "main" }
 anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-provider.git", tag = "main" }
+anibridge-provider-base = { git = "https://github.com/anibridge/anibridge-provider-base.git", tag = "main" }
 anibridge-simkl-provider = { git = "https://github.com/anibridge/anibridge-simkl-provider.git", tag = "main" }
 anibridge-trakt-provider = { git = "https://github.com/anibridge/anibridge-trakt-provider.git", tag = "main" }
 anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
-py-spy = { git = "https://github.com/czardoz/py-spy.git" }                                                           # Until upstream suports Python 3.14
 
 [build-system]
-requires = ["uv_build>=0.11.0,<0.12.0"]
+requires = ["uv_build>=0.11.28,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "memray>=1.19.1",
-    "py-spy",
-    "pytest-asyncio>=1.3.0",
-    "pytest-cov>=7.0.0",
-    "pytest>=9.0.2",
-    "ruff>=0.15.5",
-    "ty>=0.0.22",
+    "memray>=1.19.3",
+    "py-spy>=0.4.2",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "pytest>=9.1.1",
+    "ruff>=0.15.21",
+    "ty>=0.0.57",
 ]

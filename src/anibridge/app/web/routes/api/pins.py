@@ -1,4 +1,4 @@
-"""API routes for managing field pins across list providers."""
+"""API routes for managing target parent pins."""
 
 from typing import Annotated
 
@@ -8,11 +8,10 @@ from litestar.handlers.http_handlers.decorators import delete, get, put
 from litestar.params import Body, PathParameter, QueryParameter
 from litestar.router import Router
 
-from anibridge.app.config.settings import SyncField
-from anibridge.app.models.schemas.provider import ProviderMediaMetadata
+from anibridge.app.core.sync import RefPayload
 from anibridge.app.web.services.pin_service import (
     PinEntry,
-    PinFieldOption,
+    PinSearchResult,
     get_pin_service,
 )
 
@@ -30,9 +29,8 @@ class PinListResponse(msgspec.Struct):
                 [
                     {
                         "profile_name": "default",
-                        "list_namespace": "anilist",
-                        "list_media_key": "5114",
-                        "fields": ["status"],
+                        "target_namespace": "anilist",
+                        "target_parent_ref": {"key": "5114", "path": []},
                     }
                 ]
             ],
@@ -40,70 +38,16 @@ class PinListResponse(msgspec.Struct):
     ]
 
 
-class PinOptionsResponse(msgspec.Struct):
-    """Response model for available pin field options."""
-
-    options: Annotated[
-        list[PinFieldOption],
-        msgspec.Meta(
-            description="Selectable sync fields that can be pinned.",
-            examples=[[{"value": "status", "label": "Status"}]],
-        ),
-    ]
-
-
-class PinSearchItem(msgspec.Struct):
-    """Search result item combining provider metadata with existing pin state."""
-
-    media: Annotated[
-        ProviderMediaMetadata,
-        msgspec.Meta(
-            description="Provider metadata for the matched media item.",
-            examples=[{"namespace": "anilist", "key": "5114"}],
-        ),
-    ]
-    pin: (
-        Annotated[
-            PinEntry,
-            msgspec.Meta(
-                description="Existing pin state for the matched item when present.",
-                examples=[
-                    {
-                        "profile_name": "default",
-                        "list_namespace": "anilist",
-                        "list_media_key": "5114",
-                        "fields": ["status"],
-                    }
-                ],
-            ),
-        ]
-        | None
-    ) = None
-
-
 class PinSearchResponse(msgspec.Struct):
     """Response model for provider search results within the pin manager."""
 
     results: Annotated[
-        list[PinSearchItem],
+        list[PinSearchResult],
         msgspec.Meta(
             description="Provider search results enriched with current pin state.",
             examples=[[{"media": {"namespace": "anilist", "key": "5114"}}]],
         ),
     ]
-
-
-class UpdatePinRequest(msgspec.Struct):
-    """Request body for updating pin fields."""
-
-    fields: Annotated[
-        list[str],
-        msgspec.Meta(
-            min_length=1,
-            description="Requested sync fields to pin for the target media item.",
-            examples=[["status", "progress"]],
-        ),
-    ] = msgspec.field(default_factory=list)
 
 
 class OkResponse(msgspec.Struct):
@@ -118,11 +62,10 @@ class OkResponse(msgspec.Struct):
     ] = True
 
 
-@get(path="/fields", sync_to_thread=True)
-def get_pin_fields() -> PinOptionsResponse:
-    """Return selectable pin field metadata."""
-    service = get_pin_service()
-    return PinOptionsResponse(options=service.list_options())
+class PinMutationRequest(msgspec.Struct):
+    """Optional payload for exact target ref pin mutations."""
+
+    target_ref: RefPayload | None = None
 
 
 @get(path="/{profile:str}")
@@ -130,15 +73,24 @@ async def list_pins(
     profile: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinListResponse:
-    """Return all pins for a profile.
-
-    Args:
-        profile (str): Profile name.
-        with_media (bool): When True, include provider metadata.
-    """
+    """Return all pins for a profile."""
     service = get_pin_service()
     pins = await service.list_pins(profile, with_media=with_media)
     return PinListResponse(pins=pins)
+
+
+@get(path="/{profile:str}/search")
+async def search_pins(
+    profile: Annotated[str, PathParameter()],
+    q: Annotated[str, QueryParameter(min_length=1)],
+    limit: Annotated[int, QueryParameter(ge=1, le=50)] = 10,
+) -> PinSearchResponse:
+    """Search the target provider for entries that can be pinned."""
+    try:
+        results = await get_pin_service().search_pins(profile, q, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PinSearchResponse(results=results)
 
 
 @get(path="/{profile:str}/{media_key:str}")
@@ -147,16 +99,7 @@ async def get_pin(
     media_key: Annotated[str, PathParameter()],
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
-    """Retrieve pin configuration for a specific list entry.
-
-    Args:
-        profile (str): Profile name.
-        media_key (str): Media key.
-        with_media (bool): When True, include provider metadata.
-
-    Returns:
-        PinEntry: Pin configuration.
-    """
+    """Retrieve pin state for a specific target parent ref."""
     service = get_pin_service()
     entry = await service.get_pin(profile, media_key, with_media=with_media)
     if not entry:
@@ -166,65 +109,44 @@ async def get_pin(
 
 @put(path="/{profile:str}/{media_key:str}")
 async def upsert_pin(
-    data: Annotated[UpdatePinRequest, Body()],
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
+    data: Annotated[PinMutationRequest | None, Body()] = None,
     with_media: Annotated[bool, QueryParameter()] = False,
 ) -> PinEntry:
-    """Create or update pin fields for a media item.
-
-    Args:
-        data (UpdatePinRequest): Pin update request payload.
-        profile (str): Profile name.
-        media_key (str): Media key.
-        with_media (bool): When True, include provider metadata.
-    """
-    allowed_fields = {field.value for field in SyncField}
-    normalized_fields: list[str] = []
-    for raw_field in data.fields:
-        value = str(raw_field).strip().lower()
-        if not value:
-            continue
-        if value not in allowed_fields:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported field '{raw_field}'",
-            )
-        if value not in normalized_fields:
-            normalized_fields.append(value)
-
-    normalized_fields = [
-        field.value for field in SyncField if field.value in normalized_fields
-    ]
-
+    """Create or update a target parent pin."""
     try:
         entry = await get_pin_service().upsert_pin(
-            profile, media_key, normalized_fields, with_media=with_media
+            profile,
+            media_key,
+            with_media=with_media,
+            target_ref=data.target_ref if data else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return entry
 
 
-@delete(path="/{profile:str}/{media_key:str}", status_code=200, sync_to_thread=True)
-def delete_pin(
+@delete(path="/{profile:str}/{media_key:str}", status_code=200)
+async def delete_pin(
     profile: Annotated[str, PathParameter()],
     media_key: Annotated[str, PathParameter()],
+    data: Annotated[PinMutationRequest | None, Body()] = None,
 ) -> OkResponse:
-    """Delete pin configuration for an list entry.
-
-    Args:
-        profile (str): Profile name.
-        media_key (str): Media key.
-
-    Returns:
-        OkResponse: Confirmation of successful deletion.
-    """
-    get_pin_service().delete_pin(profile, media_key)
+    """Delete pin state for a target parent ref."""
+    get_pin_service().delete_pin(
+        profile, media_key, target_ref=data.target_ref if data else None
+    )
     return OkResponse()
 
 
 router = Router(
     path="/pins",
-    route_handlers=[get_pin_fields, list_pins, get_pin, upsert_pin, delete_pin],
+    route_handlers=[
+        list_pins,
+        search_pins,
+        get_pin,
+        upsert_pin,
+        delete_pin,
+    ],
 )

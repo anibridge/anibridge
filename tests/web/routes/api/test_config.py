@@ -8,29 +8,28 @@ import pytest
 from litestar.exceptions.http_exceptions import HTTPException
 from pydantic import BaseModel, ValidationError
 
-from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.routes.api import config as config_api_module
 
 
 @pytest.mark.parametrize(
-    ("has_auth", "allow_without_auth", "expected_status"),
+    ("has_auth", "allow_config_without_auth", "expected_status"),
     [
-        pytest.param(False, False, 403, id="blocked-by-default"),
-        pytest.param(False, True, 200, id="explicit-override"),
+        pytest.param(False, False, 403, id="blocked-without-auth"),
         pytest.param(True, False, 200, id="configured-auth"),
+        pytest.param(False, True, 200, id="explicitly-allowed-without-auth"),
     ],
 )
 def test_config_api_access_policy(
     api_client_factory,
     set_config_api_access,
     has_auth: bool,
-    allow_without_auth: bool,
+    allow_config_without_auth: bool,
     expected_status: int,
 ) -> None:
     """Config API access policy should match web auth configuration."""
     set_config_api_access(
         has_auth=has_auth,
-        allow_config_without_auth=allow_without_auth,
+        allow_config_without_auth=allow_config_without_auth,
     )
 
     response = api_client_factory(config_api_module.router, "/api/config").get(
@@ -63,7 +62,6 @@ def test_require_config_api_access_can_fall_back_to_get_config(
         lambda: SimpleNamespace(
             web=SimpleNamespace(
                 has_auth=True,
-                allow_config_without_auth=False,
             )
         ),
     )
@@ -78,6 +76,12 @@ def test_get_configuration_success_and_error_translation(
         Callable[[], config_api_module.ConfigDocumentResponse],
         config_api_module.get_configuration.fn,
     )
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(web=SimpleNamespace(has_auth=True)),
+        raising=False,
+    )
 
     monkeypatch.setattr(
         config_api_module,
@@ -86,7 +90,7 @@ def test_get_configuration_success_and_error_translation(
             "Svc",
             (),
             {
-                "load_document_text": lambda self: {
+                "read": lambda self: {
                     "config_path": "/tmp/config.yaml",
                     "file_exists": True,
                     "content": "profiles: {}",
@@ -109,11 +113,7 @@ def test_get_configuration_success_and_error_translation(
         lambda: type(
             "Svc",
             (),
-            {
-                "load_document_text": lambda self: (_ for _ in ()).throw(
-                    ValueError("bad config")
-                )
-            },
+            {"read": lambda self: (_ for _ in ()).throw(ValueError("bad config"))},
         )(),
     )
     with pytest.raises(HTTPException, match="bad config"):
@@ -125,11 +125,7 @@ def test_get_configuration_success_and_error_translation(
         lambda: type(
             "Svc",
             (),
-            {
-                "load_document_text": lambda self: (_ for _ in ()).throw(
-                    _validation_error()
-                )
-            },
+            {"read": lambda self: (_ for _ in ()).throw(_validation_error())},
         )(),
     )
     with pytest.raises(HTTPException) as excinfo:
@@ -144,16 +140,24 @@ async def test_update_configuration_success_and_error_translation(
     request = config_api_module.ConfigDocumentUpdateRequest(
         content="profiles: {}", expected_mtime=123
     )
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(web=SimpleNamespace(has_auth=True)),
+        raising=False,
+    )
 
     class _Service:
-        async def save_document_text(self, content: str, expected_mtime: int | None):
+        async def save_text(self, content: str, expected_mtime: int | None):
             assert content == "profiles: {}"
             assert expected_mtime == 123
-            return (
-                type("Cfg", (), {"profiles": {"b": object(), "a": object()}})(),
-                False,
-                456,
-            )
+            return {
+                "config": type(
+                    "Cfg", (), {"profiles": {"b": object(), "a": object()}}
+                )(),
+                "mtime": 456,
+                "requires_restart": False,
+            }
 
     monkeypatch.setattr(
         config_api_module, "get_configuration_service", lambda: _Service()
@@ -167,11 +171,10 @@ async def test_update_configuration_success_and_error_translation(
         (FileExistsError("stale"), 409),
         (ValueError("bad"), 400),
         (_validation_error(), 422),
-        (SchedulerUnavailableError("busy"), 503),
     ]:
 
         class _ErrorService:
-            async def save_document_text(
+            async def save_text(
                 self,
                 content: str,
                 expected_mtime: int | None,
@@ -195,38 +198,45 @@ async def test_update_configuration_structured_success_and_error_translation(
     request = config_api_module.ConfigStructuredUpdateRequest(
         settings={"profiles": {}}, expected_mtime=123
     )
+    monkeypatch.setattr(
+        config_api_module,
+        "runtime_config",
+        SimpleNamespace(web=SimpleNamespace(has_auth=True)),
+        raising=False,
+    )
 
     class _Service:
-        async def save_settings_payload(
+        async def save_settings(
             self,
             settings: dict[str, object],
             expected_mtime: int | None,
         ):
             assert settings == {"profiles": {}}
             assert expected_mtime == 123
-            return (
-                type("Cfg", (), {"profiles": {"b": object(), "a": object()}})(),
-                True,
-                456,
-            )
+            return {
+                "config": type(
+                    "Cfg", (), {"profiles": {"b": object(), "a": object()}}
+                )(),
+                "mtime": 456,
+                "requires_restart": False,
+            }
 
     monkeypatch.setattr(
         config_api_module, "get_configuration_service", lambda: _Service()
     )
     response = await config_api_module.update_configuration_structured.fn(request)
     assert response.profiles == ["a", "b"]
-    assert response.requires_restart is True
+    assert response.requires_restart is False
     assert response.mtime == 456
 
     for exc, status_code in [
         (FileExistsError("stale"), 409),
         (ValueError("bad"), 400),
         (_validation_error(), 422),
-        (SchedulerUnavailableError("busy"), 503),
     ]:
 
         class _ErrorService:
-            async def save_settings_payload(
+            async def save_settings(
                 self,
                 settings: dict[str, object],
                 expected_mtime: int | None,

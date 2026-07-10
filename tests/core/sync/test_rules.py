@@ -1,376 +1,309 @@
-"""Unit tests for declarative sync rule helpers."""
+"""Unit tests for declarative sync rule evaluation."""
 
-import pytest
-from anibridge.list import ListStatus
+from datetime import UTC, date, datetime
 
-from anibridge.app.core.sync.rules import (
-    SyncRuleDecision,
-    SyncRuleEngine,
-    _ContextNamespace,
-    _ctx_field_refs_for_expression,
-    _validate_expression_ast,
+from anibridge.provider.base import (
+    Node,
+    Progress,
+    Rating,
+    Record,
+    RecordField,
+    Ref,
+    State,
+    Status,
 )
 
+from anibridge.app.config.sync_rules import SyncRulesConfig
+from anibridge.app.core.sync.rules import SyncRuleDecision, SyncRuleEngine
 
-def test_context_namespace_normalizes_values_and_missing_access() -> None:
-    """Context namespaces should normalize nested values and handle missing attrs."""
-    namespace = _ContextNamespace(
-        {
-            "status": ListStatus.CURRENT,
-            "nested": {"status": ListStatus.PLANNING},
-            "items": [ListStatus.COMPLETED, {"status": ListStatus.DROPPED}],
-        },
-        missing_value=None,
+
+def _decision(
+    engine: SyncRuleEngine,
+    field: RecordField,
+    *,
+    current: object = None,
+    source: object = None,
+) -> SyncRuleDecision:
+    return engine.evaluate_record_field(
+        field=field,
+        current_values={field: current},
+        source_values={field: source},
+        planned_values={field: source},
+        source_record=Record(ref=Ref.anchor("source"), surface="list"),
+        target_record=None,
+        target_ref=Ref.anchor("target"),
     )
 
-    assert namespace["status"] == ListStatus.CURRENT
-    assert namespace.nested.status == ListStatus.PLANNING
-    assert namespace["items"][0] == ListStatus.COMPLETED
-    assert namespace["items"][1].status == ListStatus.DROPPED
-    assert list(iter(namespace)) == ["status", "nested", "items"]
-    assert len(namespace) == 3
 
-    strict = _ContextNamespace({}, missing_value=...)
-    with pytest.raises(AttributeError):
-        _ = strict.missing
+def test_sync_rules_empty_list_uses_source_value() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig.model_validate([]))
 
-
-@pytest.mark.parametrize(
-    "expression",
-    [
-        pytest.param("([len][0])([1])", id="unsupported-call-target"),
-        pytest.param("len(**ctx)", id="unpacked-keywords"),
-    ],
-)
-def test_validate_expression_ast_rejects_unsafe_calls(expression: str) -> None:
-    """Unsupported call targets and unpacked kwargs should be rejected."""
-    with pytest.raises(ValueError):
-        _validate_expression_ast(expression)
-
-
-def test_ctx_field_refs_collects_supported_ctx_paths() -> None:
-    """ctx field extraction should include item/child/grandchildren references only."""
-    refs = _ctx_field_refs_for_expression(
-        "ctx.item.title and ctx.child.season and "
-        "ctx.grandchildren[0].index and current.status"
+    decision = _decision(
+        engine,
+        RecordField.STATUS,
+        current=Status.PLANNED,
+        source=Status.ACTIVE,
     )
 
-    assert refs == {"title", "season", "index"}
+    assert decision == SyncRuleDecision(True, Status.ACTIVE, "default")
 
 
-def test_sync_rule_engine_reports_rule_state_and_invalid_status_outputs() -> None:
-    """Rule engines should expose rule state and validate status outputs."""
-    engine = SyncRuleEngine(
-        variables={"same_title": "ctx.item.title == 'Movie'"},
-        field_rules={
-            "status": [{"name": "set status", "if": "vars.same_title", "set": "'bad'"}],
-            "review": False,
-            "progress": True,
-        },
+def test_sync_rules_default_template_prevents_regression() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig())
+
+    assert engine.is_disabled(RecordField.NOTES) is False
+    assert engine.is_disabled(RecordField.RATING) is False
+    assert engine.allows_event(action="upsert", kind="watch", destructive_sync=False)
+    assert not engine.allows_event(
+        action="delete",
+        kind="watch",
+        destructive_sync=False,
     )
 
-    assert engine.has_field_rules("status") is True
-    assert engine.is_disabled("review") is True
-    assert engine.context_media_fields("status") == frozenset({"title"})
-    assert engine.evaluate_field(
-        field_name="progress",
-        current_values={"progress": 1},
-        computed_values={"progress": 2},
-    ) == SyncRuleDecision(allowed=True, value=2)
+    status_decision = _decision(
+        engine,
+        RecordField.STATUS,
+        current=State(status=Status.COMPLETED),
+        source=State(status=Status.ACTIVE),
+    )
+    progress_decision = _decision(
+        engine,
+        RecordField.PROGRESS,
+        current=Progress(current=10),
+        source=Progress(current=4),
+    )
 
-    with pytest.raises(ValueError, match="must return a ListStatus or null"):
-        engine.evaluate_field(
-            field_name="status",
-            current_values={"status": ListStatus.PLANNING},
-            computed_values={"status": ListStatus.CURRENT},
-            rule_context={"item": {"title": "Movie"}},
+    assert status_decision == SyncRuleDecision(
+        True,
+        Status.COMPLETED,
+        "record.status_1",
+    )
+    assert progress_decision.value == Progress(current=10)
+
+
+def test_sync_rules_status_regression_uses_explicit_transitions() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig())
+
+    cases = (
+        (Status.ACTIVE, Status.PLANNED, Status.ACTIVE),
+        (Status.COMPLETED, Status.ACTIVE, Status.COMPLETED),
+        (Status.REPEATING, Status.COMPLETED, Status.REPEATING),
+        (Status.PLANNED, Status.DROPPED, Status.DROPPED),
+        (Status.PAUSED, Status.ACTIVE, Status.ACTIVE),
+        (Status.COMPLETED, Status.REPEATING, Status.REPEATING),
+    )
+
+    for current, source, expected in cases:
+        decision = _decision(
+            engine,
+            RecordField.STATUS,
+            current=State(status=current),
+            source=State(status=source),
+        )
+        value = (
+            decision.value.status
+            if isinstance(decision.value, State)
+            else decision.value
         )
 
+        assert value == expected
 
-def test_sync_rule_engine_rejects_non_enum_status_values() -> None:
-    """Status rules must resolve to ListStatus values or null."""
-    engine = SyncRuleEngine(
-        field_rules={"status": [{"set": 123}]},
+
+def test_sync_rules_date_regression_handles_mixed_date_and_datetime() -> None:
+    engine = SyncRuleEngine(SyncRulesConfig())
+
+    decision = _decision(
+        engine,
+        RecordField.STARTED_AT,
+        current=date(2026, 1, 2),
+        source=datetime(2026, 1, 1, 23, 30, tzinfo=UTC),
     )
 
-    with pytest.raises(ValueError, match="must return a ListStatus or null"):
-        engine.evaluate_field(
-            field_name="status",
-            current_values={"status": None},
-            computed_values={"status": None},
-        )
+    assert decision == SyncRuleDecision(True, date(2026, 1, 2), "record.started_at_3")
 
 
-def test_sync_rule_engine_supports_liststatus_class_in_status_rules() -> None:
-    """Status rules should evaluate ListStatus enum members directly."""
+def test_sync_rules_later_rules_override_templates() -> None:
     engine = SyncRuleEngine(
-        field_rules={
-            "status": [
+        SyncRulesConfig.model_validate(
+            [
+                {"template": "prevent-regression"},
+                {"selector": "record.progress", "value": "src.progress"},
+                {"selector": "event.upsert", "skip": True},
+            ]
+        )
+    )
+
+    assert not engine.allows_event(action="upsert", kind="watch", destructive_sync=True)
+    assert _decision(
+        engine,
+        RecordField.PROGRESS,
+        current=Progress(current=10),
+        source=Progress(current=4),
+    ) == SyncRuleDecision(True, Progress(current=4), "record.progress_7")
+
+
+def test_sync_rules_promote_rewatch_template_is_opt_in() -> None:
+    default_engine = SyncRuleEngine(SyncRulesConfig())
+    promoted_engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [{"template": "prevent-regression"}, {"template": "promote-rewatch"}]
+        )
+    )
+
+    assert (
+        _decision(
+            default_engine,
+            RecordField.STATUS,
+            current=State(status=Status.COMPLETED),
+            source=State(status=Status.ACTIVE),
+        ).value
+        == Status.COMPLETED
+    )
+    assert _decision(
+        promoted_engine,
+        RecordField.STATUS,
+        current=State(status=Status.COMPLETED),
+        source=State(status=Status.ACTIVE),
+    ) == SyncRuleDecision(True, Status.REPEATING, "promote-rewatch")
+
+
+def test_sync_rules_require_completed_for_rating_template_is_opt_in() -> None:
+    default_engine = SyncRuleEngine(SyncRulesConfig())
+    gated_engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [
+                {"template": "prevent-regression"},
+                {"template": "require-completed-for-rating"},
+            ]
+        )
+    )
+    rating = Rating(8, (0, 10, 1))
+
+    assert _decision(
+        default_engine,
+        RecordField.RATING,
+        source=rating,
+    ) == SyncRuleDecision(True, rating, "default")
+    blocked = gated_engine.evaluate_record_field(
+        field=RecordField.RATING,
+        current_values={},
+        source_values={
+            RecordField.STATUS: State(status=Status.ACTIVE),
+            RecordField.RATING: rating,
+        },
+        planned_values={
+            RecordField.STATUS: State(status=Status.ACTIVE),
+            RecordField.RATING: rating,
+        },
+        source_record=Record(ref=Ref.anchor("source"), surface="list"),
+        target_record=None,
+        target_ref=Ref.anchor("target"),
+    )
+    allowed = gated_engine.evaluate_record_field(
+        field=RecordField.RATING,
+        current_values={},
+        source_values={
+            RecordField.STATUS: State(status=Status.COMPLETED),
+            RecordField.RATING: rating,
+        },
+        planned_values={
+            RecordField.STATUS: State(status=Status.COMPLETED),
+            RecordField.RATING: rating,
+        },
+        source_record=Record(ref=Ref.anchor("source"), surface="list"),
+        target_record=None,
+        target_ref=Ref.anchor("target"),
+    )
+
+    assert blocked == SyncRuleDecision(
+        False,
+        rating,
+        "require-completed-for-rating",
+    )
+    assert allowed == SyncRuleDecision(True, rating, "default")
+
+
+def test_sync_rules_can_allow_event_deletes_explicitly() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate([{"selector": "event.delete", "value": "True"}])
+    )
+
+    assert engine.allows_event(
+        action="delete",
+        kind="watch",
+        destructive_sync=False,
+    )
+
+
+def test_sync_rules_can_skip_nodes() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [{"selector": "node.*", "if": "node.kind == 'movie'", "skip": True}]
+        )
+    )
+
+    assert not engine.allows_node(
+        node=Node(ref=Ref.anchor("movie"), kind="movie", title="Movie")
+    )
+    assert engine.allows_node(node=Node(ref=Ref.anchor("show"), kind="show"))
+
+
+def test_sync_rules_skip_blocks_record_fields() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate([{"selector": "record.notes", "skip": True}])
+    )
+
+    decision = _decision(
+        engine,
+        RecordField.NOTES,
+        current="keep",
+        source="replace",
+    )
+
+    assert engine.is_disabled(RecordField.NOTES) is True
+    assert decision.allowed is False
+    assert decision.reason == "record.notes_1"
+
+
+def test_sync_rules_evaluate_if_and_value_expressions() -> None:
+    engine = SyncRuleEngine(
+        SyncRulesConfig.model_validate(
+            [
                 {
-                    "name": "prevent regression",
+                    "name": "Promote rewatch",
+                    "selector": "record.status",
                     "if": (
-                        "current.status == ListStatus.COMPLETED and "
-                        "computed.status == ListStatus.CURRENT"
+                        "dst.status in (Status.COMPLETED, Status.REPEATING) "
+                        "and src.status == Status.ACTIVE"
                     ),
-                    "set": "ListStatus.COMPLETED",
+                    "value": "Status.REPEATING",
                 }
             ]
-        }
+        )
     )
 
-    result = engine.evaluate_field(
-        field_name="status",
-        current_values={"status": ListStatus.COMPLETED},
-        computed_values={"status": ListStatus.CURRENT},
+    decision = _decision(
+        engine,
+        RecordField.STATUS,
+        current=State(status=Status.COMPLETED),
+        source=State(status=Status.ACTIVE),
     )
 
-    assert result.value == ListStatus.COMPLETED
-    assert result.reason == "prevent regression"
+    assert decision == SyncRuleDecision(True, Status.REPEATING, "Promote rewatch")
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
-        pytest.param(
-            "[g.index for g in ctx.grandchildren if g.view_count]",
-            id="list-comp-attribute",
-        ),
-        pytest.param(
-            "max(g.index for g in ctx.grandchildren if g.view_count)",
-            id="generator-expr-in-max",
-        ),
-        pytest.param(
-            "[g.index for g in ctx.grandchildren if g.index is not None]",
-            id="list-comp-is-not-none",
-        ),
-        pytest.param(
-            "[g.index for g in ctx.grandchildren]",
-            id="list-comp-no-filter",
-        ),
-        pytest.param(
-            "sum(1 for g in ctx.grandchildren if g.view_count)",
-            id="generator-expr-in-sum",
-        ),
-    ],
-)
-def test_validate_expression_ast_accepts_list_comprehensions(
-    expression: str,
-) -> None:
-    """List comprehensions and generator expressions should be allowed in rules."""
-    _validate_expression_ast(expression)  # should not raise
-
-
-def test_validate_expression_ast_rejects_unknown_name_outside_comprehension() -> None:
-    """Names not bound by comprehensions or the allowed set should still be rejected."""
-    with pytest.raises(ValueError, match="references unknown name"):
-        _validate_expression_ast("unknown_var + 1")
-
-
-def test_validate_expression_ast_comprehension_var_may_not_leak_as_free_name() -> None:
-    """A comprehension variable used outside its scope should be rejected if not
-    otherwise allowed."""
-    # `g` is valid only inside the comprehension body; accessing it as a free
-    # name in a separate expression tree should still be rejected.
-    with pytest.raises(ValueError, match="references unknown name"):
-        _validate_expression_ast("g.index")
-
-
-def test_ctx_field_refs_detects_fields_via_comprehension_variable() -> None:
-    """Fields accessed via a comprehension var over ctx.grandchildren are detected."""
-    refs = _ctx_field_refs_for_expression(
-        "[g.index for g in ctx.grandchildren if g.view_count and g.index is not None]"
-    )
-
-    assert "index" in refs
-    assert "view_count" in refs
-
-
-def test_ctx_field_refs_detects_fields_via_generator_in_max() -> None:
-    """Fields used in a generator expression over ctx.grandchildren are detected."""
-    refs = _ctx_field_refs_for_expression(
-        "max(g.index for g in ctx.grandchildren if g.view_count)"
-    )
-
-    assert "index" in refs
-    assert "view_count" in refs
-
-
-def test_ctx_field_refs_ignores_comprehension_over_non_ctx_iterables() -> None:
-    """Comprehensions over non-ctx iterables should not contribute field refs."""
-    refs = _ctx_field_refs_for_expression(
-        "[x.something for x in computed.items if x.other]"
-    )
-
-    assert "something" not in refs
-    assert "other" not in refs
-
-
-def test_ctx_field_refs_comprehension_over_ctx_item_is_not_tracked() -> None:
-    """Only grandchildren / item / child namespaces feed field refs, not bare ctx."""
-    refs = _ctx_field_refs_for_expression("[m.source for m in ctx.mappings]")
-
-    # ctx.mappings is not a media namespace, so no refs should be collected
-    assert "source" not in refs
-
-
-def test_sync_rule_engine_evaluates_list_comp_progress_rule() -> None:
-    """A progress rule using a list comprehension over ctx.grandchildren works."""
+def test_sync_rules_can_clear_with_none_expression() -> None:
     engine = SyncRuleEngine(
-        variables={
-            "watched_indices": (
-                "[g.index for g in ctx.grandchildren "
-                "if g.view_count and g.index is not None]"
-            ),
-            "mapping_start": (
-                "ctx.mappings[0].mappings[0].source_range.start "
-                "if ctx.mappings and ctx.mappings[0].mappings else 1"
-            ),
-        },
-        field_rules={
-            "progress": [
-                {
-                    "name": "index-based-progress",
-                    "if": "bool(vars.watched_indices)",
-                    "set": "max(vars.watched_indices) - vars.mapping_start + 1",
-                }
-            ]
-        },
+        SyncRulesConfig.model_validate(
+            [{"name": "Clear notes", "selector": "record.notes", "value": "None"}]
+        )
     )
 
-    grandchildren = [
-        {"index": 1, "view_count": 1},
-        {"index": 2, "view_count": 1},
-        {"index": 3, "view_count": 0},
-    ]
-    rule_context = {
-        "grandchildren": grandchildren,
-        "item": {},
-        "child": {},
-        "list_media_key": "test-key",
-        "mappings": [
-            {
-                "source": ("anilist", "101", None),
-                "target": ("mal", "201", None),
-                "mappings": [
-                    {
-                        "source_range": {"start": 1, "end": 12, "length": 12},
-                        "target_ranges": [{"start": 1, "end": 12, "length": 12}],
-                        "target_ratio": None,
-                        "source_weight": 1.0,
-                        "target_weight": 1.0,
-                    }
-                ],
-            }
-        ],
-    }
-
-    result = engine.evaluate_field(
-        field_name="progress",
-        current_values={"progress": 0},
-        computed_values={"progress": 5},
-        rule_context=rule_context,
+    decision = _decision(
+        engine,
+        RecordField.NOTES,
+        current="keep",
+        source="replace",
     )
 
-    assert result.value == 2  # max(1, 2) - 1 + 1
-    assert result.reason == "index-based-progress"
-
-
-def test_sync_rule_engine_list_comp_progress_falls_back_when_no_watched() -> None:
-    """Progress rule should fall through to default when no episodes are watched."""
-    engine = SyncRuleEngine(
-        variables={
-            "watched_indices": (
-                "[g.index for g in ctx.grandchildren "
-                "if g.view_count and g.index is not None]"
-            ),
-        },
-        field_rules={
-            "progress": [
-                {
-                    "name": "index-based-progress",
-                    "if": "bool(vars.watched_indices)",
-                    "set": "max(vars.watched_indices)",
-                }
-            ]
-        },
-    )
-
-    grandchildren = [{"index": 1, "view_count": 0}, {"index": 2, "view_count": 0}]
-    rule_context = {
-        "grandchildren": grandchildren,
-        "item": {},
-        "child": {},
-        "list_media_key": "test-key",
-        "mappings": [],
-    }
-
-    result = engine.evaluate_field(
-        field_name="progress",
-        current_values={"progress": 3},
-        computed_values={"progress": 7},
-        rule_context=rule_context,
-    )
-
-    # Condition is false → falls through to default (computed value)
-    assert result.value == 7
-    assert result.reason == "default"
-
-
-def test_sync_rule_engine_list_comp_mapping_start_offset() -> None:
-    """mapping_start var should shift progress relative to the source range start."""
-    engine = SyncRuleEngine(
-        variables={
-            "watched_indices": ("[g.index for g in ctx.grandchildren if g.view_count]"),
-            "mapping_start": (
-                "ctx.mappings[0].mappings[0].source_range.start "
-                "if ctx.mappings and ctx.mappings[0].mappings else 1"
-            ),
-        },
-        field_rules={
-            "progress": [
-                {
-                    "name": "index-based-progress",
-                    "if": "bool(vars.watched_indices)",
-                    "set": "max(vars.watched_indices) - vars.mapping_start + 1",
-                }
-            ]
-        },
-    )
-
-    grandchildren = [
-        {"index": 13, "view_count": 1},
-        {"index": 14, "view_count": 1},
-        {"index": 15, "view_count": 0},
-    ]
-    rule_context = {
-        "grandchildren": grandchildren,
-        "item": {},
-        "child": {},
-        "list_media_key": "test-key",
-        "mappings": [
-            {
-                "source": ("anilist", "201", None),
-                "target": ("mal", "301", None),
-                "mappings": [
-                    {
-                        "source_range": {"start": 13, "end": 24, "length": 12},
-                        "target_ranges": [{"start": 1, "end": 12, "length": 12}],
-                        "target_ratio": None,
-                        "source_weight": 1.0,
-                        "target_weight": 1.0,
-                    }
-                ],
-            }
-        ],
-    }
-
-    result = engine.evaluate_field(
-        field_name="progress",
-        current_values={"progress": 0},
-        computed_values={"progress": 10},
-        rule_context=rule_context,
-    )
-
-    # max(13, 14) - 13 + 1 = 2
-    assert result.value == 2
-    assert result.reason == "index-based-progress"
+    assert decision == SyncRuleDecision(True, None, "Clear notes")

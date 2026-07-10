@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Annotated
 
 import msgspec
+from litestar.exceptions.http_exceptions import HTTPException
 from litestar.handlers.http_handlers.decorators import get
 from litestar.params import PathParameter, QueryParameter
+from litestar.response import File
 from litestar.router import Router
 
 from anibridge.app.config.settings import get_config
@@ -116,11 +118,7 @@ def _list_log_files() -> list[Path]:
 
 @get(path="/files", sync_to_thread=True)
 def list_log_files() -> list[LogFileModel]:
-    """Return metadata about available log files.
-
-    Returns:
-        list[LogFileModel]: Log file metadata sorted by most recent first.
-    """
+    """Return metadata about available log files."""
     files = _list_log_files()
     res: list[LogFileModel] = []
 
@@ -145,22 +143,19 @@ def list_log_files() -> list[LogFileModel]:
 
 
 def _safe_resolve(name: str) -> Path:
-    """Resolve a user-supplied file name safely within LOG_DIR.
-
-    Args:
-        name (str): The file name to resolve.
-
-    Raises:
-        InvalidLogFileNameError: If the file name is invalid or attempts traversal.
-        LogFileNotFoundError: If the file does not exist.
-    """
+    """Resolve a user-supplied file name safely within LOG_DIR."""
     if "/" in name or ".." in name:
         raise InvalidLogFileNameError("Invalid log file name")
 
     log_dir = _get_log_dir()
     target = (log_dir / name).resolve()
 
-    if not str(target).startswith(str(log_dir)):
+    try:
+        target.relative_to(log_dir)
+    except ValueError as exc:
+        raise InvalidLogFileNameError("Invalid log file name") from exc
+
+    if not _is_log_filename(target.name):
         raise InvalidLogFileNameError("Invalid log file name")
 
     if not target.exists() or not target.is_file():
@@ -170,19 +165,7 @@ def _safe_resolve(name: str) -> Path:
 
 
 def _tail_lines(path: Path, max_lines: int) -> list[str]:
-    """Return up to the last max_lines of the file efficiently.
-
-    Args:
-        path (Path): The path to the log file.
-        max_lines (int): The maximum number of lines to return. If 0, return all lines.
-
-    Returns:
-        list[str]: The last max_lines lines of the file (oldest first). If
-                   max_lines == 0, return all lines.
-    """
-    if max_lines < 0:
-        return []
-
+    """Return up to the last max_lines of the file efficiently."""
     if max_lines == 0:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             return [ln.rstrip("\n\r") for ln in fh]
@@ -217,21 +200,12 @@ def _tail_lines(path: Path, max_lines: int) -> list[str]:
 @get(path="/file/{name:str}", sync_to_thread=True)
 def get_log_file(
     name: Annotated[str, PathParameter()],
-    lines: Annotated[int, QueryParameter()] = 500,
+    lines: Annotated[int, QueryParameter(ge=0, le=5000)] = 500,
 ) -> list[LogEntryModel]:
-    """Return the last N lines of a log file parsed into JSON entries.
+    """Return the last N lines of a log file parsed into JSON entries."""
+    if lines < 0 or lines > 5000:
+        raise HTTPException(status_code=400, detail="lines must be between 0 and 5000")
 
-    Args:
-        name (str): File name (basename) of the log file.
-        lines (int): Maximum number of lines to return (tail). Default 500.
-
-    Returns:
-        list[LogEntryModel]: Ordered list (oldest first) of parsed log entries.
-
-    Raises:
-        InvalidLogFileNameError: If the file name is invalid.
-        LogFileNotFoundError: If the requested log file does not exist.
-    """
     path = _safe_resolve(name)
     raw_lines = _tail_lines(path, lines)
     res: list[LogEntryModel] = []
@@ -252,4 +226,13 @@ def get_log_file(
     return res
 
 
-router = Router(path="/logs", route_handlers=[list_log_files, get_log_file])
+@get(path="/file/{name:str}/download", sync_to_thread=True)
+def download_log_file(name: Annotated[str, PathParameter()]) -> File:
+    """Return a log file as a raw attachment."""
+    path = _safe_resolve(name)
+    return File(path=path, filename=path.name, media_type="text/plain")
+
+
+router = Router(
+    path="/logs", route_handlers=[list_log_files, get_log_file, download_log_file]
+)

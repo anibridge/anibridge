@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 import uvicorn
 from pydantic import ValidationError
 
-from anibridge.app import ANIBDRIGE_HEADER, initialize_runtime
-from anibridge.app.core.sched import SchedulerClient
+from anibridge.app import ANIBRIDGE_HEADER, initialize_runtime
+from anibridge.app.core.sched.client import SchedulerClient
 from anibridge.app.logging import APP_LOGGER_NAME, configure_logging, get_logger
 from anibridge.app.utils.terminal import supports_color
 from anibridge.app.web.app import create_app
@@ -24,9 +24,6 @@ async def run() -> int:
     """Main application entry point.
 
     Initializes and runs the application scheduler until shutdown.
-
-    Returns:
-        int: Exit code (0 for success, 1 for error)
     """
     app_scheduler: SchedulerClient | None = None
     server_task: asyncio.Task | None = None
@@ -38,14 +35,10 @@ async def run() -> int:
         configure_logging(level=config.log_level, log_dir=config.data_path / "logs")
 
         loop = asyncio.get_running_loop()
-        old_executor = loop._default_executor  # ty:ignore[unresolved-attribute]
         executor = ThreadPoolExecutor(max_workers=config.threads)
         loop.set_default_executor(executor)
-        if old_executor is not None:
-            old_executor.shutdown(wait=False)
 
-        log.info("\n" + ANIBDRIGE_HEADER)
-
+        log.info("\n%s", ANIBRIDGE_HEADER)
         if config.web.enabled:
             app = create_app()
             uv_config = uvicorn.Config(
@@ -98,7 +91,7 @@ async def run() -> int:
         log.info("Application cancelled")
         return 0
     except Exception as e:
-        log.error("Unexpected application error: %s", e, exc_info=True)
+        log.exception("Unexpected application error: %s", e)
         return 1
     finally:
         if app_scheduler:
@@ -110,7 +103,7 @@ async def run() -> int:
                 log.info("Shutdown cancelled")
                 ret = 1
             except Exception as e:
-                log.error("Error during shutdown: %s", e, exc_info=True)
+                log.exception("Error during shutdown: %s", e)
                 ret = 1
 
         if server and server_task and not server_task.done():
@@ -123,7 +116,7 @@ async def run() -> int:
         try:
             os.execv(sys.executable, [sys.executable, *sys.argv])
         except Exception as e:
-            log.error("Failed to restart process: %s", e, exc_info=True)
+            log.exception("Failed to restart process: %s", e)
             ret = 1
 
     return ret
@@ -195,12 +188,6 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point.
 
     Initializes the application and runs the main event loop.
-
-    Args:
-        argv (list[str] | None): Command-line arguments (unused).
-
-    Returns:
-        int: Exit code (0 for success, 1 for error)
     """
     try:
         return asyncio.run(run())
@@ -208,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         log.info("Application interrupted")
         return 0
     except Exception as e:
-        log.error("Fatal error: %s", e, exc_info=True)
+        log.exception("Fatal error: %s", e)
         return 1
 
 

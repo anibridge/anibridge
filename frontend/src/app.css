@@ -1,17 +1,41 @@
 @import "tailwindcss";
 
 @theme {
+    /* ── Surface palette ── */
     --color-bg: #05070d;
     --color-bg-alt: #0f1522;
     --color-surface: #141c2b;
     --color-surface-alt: #1d293b;
     --color-border: #243347;
+    --color-border-muted: #1e293b;
+
+    /* ── Accent ── */
     --color-accent: #3b82f6;
     --color-accent-muted: #1d4ed8;
     --color-accent-foreground: #e3f2ff;
+
+    /* ── Semantic ── */
     --color-danger: #ef4444;
     --color-warning: #f59e0b;
     --color-success: #10b981;
+
+    /* ── Text ── */
+    --color-foreground: #e2e8f0;
+    --color-muted-foreground: #94a3b8;
+    --color-dimmed: #64748b;
+
+    /* ── Radii ── */
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+    --radius-xl: 0.75rem;
+    --radius-full: 9999px;
+
+    /* ── Shadows ── */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.4);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.6), 0 8px 10px -6px rgb(0 0 0 / 0.4);
 }
 
 html {
@@ -20,43 +44,43 @@ html {
 
 body {
     background: var(--color-bg);
-    color: var(--color-accent-foreground);
+    color: var(--color-foreground);
 }
 
+/* ── Scrollbar ── */
 * {
     scrollbar-width: thin;
-    scrollbar-color: #334155 #020617;
+    scrollbar-color: var(--color-border) var(--color-bg);
 }
 *::-webkit-scrollbar {
     width: 10px;
     height: 10px;
 }
 *::-webkit-scrollbar-track {
-    background: #020617;
+    background: var(--color-bg);
 }
 *::-webkit-scrollbar-thumb {
-    background: #334155;
-    border-radius: 999px;
+    background: var(--color-border);
+    border-radius: var(--radius-full);
 }
 *::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+    background: var(--color-muted-foreground);
 }
 
-.btn-base {
-    @apply inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors;
-}
-.nav-link {
-    @apply flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-white;
-}
-.nav-link-active {
-    @apply bg-slate-700/50 text-white;
-}
-.nav-link[aria-current="page"] {
-    @apply bg-slate-800/70 text-slate-100 ring-1 ring-slate-700/70;
-}
-.badge {
-    @apply inline-flex items-center rounded-full border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-[11px] font-medium tracking-wider text-slate-300 uppercase;
-}
+/* ── Animations ── */
 .fade-in {
     animation: fade-in 0.35s ease-out;
+}
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+@keyframes shrink {
+    to {
+        width: 0%;
+    }
 }

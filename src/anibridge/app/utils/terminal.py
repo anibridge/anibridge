@@ -14,11 +14,7 @@ ARROW = ARROW = "→" if sys.stdout.encoding == "utf-8" else "->"
 
 @cache
 def supports_utf8() -> bool:
-    """Check if the terminal supports UTF-8 encoding.
-
-    Returns:
-        bool: True if the terminal supports UTF-8 encoding, False otherwise
-    """
+    """Check if the terminal supports UTF-8 encoding."""
     encoding = sys.stdout.encoding or locale.getpreferredencoding(False)
     return encoding.lower().startswith("utf")
 
@@ -30,9 +26,6 @@ def supports_color() -> bool:
     Detects if the terminal supports ANSI color codes by checking platform-specific
     conditions and environment variables. On Windows, it also checks the Windows
     registry for the VirtualTerminalLevel key.
-
-    Returns:
-        bool: True if the terminal supports color, False otherwise
     """
 
     def vt_codes_enabled_in_windows_registry() -> bool:
@@ -40,7 +33,7 @@ def supports_color() -> bool:
             return False
 
         try:
-            import winreg
+            import winreg  # noqa: PLC0415
         except ImportError:
             return False
 

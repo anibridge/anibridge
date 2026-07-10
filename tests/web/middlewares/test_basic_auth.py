@@ -1,14 +1,17 @@
 """Tests for HTTP Basic Authentication middleware and integration."""
 
 import base64
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import bcrypt
 import pytest
 from litestar.app import Litestar
 from litestar.connection.request import Request
 from litestar.connection.websocket import WebSocket
+from litestar.exceptions.http_exceptions import NotAuthorizedException
 from litestar.handlers.http_handlers.decorators import get
 from litestar.handlers.websocket_handlers.route_handler import websocket
 from litestar.middleware.base import DefineMiddleware
@@ -20,9 +23,15 @@ from pytest import MonkeyPatch
 
 from anibridge.app.config.database import db
 from anibridge.app.config.settings import AnibridgeConfig, BasicAuthConfig, WebConfig
-from anibridge.app.models.db.sync_history import SyncHistory, SyncOutcome
+from anibridge.app.models.db.sync_history import (
+    SyncHistoryGroup,
+    SyncHistoryOperation,
+    SyncHistoryRun,
+    SyncOperationAction,
+    SyncOutcome,
+    SyncResourceKind,
+)
 from anibridge.app.web import app as app_module
-from anibridge.app.web.middlewares import basic_auth as basic_auth_module
 from anibridge.app.web.middlewares.basic_auth import BasicAuthMiddleware
 from anibridge.app.web.state import get_app_state
 
@@ -132,38 +141,6 @@ def test_basic_auth_middleware_challenges_and_allows_access() -> None:
     assert success.json() == {"ok": True}
 
 
-def test_basic_auth_middleware_allows_access_with_htpasswd(
-    tmp_path: Path,
-) -> None:
-    """BasicAuthMiddleware allows access with valid htpasswd credentials."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "test:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )  # bcrypt hash for "test"
-
-    test_app = _build_app(
-        middleware=[
-            DefineMiddleware(
-                BasicAuthMiddleware,
-                htpasswd_path=htpasswd_file,
-                realm="Realm",
-            )
-        ]
-    )
-
-    client = TestClient(test_app)
-
-    # Wrong credentials
-    wrong = client.get("/protected", headers=_basic_auth_header("test", "wrong"))
-    assert wrong.status_code == 401
-
-    # Correct credentials
-    success = client.get("/protected", headers=_basic_auth_header("test", "test"))
-    assert success.status_code == 200
-    assert success.json() == {"ok": True}
-
-
 def test_basic_auth_middleware_sets_request_user_and_auth() -> None:
     """Successful authentication should populate request.user and request.auth."""
 
@@ -190,43 +167,27 @@ def test_basic_auth_middleware_sets_request_user_and_auth() -> None:
     assert response.json() == {"user": "admin", "auth": "basic"}
 
 
-def test_basic_auth_middleware_plain_and_htpasswd(
-    tmp_path: Path,
-) -> None:
-    """BasicAuthMiddleware allows access with both plain and htpasswd credentials."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "htuser:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )  # bcrypt hash for "test"
-
+def test_basic_auth_middleware_allows_htpasswd_credentials(tmp_path: Path) -> None:
+    """Bcrypt htpasswd entries should authenticate Basic credentials."""
+    password_hash = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode()
+    htpasswd_path = tmp_path / "users.htpasswd"
+    htpasswd_path.write_text(f"admin:{password_hash}\n", encoding="utf-8")
     test_app = _build_app(
-        middleware=[
-            DefineMiddleware(
-                BasicAuthMiddleware,
-                username="plainuser",
-                password="plainpass",
-                htpasswd_path=htpasswd_file,
-                realm="Realm",
-            )
-        ]
+        middleware=[DefineMiddleware(BasicAuthMiddleware, htpasswd_path=htpasswd_path)]
     )
 
     client = TestClient(test_app)
 
-    # Correct plain credentials
-    success_plain = client.get(
-        "/protected", headers=_basic_auth_header("plainuser", "plainpass")
+    wrong_response = client.get(
+        "/protected", headers=_basic_auth_header("admin", "wrong")
     )
-    assert success_plain.status_code == 200
-    assert success_plain.json() == {"ok": True}
-
-    # Correct htpasswd credentials
-    success_htpasswd = client.get(
-        "/protected", headers=_basic_auth_header("htuser", "test")
+    assert wrong_response.status_code == 401
+    assert (
+        client.get(
+            "/protected", headers=_basic_auth_header("admin", "secret")
+        ).status_code
+        == 200
     )
-    assert success_htpasswd.status_code == 200
-    assert success_htpasswd.json() == {"ok": True}
 
 
 def test_basic_auth_middleware_bypasses_probe_endpoints() -> None:
@@ -245,13 +206,13 @@ def test_basic_auth_middleware_bypasses_probe_endpoints() -> None:
 
     client = TestClient(test_app)
 
-    legacy_health = client.get("/healthz")
-    assert legacy_health.status_code == 200
-    assert legacy_health.json() == {"status": "ok"}
-
     health = client.get("/livez")
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
+
+    health_alias = client.get("/healthz")
+    assert health_alias.status_code == 200
+    assert health_alias.json() == {"status": "ok"}
 
     ready = client.get("/readyz")
     assert ready.status_code == 200
@@ -278,60 +239,13 @@ def test_basic_auth_extract_credentials_handles_invalid_headers() -> None:
     assert middleware._extract_credentials(missing_separator) is None
 
 
-def test_basic_auth_load_htpasswd_handles_cache_and_errors(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    """htpasswd loading should cache results and tolerate read failures."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "test:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )
-
-    middleware = BasicAuthMiddleware(
-        app=_noop_asgi_app,
-        htpasswd_path=htpasswd_file,
-    )
-
-    calls = {"count": 0}
-    original_from_file = basic_auth_module.HtpasswdFile.from_file
-
-    def _from_file(path: Path):
-        calls["count"] += 1
-        return original_from_file(path)
-
-    monkeypatch.setattr(basic_auth_module.HtpasswdFile, "from_file", _from_file)
-    first = middleware._load_htpasswd()
-    second = middleware._load_htpasswd()
-    assert first is second
-    assert calls["count"] == 1
-    assert middleware._validate_htpasswd("test", "test") is True
-
-    missing = BasicAuthMiddleware(
-        app=_noop_asgi_app,
-        htpasswd_path=tmp_path / "missing",
-    )
-    assert missing._load_htpasswd() is None
-
-    class _BrokenPath:
-        def stat(self):
-            raise OSError("boom")
-
-    broken = BasicAuthMiddleware(
-        app=_noop_asgi_app,
-        htpasswd_path=_BrokenPath(),
-    )
-    assert broken._load_htpasswd() is None
-
-
 @pytest.mark.asyncio
-async def test_basic_auth_middleware_passes_through_non_http() -> None:
-    """Non-HTTP scopes should be forwarded unchanged."""
-    called = False
+async def test_basic_auth_middleware_authenticates_websocket() -> None:
+    """WebSocket scopes should require the same Basic credentials as HTTP."""
+    calls: list[Scope] = []
 
     async def app(scope, receive, send) -> None:
-        nonlocal called
-        called = True
+        calls.append(scope)
 
     async def _middleware_receive() -> WebSocketReceiveEvent:
         return {"type": "websocket.receive", "bytes": None, "text": "hello"}
@@ -339,10 +253,18 @@ async def test_basic_auth_middleware_passes_through_non_http() -> None:
     async def _middleware_send(message) -> None:
         pass
 
-    middleware = BasicAuthMiddleware(app)
-    await middleware(_make_websocket_scope(), _middleware_receive, _middleware_send)
+    middleware = BasicAuthMiddleware(app, username="admin", password="secret")
+    with pytest.raises(NotAuthorizedException):
+        await middleware(_make_websocket_scope(), _middleware_receive, _middleware_send)
 
-    assert called is True
+    scope = _make_websocket_scope()
+    scope["headers"] = [
+        (key.lower().encode(), value.encode())
+        for key, value in _basic_auth_header("admin", "secret").items()
+    ]
+    await middleware(scope, _middleware_receive, _middleware_send)
+
+    assert calls == [scope]
 
 
 def test_create_app_registers_basic_auth_middleware_when_configured(
@@ -353,7 +275,6 @@ def test_create_app_registers_basic_auth_middleware_when_configured(
         basic_auth=BasicAuthConfig(
             username="admin",
             password=SecretStr("secret"),
-            htpasswd_path=None,
             realm="Realm",
         )
     )
@@ -361,6 +282,52 @@ def test_create_app_registers_basic_auth_middleware_when_configured(
     monkeypatch.setattr(app_module, "get_config", lambda: test_config)
 
     # Ensure the SPA assets check passes
+    index_file = tmp_path / "index.html"
+    index_file.write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
+
+    app = app_module.create_app()
+
+    with TestClient(app) as client:
+        assert client.get("/api/status").status_code == 401
+        assert client.get("/api/status", auth=("admin", "secret")).status_code == 200
+
+
+def test_create_app_exempts_prefixed_probe_routes(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Prefixed health probes should bypass Basic Auth."""
+    web_config = WebConfig(
+        path_prefix="/anibridge",
+        basic_auth=BasicAuthConfig(username="admin", password=SecretStr("secret")),
+    )
+    monkeypatch.setattr(
+        app_module, "get_config", lambda: AnibridgeConfig(web=web_config)
+    )
+
+    index_file = tmp_path / "index.html"
+    index_file.write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
+
+    app = app_module.create_app()
+
+    with TestClient(app) as client:
+        assert client.get("/anibridge/healthz").status_code == 200
+        assert client.get("/anibridge/api/status").status_code == 401
+
+
+def test_create_app_registers_basic_auth_middleware_with_htpasswd(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """create_app should treat an htpasswd file as configured auth."""
+    password_hash = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode()
+    htpasswd_path = tmp_path / "users.htpasswd"
+    htpasswd_path.write_text(f"admin:{password_hash}\n", encoding="utf-8")
+    test_config = AnibridgeConfig(
+        web=WebConfig(basic_auth=BasicAuthConfig(htpasswd_path=htpasswd_path))
+    )
+    monkeypatch.setattr(app_module, "get_config", lambda: test_config)
+
     index_file = tmp_path / "index.html"
     index_file.write_text("<html></html>", encoding="utf-8")
     monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
@@ -380,7 +347,6 @@ def test_create_app_skips_basic_auth_without_complete_credentials(
         basic_auth=BasicAuthConfig(
             username="admin",
             password=None,
-            htpasswd_path=None,
             realm="Realm",
         )
     )
@@ -397,71 +363,63 @@ def test_create_app_skips_basic_auth_without_complete_credentials(
         assert client.get("/api/status").status_code == 200
 
 
-def test_create_app_registers_basic_auth_middleware_with_htpasswd(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    """create_app should attach BasicAuthMiddleware when htpasswd path is configured."""
-    htpasswd_file = tmp_path / "htpasswd"
-    htpasswd_file.write_text(
-        "test:$2y$10$AVmi7rydBM1wRpzyrv2V5eGmBdYiHLIq07V.xOGza.tBTkTa1eZ1S",
-        encoding="utf-8",
-    )  # bcrypt hash for "test"
-
-    web_config = WebConfig(
-        basic_auth=BasicAuthConfig(
-            username=None,
-            password=None,
-            htpasswd_path=htpasswd_file,
-            realm="Realm",
-        )
-    )
-    test_config = AnibridgeConfig(web=web_config)
-    monkeypatch.setattr(app_module, "get_config", lambda: test_config)
-
-    # Ensure the SPA assets check passes
-    index_file = tmp_path / "index.html"
-    index_file.write_text("<html></html>", encoding="utf-8")
-    monkeypatch.setattr(app_module, "FRONTEND_BUILD_DIR", tmp_path, raising=False)
-
-    app = app_module.create_app()
-
-    with TestClient(app) as client:
-        assert client.get("/api/status").status_code == 401
-        assert client.get("/api/status", auth=("test", "test")).status_code == 200
-
-
 def test_create_app_lifespan_purges_ephemeral_history_on_startup(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     """Starting the app should delete ephemeral history rows."""
     with db() as ctx:
-        ctx.session.query(SyncHistory).delete()
-        ctx.session.add_all(
-            [
-                SyncHistory(
+        ctx.session.query(SyncHistoryOperation).delete()
+        ctx.session.query(SyncHistoryGroup).delete()
+        ctx.session.query(SyncHistoryRun).delete()
+        for index, (key, ephemeral) in enumerate(
+            (("persisted", False), ("ephemeral", True)),
+            start=1,
+        ):
+            timestamp = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index)
+            run = SyncHistoryRun(
+                profile_name="profile",
+                source_namespace="lib",
+                target_namespace="alist",
+                outcome=SyncOutcome.SYNCED,
+                ephemeral=ephemeral,
+                started_at=timestamp,
+                completed_at=timestamp,
+            )
+            ctx.session.add(run)
+            ctx.session.flush()
+            group = SyncHistoryGroup(
+                run_id=run.id,
+                profile_name="profile",
+                source_namespace="lib",
+                source_parent_ref={"key": key, "path": []},
+                target_namespace="alist",
+                target_parent_ref={"key": key, "path": []},
+                outcome=SyncOutcome.SYNCED,
+                operation_count=1,
+                record_count=1,
+                event_count=0,
+                node_count=0,
+                error_count=0,
+                ephemeral=ephemeral,
+                timestamp=timestamp,
+            )
+            ctx.session.add(group)
+            ctx.session.flush()
+            ctx.session.add(
+                SyncHistoryOperation(
+                    group_id=group.id,
                     profile_name="profile",
-                    library_namespace="lib",
-                    library_section_key="1",
-                    library_media_key="persisted",
-                    list_namespace="alist",
-                    list_media_key="persisted",
-                    media_kind="movie",
+                    resource_kind=SyncResourceKind.RECORD,
+                    action=SyncOperationAction.UPSERT,
+                    source_namespace="lib",
+                    source_ref={"key": key, "path": []},
+                    target_namespace="alist",
+                    target_ref={"key": key, "path": []},
                     outcome=SyncOutcome.SYNCED,
-                    ephemeral=False,
-                ),
-                SyncHistory(
-                    profile_name="profile",
-                    library_namespace="lib",
-                    library_section_key="1",
-                    library_media_key="ephemeral",
-                    list_namespace="alist",
-                    list_media_key="ephemeral",
-                    media_kind="movie",
-                    outcome=SyncOutcome.SYNCED,
-                    ephemeral=True,
-                ),
-            ]
-        )
+                    ephemeral=ephemeral,
+                    timestamp=timestamp,
+                )
+            )
         ctx.session.commit()
 
     index_file = tmp_path / "index.html"
@@ -484,10 +442,10 @@ def test_create_app_lifespan_purges_ephemeral_history_on_startup(
 
     with db() as ctx:
         rows = (
-            ctx.session.query(SyncHistory)
-            .order_by(SyncHistory.library_media_key.asc())
+            ctx.session.query(SyncHistoryOperation)
+            .order_by(SyncHistoryOperation.source_ref.asc())
             .all()
         )
         assert len(rows) == 1
-        assert rows[0].library_media_key == "persisted"
+        assert rows[0].source_ref["key"] == "persisted"
         assert rows[0].ephemeral is False

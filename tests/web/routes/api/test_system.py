@@ -10,7 +10,6 @@ from pytest import raises
 
 from anibridge.app.exceptions import SchedulerUnavailableError
 from anibridge.app.web.routes.api import system as system_api_module
-from tests.web.support import SchedulerStub
 
 
 class _DummyGlobalConfig:
@@ -18,8 +17,8 @@ class _DummyGlobalConfig:
         self.profiles = {
             "primary": SimpleNamespace(
                 model_dump=lambda mode="json": {
-                    "library_namespace": "plex",
-                    "list_namespace": "anilist",
+                    "source_namespace": "plex",
+                    "target_namespace": "anilist",
                     "scan_modes": ["poll", "periodic"],
                 }
             )
@@ -34,13 +33,18 @@ def system_client(api_client_for):
     return api_client_for(system_api_module, "/api/system")
 
 
-def test_api_restart_requests_scheduler_shutdown(patch_app_state) -> None:
+def test_api_restart_requests_scheduler_shutdown(
+    patch_app_state,
+    set_config_api_access,
+    scheduler_stub_cls,
+) -> None:
     """Restart endpoint should mark restart and request scheduler shutdown."""
     api_restart = cast(
         Callable[[], system_api_module.RestartResponse],
         system_api_module.api_restart.fn,
     )
-    scheduler = SchedulerStub()
+    set_config_api_access(has_auth=True)
+    scheduler = scheduler_stub_cls()
     state = patch_app_state(system_api_module, scheduler=scheduler)
 
     response = api_restart()
@@ -51,12 +55,13 @@ def test_api_restart_requests_scheduler_shutdown(patch_app_state) -> None:
     assert scheduler.shutdown_requested is True
 
 
-def test_api_restart_requires_scheduler(patch_app_state) -> None:
+def test_api_restart_requires_scheduler(patch_app_state, set_config_api_access) -> None:
     """Restart endpoint should fail when scheduler is unavailable."""
     api_restart = cast(
         Callable[[], system_api_module.RestartResponse],
         system_api_module.api_restart.fn,
     )
+    set_config_api_access(has_auth=True)
     patch_app_state(system_api_module, scheduler=None)
 
     with raises(SchedulerUnavailableError):
@@ -64,23 +69,29 @@ def test_api_restart_requires_scheduler(patch_app_state) -> None:
 
 
 @pytest.mark.parametrize(
-    ("allow_without_auth", "expected_status", "restart_requested"),
+    ("has_auth", "allow_config_without_auth", "expected_status", "restart_requested"),
     [
-        pytest.param(False, 403, False, id="blocked-without-override"),
-        pytest.param(True, 202, True, id="allowed-with-override"),
+        pytest.param(False, False, 403, False, id="blocked-without-auth"),
+        pytest.param(True, False, 202, True, id="allowed-with-auth"),
+        pytest.param(False, True, 202, True, id="allowed-explicitly-without-auth"),
     ],
 )
 def test_restart_api_access_policy(
     patch_app_state,
     system_client,
     set_config_api_access,
-    allow_without_auth: bool,
+    scheduler_stub_cls,
+    has_auth: bool,
+    allow_config_without_auth: bool,
     expected_status: int,
     restart_requested: bool,
 ) -> None:
     """Restart API should follow the shared config API access policy."""
-    set_config_api_access(allow_config_without_auth=allow_without_auth)
-    scheduler = SchedulerStub()
+    set_config_api_access(
+        has_auth=has_auth,
+        allow_config_without_auth=allow_config_without_auth,
+    )
+    scheduler = scheduler_stub_cls()
     state = patch_app_state(system_api_module, scheduler=scheduler)
 
     response = system_client.post("/api/system/restart")
@@ -93,10 +104,10 @@ def test_restart_api_access_policy(
 
 
 @pytest.mark.parametrize(
-    ("scheduler", "expected_global_config", "expected_profile_count"),
+    ("with_scheduler", "expected_global_config", "expected_profile_count"),
     [
         pytest.param(
-            SchedulerStub(global_config=_DummyGlobalConfig()),
+            True,
             {"web": {"host": "127.0.0.1"}},
             1,
             id="with-scheduler",
@@ -106,7 +117,8 @@ def test_restart_api_access_policy(
 )
 def test_api_settings_serializes_scheduler_state(
     patch_app_state,
-    scheduler: SchedulerStub | None,
+    scheduler_stub_cls,
+    with_scheduler: bool,
     expected_global_config: dict[str, object],
     expected_profile_count: int,
 ) -> None:
@@ -114,6 +126,9 @@ def test_api_settings_serializes_scheduler_state(
         Callable[[], system_api_module.SettingsResponse],
         system_api_module.api_settings.fn,
     )
+    scheduler = None
+    if with_scheduler:
+        scheduler = scheduler_stub_cls(global_config=_DummyGlobalConfig())
     patch_app_state(system_api_module, scheduler=scheduler)
 
     response = api_settings()
@@ -122,19 +137,23 @@ def test_api_settings_serializes_scheduler_state(
     assert len(response.profiles) == expected_profile_count
     if expected_profile_count:
         assert response.profiles[0].name == "primary"
-        assert response.profiles[0].settings["library_namespace"] == "plex"
+        assert response.profiles[0].settings["source_namespace"] == "plex"
 
 
 @pytest.mark.asyncio
-async def test_api_about_returns_runtime_summary(monkeypatch, patch_app_state) -> None:
-    scheduler = SchedulerStub(
+async def test_api_about_returns_runtime_summary(
+    monkeypatch,
+    patch_app_state,
+    scheduler_stub_cls,
+) -> None:
+    scheduler = scheduler_stub_cls(
         running=True,
         global_config=_DummyGlobalConfig(),
         status_payload={
             "primary": {
                 "config": {
-                    "library_namespace": "plex",
-                    "list_namespace": "anilist",
+                    "source_namespace": "plex",
+                    "target_namespace": "anilist",
                     "scan_modes": ["poll", "periodic"],
                 },
                 "status": {
@@ -184,16 +203,18 @@ async def test_api_about_returns_runtime_summary(monkeypatch, patch_app_state) -
 
 @pytest.mark.asyncio
 async def test_api_about_ignores_non_running_sync_payloads(
-    monkeypatch, patch_app_state
+    monkeypatch,
+    patch_app_state,
+    scheduler_stub_cls,
 ) -> None:
-    scheduler = SchedulerStub(
+    scheduler = scheduler_stub_cls(
         running=True,
         global_config=_DummyGlobalConfig(),
         status_payload={
             "primary": {
                 "config": {
-                    "library_namespace": "plex",
-                    "list_namespace": "anilist",
+                    "source_namespace": "plex",
+                    "target_namespace": "anilist",
                     "scan_modes": ["poll", "periodic"],
                 },
                 "status": {
@@ -237,8 +258,11 @@ async def test_api_about_ignores_non_running_sync_payloads(
 
 
 @pytest.mark.asyncio
-async def test_api_about_wraps_scheduler_errors(patch_app_state) -> None:
-    class _BrokenScheduler(SchedulerStub):
+async def test_api_about_wraps_scheduler_errors(
+    patch_app_state,
+    scheduler_stub_cls,
+) -> None:
+    class _BrokenScheduler(scheduler_stub_cls):
         async def get_status(self) -> dict[str, dict[str, dict[str, object]]]:
             raise RuntimeError("boom")
 

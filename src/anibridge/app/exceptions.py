@@ -58,19 +58,6 @@ class UnsupportedModeError(DatabaseError, ValueError):
     status_code = 400
 
 
-# Media/model errors
-class MediaTypeError(AnibridgeError):
-    """Base class for media type related errors."""
-
-    status_code = 400
-
-
-class UnsupportedMediaTypeError(MediaTypeError, ValueError):
-    """A media object or enum is not one of the supported library media types."""
-
-    status_code = 400
-
-
 # AniList client errors
 class AniListError(AnibridgeError):
     """Base class for AniList-related failures."""

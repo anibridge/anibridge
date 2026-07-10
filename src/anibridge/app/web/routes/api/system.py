@@ -37,7 +37,9 @@ class SettingsProfileModel(msgspec.Struct):
         dict[str, Any],
         msgspec.Meta(
             description="Serialized profile settings payload.",
-            examples=[{"library_provider": "plex", "list_provider": "anilist"}],
+            examples=[
+                {"source": {"namespace": "plex"}, "target": {"namespace": "anilist"}}
+            ],
         ),
     ]
 
@@ -56,7 +58,9 @@ class SettingsResponse(msgspec.Struct):
         list[SettingsProfileModel],
         msgspec.Meta(
             description="Per-profile configuration payloads.",
-            examples=[[{"name": "default", "settings": {"library_provider": "plex"}}]],
+            examples=[
+                [{"name": "default", "settings": {"source": {"namespace": "plex"}}}]
+            ],
         ),
     ]
 
@@ -233,8 +237,8 @@ class SchedulerSummaryModel(msgspec.Struct):
                 {
                     "default": {
                         "config": {
-                            "library_namespace": "plex",
-                            "list_namespace": "anilist",
+                            "source_namespace": "plex",
+                            "target_namespace": "anilist",
                         },
                         "status": {"running": True},
                     }
@@ -273,19 +277,6 @@ class SchedulerSummaryModel(msgspec.Struct):
             msgspec.Meta(
                 description="ISO-8601 timestamp for the next scheduled database sync.",
                 examples=["2026-01-01T13:00:00+00:00"],
-            ),
-        ]
-        | None
-    ) = None
-    coordinator: (
-        Annotated[
-            dict[str, Any],
-            msgspec.Meta(
-                description=(
-                    "Low-level coordinator state returned by the "
-                    "scheduler runtime metrics."
-                ),
-                examples=[{"active_profiles": ["default"], "queued_profiles": []}],
             ),
         ]
         | None
@@ -332,8 +323,8 @@ class AboutResponse(msgspec.Struct):
                 {
                     "default": {
                         "config": {
-                            "library_namespace": "plex",
-                            "list_namespace": "anilist",
+                            "source_namespace": "plex",
+                            "target_namespace": "anilist",
                         },
                         "status": {"running": True},
                     }
@@ -382,11 +373,7 @@ class RestartResponse(msgspec.Struct):
 
 @get(path="/settings", sync_to_thread=True)
 def api_settings() -> SettingsResponse:
-    """Return the current application configuration as JSON.
-
-    Returns:
-        SettingsResponse: The serialized configuration.
-    """
+    """Return the current application configuration as JSON."""
     scheduler = get_app_state().scheduler
     if not scheduler:
         return SettingsResponse(global_config={}, profiles=[])
@@ -404,25 +391,15 @@ def api_settings() -> SettingsResponse:
 
 @get(path="/about")
 async def api_about() -> AboutResponse:
-    """Get runtime metadata.
-
-    Returns:
-        AboutResponse: The runtime metadata.
-
-    Raises:
-        SchedulerUnavailableError: If scheduler status cannot be retrieved.
-        AnibridgeError: Any domain error raised by underlying components.
-    """
+    """Get runtime metadata."""
     scheduler = get_app_state().scheduler
     status: dict[str, Any] = {}
-    scheduler_runtime_metrics: dict[str, Any] = {}
     scheduler_running = False
     next_db_sync_iso: str | None = None
 
     if scheduler:
         try:
             status = await scheduler.get_status()
-            scheduler_runtime_metrics = await scheduler.get_runtime_metrics()
             scheduler_running = scheduler.is_running
             next_db_sync = scheduler.get_next_database_sync_at()
             if next_db_sync is not None:
@@ -509,7 +486,6 @@ async def api_about() -> AboutResponse:
         most_recent_sync=most_recent_sync_iso,
         most_recent_sync_profile=most_recent_sync_profile,
         next_database_sync_at=next_db_sync_iso,
-        coordinator=scheduler_runtime_metrics.get("coordinator"),
     )
 
     pid = os.getpid()
@@ -527,24 +503,13 @@ async def api_about() -> AboutResponse:
 
 @get(path="/meta", sync_to_thread=True)
 def meta() -> MetaResponse:
-    """Application metadata (version, git hash).
-
-    Returns:
-        MetaResponse: The application metadata.
-    """
+    """Application metadata (version, git hash)."""
     return MetaResponse(version=__version__, git_hash=__git_hash__)
 
 
 @post(path="/restart", status_code=202, sync_to_thread=True)
 def api_restart() -> RestartResponse:
-    """Request a graceful scheduler shutdown and process restart.
-
-    Returns:
-        RestartResponse: Accepted restart request status.
-
-    Raises:
-        SchedulerUnavailableError: If scheduler is unavailable.
-    """
+    """Request a graceful scheduler shutdown and process restart."""
     require_config_api_access()
     app_state = get_app_state()
     scheduler = app_state.scheduler

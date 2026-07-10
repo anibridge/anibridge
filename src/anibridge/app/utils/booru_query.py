@@ -181,12 +181,12 @@ def _make_parser() -> pp.ParserElement:
     bare = bare_qstring | bare_word
 
     # Define syntax grammar
-    LPAR, RPAR = map(pp.Suppress, "()")
+    lpar, rpar = map(pp.Suppress, "()")
     expr: pp.Forward = pp.Forward()
     not_kw = pp.Keyword("not", caseless=True) | pp.Literal("-")
     tilde = pp.Literal("~")
     pipe = pp.Literal("|")
-    atom = key_term | bare | pp.Group(LPAR + expr + RPAR)
+    atom = key_term | bare | pp.Group(lpar + expr + rpar)
 
     def _prefix_action(_s, _loc, toks):
         """Handle prefix operators.
@@ -314,17 +314,7 @@ def _merge_unquoted_bare_terms(node: Node) -> Node:
 
 
 def parse_query(q: str) -> Node:
-    """Parse the booru-like query string into an AST Node.
-
-    Args:
-        q (str): The booru-like query string to parse.
-
-    Returns:
-        Node: The root AST node representing the parsed query.
-
-    Raises:
-        pyparsing.ParseException on invalid input.
-    """
+    """Parse the booru-like query string into an AST Node."""
     q = (q or "").strip()
     if not q:
         return And([])
@@ -363,14 +353,7 @@ class EvalResult(msgspec.Struct):
 
 
 def collect_bare_terms(node: Node) -> list[str]:
-    """Collect bare term texts from the AST for prefetching.
-
-    Args:
-        node (Node): The root AST node.
-
-    Returns:
-        list[str]: A list with potential duplicates removed.
-    """
+    """Collect bare term texts from the AST for prefetching."""
     out: list[str] = []
 
     def _walk(n: Node) -> None:
@@ -404,14 +387,7 @@ def collect_bare_terms(node: Node) -> list[str]:
 
 
 def collect_key_terms(node: Node) -> list[KeyTerm]:
-    """Collect key:value terms from the AST for pre-resolution.
-
-    Args:
-        node (Node): The root AST node.
-
-    Returns:
-        list[KeyTerm]: Ordered list of encountered KeyTerm nodes.
-    """
+    """Collect key:value terms from the AST for pre-resolution."""
     out: list[KeyTerm] = []
 
     def _walk(n: Node) -> None:
@@ -452,27 +428,7 @@ def evaluate(
     universe_ids: set[int] | None = None,
     universe_factory: Callable[[], set[int]] | None = None,
 ) -> EvalResult:
-    """Evaluate AST into a set of AniList IDs with optional ordering hint.
-
-    Args:
-        node (Node): The root AST node to evaluate.
-        db_resolver (DbResolver): Function to resolve KeyTerm nodes to AniList IDs.
-        anilist_resolver (AniListResolver): Function to resolve BareTerm nodes to
-            ordered AniList IDs.
-        universe_ids (set[int] | None): Optional set of AniList IDs to use as
-            universe for NOT operations. If None, universe is derived from
-            all IDs seen in positive terms.
-        universe_factory (Callable[[], set[int]] | None): Lazy factory for the
-            universe set. Called at most once, only when the query contains a
-            NOT node and *universe_ids* was not supplied.
-
-    Returns:
-        EvalResult: Evaluation result containing:
-            - ids: Set of AniList IDs matching the query.
-            - order_hint: Maps AniList ID to rank (lower is earlier) derived from
-                BareTerm resolution order.
-            - used_bare: True if any BareTerm was used in the query.
-    """
+    """Evaluate AST into a set of AniList IDs with optional ordering hint."""
     used_bare = False
     order_hint: dict[int, int] = {}
 
@@ -531,7 +487,7 @@ def evaluate(
             ordered = anilist_resolver(n.text)
             for idx, aid in enumerate(ordered):
                 prev = order_hint.get(aid, idx)
-                order_hint[aid] = prev if prev <= idx else idx
+                order_hint[aid] = min(prev, idx)
             return set(ordered)
         return set()
 

@@ -1,132 +1,282 @@
 """Unit tests for `anibridge.app.core.sync.targeting`."""
 
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from logging import getLogger
 from typing import cast
 
 import pytest
-from anibridge.list import ListEntry as ListEntryProtocol
-from anibridge.list import ListMediaType, ListStatus
-from anibridge.list.base import ListProvider
-
-from anibridge.app.core.animap import AnimapClient
-from anibridge.app.core.sync.stats import EntrySnapshot
-from anibridge.app.core.sync.targeting import (
-    diff_snapshots,
-    find_best_search_result,
-    resolve_list_targets,
-)
-from tests.core.sync.conftest import (
-    FakeAnimapClient,
-    FakeLibraryMovie,
-    FakeListEntry,
-    FakeListProvider,
+from anibridge.provider.base import (
+    Account,
+    Capabilities,
+    ExternalId,
+    FacetName,
+    Identifiers,
+    Match,
+    Node,
+    Provider,
+    Record,
+    Ref,
+    SupportsMapping,
 )
 
-
-def test_diff_snapshots_returns_changed_fields() -> None:
-    """`diff_snapshots` only includes differences for requested fields."""
-    before = EntrySnapshot(
-        media_key="123",
-        status=ListStatus.CURRENT,
-        progress=3,
-        repeats=0,
-        review=None,
-        user_rating=50,
-        started_at=datetime(2025, 1, 1, tzinfo=UTC),
-        finished_at=None,
-    )
-    after = EntrySnapshot(
-        media_key="123",
-        status=ListStatus.COMPLETED,
-        progress=6,
-        repeats=0,
-        review="Updated",
-        user_rating=80,
-        started_at=datetime(2025, 1, 1, tzinfo=UTC),
-        finished_at=datetime(2025, 2, 1, tzinfo=UTC),
-    )
-
-    diff = diff_snapshots(before, after, {"status", "progress", "finished_at"})
-
-    assert diff == {
-        "status": (ListStatus.CURRENT, ListStatus.COMPLETED),
-        "progress": (3, 6),
-        "finished_at": (None, datetime(2025, 2, 1, tzinfo=UTC)),
-    }
+from anibridge.app.core.animap import AnimapClient, AnimapEdge
+from anibridge.app.core.sync.targeting import TargetResolver
 
 
-def test_best_search_result_applies_threshold() -> None:
-    """Fuzzy matching respects the configured fallback threshold."""
-    provider = FakeListProvider()
-    exact = FakeListEntry(
-        provider=provider,
-        key="1",
-        title="Perfect Match",
-        media_type=ListMediaType.MOVIE,
-    )
-    off = FakeListEntry(
-        provider=provider,
-        key="2",
-        title="Different",
-        media_type=ListMediaType.MOVIE,
-    )
+class _FakeAnimapClient:
+    """Mapping client double with no cross-provider edges."""
 
-    entries = [cast(ListEntryProtocol, exact), cast(ListEntryProtocol, off)]
-    pick = find_best_search_result("Perfect Match", entries, 80)
-    assert pick is exact
+    def resolve_edges(self, descriptors, *, target_authorities=None):
+        return ()
 
-    assert (
-        find_best_search_result("Perfect Match", [cast(ListEntryProtocol, off)], 95)
-        is None
-    )
+
+class _EdgeAnimapClient:
+    """Mapping client double that returns configured edges."""
+
+    def __init__(self, *edges: AnimapEdge) -> None:
+        self.edges = edges
+        self.calls: list[tuple[object, object]] = []
+
+    def resolve_edges(self, descriptors, *, target_authorities=None):
+        self.calls.append((descriptors, target_authorities))
+        return self.edges
+
+
+class _PlainProvider(Provider):
+    """Provider without mapping support."""
+
+    DISPLAY_NAME = "Plain"
+    NAMESPACE = "plain"
+
+    def account(self) -> Account | None:
+        return None
+
+
+class _MappingTargetProvider(Provider, SupportsMapping):
+    """Target provider whose provider namespace differs from its mapping authority."""
+
+    DISPLAY_NAME = "Target"
+    NAMESPACE = "target-provider"
+
+    def __init__(self, *, authorities: frozenset[str]) -> None:
+        super().__init__(logger=getLogger(__name__), config={})
+        self.authorities = authorities
+        self.resolved_ids: list[ExternalId] = []
+
+    def account(self) -> Account | None:
+        return None
+
+    def capabilities(self) -> Capabilities:
+        return Capabilities(external_authorities=self.authorities)
+
+    async def resolve(self, ids: Sequence[ExternalId]) -> Sequence[Match]:
+        self.resolved_ids.extend(ids)
+        return tuple(
+            Match(
+                external_id=item,
+                ref=Ref.anchor(f"resolved:{item.authority}:{item.value}"),
+                confidence=1.0,
+            )
+            for item in ids
+            if item.authority in self.authorities
+        )
+
+
+class _DuplicateMatchProvider(_MappingTargetProvider):
+    """Mapping provider that returns duplicate refs with different confidence."""
+
+    async def resolve(self, ids: Sequence[ExternalId]) -> Sequence[Match]:
+        self.resolved_ids.extend(ids)
+        return tuple(
+            Match(
+                external_id=item,
+                ref=Ref.anchor("same-target"),
+                confidence=0.9 if item.value == "456" else 0.5,
+            )
+            for item in ids
+        )
 
 
 @pytest.mark.asyncio
-async def test_resolve_list_targets_supports_one_to_many() -> None:
-    """List resolution returns multiple targets for a single descriptor."""
-    provider = cast(ListProvider, FakeListProvider())
-    descriptor = ("anilist", "100", None)
-    provider.resolved_targets = {descriptor: ["100", "101"]}  # ty:ignore[unresolved-attribute]
-    movie = FakeLibraryMovie(
-        key="movie-1",
-        title="Movie",
-        mapping_descriptors=[descriptor],
+async def test_resolve_target_refs_deduplicates_record_and_node_ids() -> None:
+    """Record ids and node IDS facet are merged by mapping descriptor."""
+    anilist = ExternalId("anilist", "1")
+    provider = _MappingTargetProvider(
+        authorities=frozenset({"anilist", "tmdb_show", "tvdb_show"})
+    )
+    node = Node(
+        ref=Ref.anchor("source-1"),
+        kind="anime",
+        facets={
+            FacetName.IDS: Identifiers(
+                ids=(anilist, ExternalId("tmdb_show", "10")),
+            )
+        },
+    )
+    record = Record(
+        ref=Ref.anchor("source-1"),
+        surface="user_state",
+        ids=(anilist, ExternalId("tvdb_show", "20")),
     )
 
-    targets = await resolve_list_targets(
-        animap_client=cast(AnimapClient, FakeAnimapClient()),
-        list_provider=provider,
-        media_items=(movie,),
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, _FakeAnimapClient()),
     )
-    keys = {target.list_media_key for target in targets}
+    await resolver.resolve(node=node, record=record)
 
-    assert keys == {"100", "101"}
+    assert provider.resolved_ids == [
+        ExternalId("anilist", "1"),
+        ExternalId("tvdb_show", "20"),
+        ExternalId("tmdb_show", "10"),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_resolve_list_targets_skips_stub_only_mapping_ranges() -> None:
-    """Stubbed (zero-ratio) mapping segments should not produce sync targets."""
-
-    class StubAnimapClient(FakeAnimapClient):
-        def resolve_edges_grouped(self, descriptors, *, target_providers=None):
-            return {
-                ("anilist", "31", None): {
-                    ("plex", "eoe", None): [("1", "1|0")],
-                }
-            }
-
-    provider = cast(ListProvider, FakeListProvider())
-    provider.resolved_targets = {("anilist", "31", None): ["31"]}  # ty:ignore[unresolved-attribute]
-    movie = FakeLibraryMovie(
-        key="movie-1",
-        title="End of Evangelion",
-        mapping_descriptors=[("plex", "eoe", None)],
+async def test_resolve_target_refs_uses_mapping_authority() -> None:
+    """Namespace equality must not bypass the target's advertised authorities."""
+    provider = _MappingTargetProvider(authorities=frozenset({"anilist"}))
+    node = Node(ref=Ref.anchor("source-native"), kind="anime")
+    record = Record(
+        ref=Ref.anchor("source-native"),
+        surface="user_state",
+        ids=(ExternalId("anilist", "123"),),
     )
 
-    targets = await resolve_list_targets(
-        animap_client=cast(AnimapClient, StubAnimapClient()),
-        list_provider=provider,
-        media_items=(movie,),
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, _FakeAnimapClient()),
     )
+    targets = await resolver.resolve(node=node, record=record)
+
+    assert tuple(match.match.ref for match in targets) == (
+        Ref.anchor("resolved:anilist:123"),
+    )
+    assert provider.resolved_ids == [ExternalId("anilist", "123")]
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_refs_skips_namespace_match_without_authority() -> None:
+    """Same provider namespace is not enough when no target authority matches."""
+    provider = _MappingTargetProvider(authorities=frozenset({"anilist"}))
+    node = Node(ref=Ref.anchor("source-native"), kind="anime")
+    record = Record(ref=Ref.anchor("source-native"), surface="user_state")
+
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, _FakeAnimapClient()),
+    )
+    targets = await resolver.resolve(node=node, record=record)
 
     assert targets == ()
+    assert provider.resolved_ids == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_refs_requires_advertised_authorities() -> None:
+    """Empty target authorities should not query AniMap without a provider filter."""
+    provider = _MappingTargetProvider(authorities=frozenset())
+    node = Node(ref=Ref.anchor("source-native"), kind="anime")
+    record = Record(
+        ref=Ref.anchor("source-native"),
+        surface="user_state",
+        ids=(ExternalId("anilist", "123"),),
+    )
+
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, _FakeAnimapClient()),
+    )
+    targets = await resolver.resolve(node=node, record=record)
+
+    assert targets == ()
+    assert provider.resolved_ids == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_refs_requires_mapping_capability() -> None:
+    """Providers without mapping support cannot resolve source ids."""
+    node = Node(ref=Ref.anchor("source-native"), kind="anime")
+    record = Record(
+        ref=Ref.anchor("source-native"),
+        surface="user_state",
+        ids=(ExternalId("anilist", "123"),),
+    )
+
+    resolver = TargetResolver(
+        target_provider=_PlainProvider(logger=getLogger(__name__), config={}),
+        animap_client=cast(AnimapClient, _FakeAnimapClient()),
+    )
+    targets = await resolver.resolve(node=node, record=record)
+
+    assert targets == ()
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_refs_uses_animap_edges_and_prefers_confidence() -> None:
+    """AniMap edges should add target ids and collapse duplicate refs by confidence."""
+    provider = _DuplicateMatchProvider(authorities=frozenset({"anilist"}))
+    node = Node(ref=Ref.anchor("source-native"), kind="anime")
+    record = Record(
+        ref=Ref.anchor("source-native"),
+        surface="user_state",
+        ids=(ExternalId("tmdb_show", "10"), ExternalId("anilist", "123")),
+    )
+    valid_edge = AnimapEdge(
+        source=("tmdb_show", "10", "s1"),
+        destination=("anilist", "456", None),
+        source_range="1-12",
+        destination_range="1",
+    )
+    null_destination_edge = AnimapEdge(
+        source=("tmdb_show", "10", None),
+        destination=("anilist", "ignored", None),
+        source_range="1",
+        destination_range=None,
+    )
+    animap_client = _EdgeAnimapClient(valid_edge, null_destination_edge)
+
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, animap_client),
+    )
+    targets = await resolver.resolve(node=node, record=record)
+
+    assert len(targets) == 1
+    assert targets[0].match.external_id == ExternalId("anilist", "456")
+    assert targets[0].source_id == ExternalId("tmdb_show", "10", "s1")
+    assert targets[0].target_id == ExternalId("anilist", "456")
+    assert targets[0].mappings[0].source_key == "1-12"
+    assert targets[0].mappings
+    assert provider.resolved_ids == [
+        ExternalId("anilist", "123"),
+        ExternalId("anilist", "456"),
+    ]
+    assert animap_client.calls[0][1] == frozenset({"anilist"})
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_refs_deduplicates_identical_mapping_edges() -> None:
+    """Duplicate AniMap rows should not duplicate mapping ranges in sync plans."""
+    provider = _MappingTargetProvider(authorities=frozenset({"anilist"}))
+    node = Node(ref=Ref.anchor("source-native"), kind="anime")
+    record = Record(
+        ref=Ref.anchor("source-native"),
+        surface="user_state",
+        ids=(ExternalId("tvdb_show", "281949", "s2"),),
+    )
+    edge = AnimapEdge(
+        source=("tvdb_show", "281949", "s2"),
+        destination=("anilist", "21006", None),
+        source_range="1-10",
+        destination_range="1-10",
+    )
+
+    resolver = TargetResolver(
+        target_provider=provider,
+        animap_client=cast(AnimapClient, _EdgeAnimapClient(edge, edge)),
+    )
+    targets = await resolver.resolve(node=node, record=record)
+
+    assert len(targets) == 1
+    assert [mapping.as_pair() for mapping in targets[0].mappings] == [("1-10", "1-10")]

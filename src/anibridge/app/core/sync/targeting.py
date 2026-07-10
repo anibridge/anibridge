@@ -1,235 +1,125 @@
-"""Helpers for resolving deterministic list targets from library mappings."""
-
-from collections.abc import Iterable, Sequence
-from typing import Any
+"""Target resolution for provider-backed sync."""
 
 import msgspec
-from anibridge.library import LibraryEntry
-from anibridge.list import ListEntry, ListProvider
-from anibridge.utils.mappings import AnibridgeDescriptorMapping, descriptor_key
-from anibridge.utils.types import MappingDescriptor
+from anibridge.provider.base import (
+    ExternalId,
+    FacetName,
+    Identifiers,
+    Match,
+    Node,
+    Provider,
+    Record,
+    Ref,
+    SupportsMapping,
+)
+from anibridge.utils.mappings import AnibridgeMapping
 
 from anibridge.app.core.animap import AnimapClient
-from anibridge.app.core.sync.stats import EntrySnapshot
 
-__all__ = [
-    "ResolvedListTarget",
-    "SyncTarget",
-    "diff_snapshots",
-    "find_best_search_result",
-    "resolve_list_targets",
-    "resolve_list_targets_batch",
-]
+__all__ = ["ResolvedTarget", "TargetResolver"]
 
 
-def diff_snapshots(
-    before: EntrySnapshot | None,
-    after: EntrySnapshot | None,
-    fields: Iterable[str],
-) -> dict[str, tuple[Any, Any]]:
-    """Compute differences between two snapshots."""
-    diff: dict[str, tuple[Any, Any]] = {}
-    before_map = msgspec.structs.asdict(before) if before else {}
-    after_map = msgspec.structs.asdict(after) if after else {}
-    for field in fields:
-        if before_map.get(field) != after_map.get(field):
-            diff[field] = (before_map.get(field), after_map.get(field))
-    return diff
+class ResolvedTarget(msgspec.Struct, frozen=True):
+    """A provider match plus the mapping that led to it."""
+
+    match: Match
+    mappings: tuple[AnibridgeMapping, ...] = ()
+    source_id: ExternalId | None = None
+    target_id: ExternalId | None = None
+
+    @property
+    def ref(self) -> Ref:
+        """Return the resolved target ref."""
+        return self.match.ref
 
 
-def find_best_search_result(
-    title: str,
-    results: Sequence[ListEntry],
-    threshold: int,
-) -> ListEntry | None:
-    """Return the highest-scoring fuzzy match for a title."""
-    from rapidfuzz import fuzz
+class TargetResolver:
+    """Resolve source records to target provider refs."""
 
-    best_entry: ListEntry | None = None
-    best_ratio = 0
-    for entry in results:
-        candidates = {entry.title}
-        media_title = entry.media().title
-        if media_title:
-            candidates.add(media_title)
-        for candidate in candidates:
-            if not candidate:
-                continue
-            ratio = fuzz.ratio(title, candidate)
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_entry = entry
-    if best_ratio < threshold:
-        return None
-    return best_entry
+    def __init__(self, *, target_provider: Provider, animap_client: AnimapClient):
+        """Initialize the resolver for one target provider."""
+        self.target_provider = target_provider
+        self.animap_client = animap_client
+        self.capabilities = target_provider.capabilities()
 
+    async def resolve(
+        self,
+        *,
+        node: Node,
+        record: Record,
+    ) -> tuple[ResolvedTarget, ...]:
+        """Resolve one source record to target matches."""
+        if not isinstance(self.target_provider, SupportsMapping):
+            return ()
+        if not self.capabilities.external_authorities:
+            return ()
 
-class SyncTarget(msgspec.Struct, frozen=True):
-    """Resolved list target for a library media item."""
+        ids: dict[str, ExternalId] = {}
+        for external_id in record.ids:
+            ids.setdefault(external_id.descriptor, external_id)
+        facet = node.facets.get(FacetName.IDS)
+        if record.ref.is_anchor and isinstance(facet, Identifiers):
+            for external_id in facet.ids:
+                ids.setdefault(external_id.descriptor, external_id)
 
-    list_media_key: str
-    entry: ListEntry
-    mappings: tuple[AnibridgeDescriptorMapping, ...] = ()
-
-
-class ResolvedListTarget(msgspec.Struct, frozen=True):
-    """Resolved list key with explicit descriptor mappings."""
-
-    list_media_key: str
-    mappings: tuple[AnibridgeDescriptorMapping, ...] = ()
-
-
-def _mapping_signature(
-    mapping: AnibridgeDescriptorMapping,
-) -> tuple[str, str, tuple[tuple[str, str], ...]]:
-    """Return a stable key for deduplicating descriptor mappings."""
-    return (
-        descriptor_key(mapping.source),
-        descriptor_key(mapping.target),
-        tuple(
-            (mapping_entry.source_key, mapping_entry.target_value)
-            for mapping_entry in mapping.mappings
-        ),
-    )
-
-
-def _build_mappings_by_target(
-    grouped_edges: dict[
-        MappingDescriptor,
-        dict[MappingDescriptor, list[tuple[str, str | None]]],
-    ],
-) -> dict[MappingDescriptor, dict[MappingDescriptor, AnibridgeDescriptorMapping]]:
-    """Convert grouped animap edges into explicit descriptor mappings."""
-    mappings_by_target: dict[
-        MappingDescriptor,
-        dict[MappingDescriptor, AnibridgeDescriptorMapping],
-    ] = {}
-    for target_descriptor, sources in grouped_edges.items():
-        source_map: dict[MappingDescriptor, AnibridgeDescriptorMapping] = {}
-        for source_descriptor, source_ranges in sources.items():
-            descriptor_mapping = AnibridgeDescriptorMapping(
-                source=source_descriptor,
-                target=target_descriptor,
-            )
-            for source_range, destination_range in source_ranges:
-                if destination_range is None:
-                    continue
-                descriptor_mapping.add_mapping(
-                    source_range=source_range,
-                    target_ranges=destination_range,
-                )
-            descriptor_mapping.mappings[:] = [
-                mapping_entry
-                for mapping_entry in descriptor_mapping.mappings
-                if mapping_entry.target_ratio != 0
-            ]
-            if descriptor_mapping.mappings:
-                source_map[source_descriptor] = descriptor_mapping
-        if source_map:
-            mappings_by_target[target_descriptor] = source_map
-    return mappings_by_target
-
-
-async def resolve_list_targets_batch(
-    *,
-    animap_client: AnimapClient,
-    list_provider: ListProvider,
-    descriptor_sets: Sequence[Sequence[MappingDescriptor]],
-) -> list[tuple[ResolvedListTarget, ...]]:
-    """Resolve mapping descriptors into deterministic list targets."""
-    normalized: list[tuple[MappingDescriptor, ...]] = []
-    all_descriptors: set[MappingDescriptor] = set()
-    for descriptor_set in descriptor_sets:
-        ordered = tuple(dict.fromkeys(descriptor_set))
-        normalized.append(ordered)
-        all_descriptors.update(ordered)
-
-    if not all_descriptors:
-        return [tuple() for _ in normalized]
-
-    grouped_edges = animap_client.resolve_edges_grouped(
-        tuple(all_descriptors),
-        target_providers=list_provider.MAPPING_PROVIDERS,
-    )
-    mappings_by_target = _build_mappings_by_target(grouped_edges)
-
-    direct_targets = {
-        descriptor
-        for descriptor in all_descriptors
-        if descriptor[0] in list_provider.MAPPING_PROVIDERS
-    }
-    target_descriptors = {*mappings_by_target.keys(), *direct_targets}
-    if not target_descriptors:
-        return [tuple() for _ in normalized]
-
-    resolved_targets = await list_provider.resolve_mapping_descriptors(
-        tuple(target_descriptors)
-    )
-
-    results: list[tuple[ResolvedListTarget, ...]] = []
-    for descriptor_set in normalized:
-        wanted = set(descriptor_set)
-        descriptor_order = {
-            descriptor: index for index, descriptor in enumerate(descriptor_set)
+        candidates = {
+            item.descriptor: item
+            for item in ids.values()
+            if item.authority in self.capabilities.external_authorities
         }
-        grouped_mapping_key = tuple[str, str, tuple[tuple[str, str], ...]]
-        grouped: dict[
-            str,
-            dict[grouped_mapping_key, AnibridgeDescriptorMapping],
-        ] = {}
+        candidate_mappings: dict[str, list[AnibridgeMapping]] = {}
+        candidate_sources: dict[str, ExternalId] = {}
 
-        for target in resolved_targets:
-            selected_mappings = [
-                mapping
-                for source_descriptor, mapping in mappings_by_target.get(
-                    target.descriptor, {}
-                ).items()
-                if source_descriptor in wanted
-            ]
-            if target.descriptor not in wanted and not selected_mappings:
+        descriptors = tuple(
+            (item.authority, item.value, item.scope) for item in ids.values()
+        )
+        for edge in self.animap_client.resolve_edges(
+            descriptors,
+            target_authorities=self.capabilities.external_authorities,
+        ):
+            if edge.destination_range is None:
                 continue
 
-            group = grouped.setdefault(target.media_key, {})
-            for mapping in selected_mappings:
-                group.setdefault(_mapping_signature(mapping), mapping)
+            mapping = AnibridgeMapping.parse(edge.source_range, edge.destination_range)
+            if mapping.target_weight == 0:
+                continue
 
-        results.append(
-            tuple(
-                ResolvedListTarget(
-                    list_media_key=media_key,
-                    mappings=tuple(
-                        sorted(
-                            grouped[media_key].values(),
-                            key=lambda mapping: (
-                                descriptor_order.get(
-                                    mapping.source,
-                                    len(descriptor_order),
-                                ),
-                                descriptor_key(mapping.target),
-                            ),
-                        )
-                    ),
-                )
-                for media_key in sorted(grouped)
+            target_id = ExternalId(*edge.destination)
+            source_id = ExternalId(*edge.source)
+            candidates.setdefault(target_id.descriptor, target_id)
+            candidate_sources.setdefault(target_id.descriptor, source_id)
+            mappings = candidate_mappings.setdefault(target_id.descriptor, [])
+            if mapping not in mappings:
+                mappings.append(mapping)
+
+        if not candidates:
+            return ()
+
+        matches = await self.target_provider.resolve(tuple(candidates.values()))
+        by_ref: dict[Ref, ResolvedTarget] = {}
+        for match in matches:
+            candidate = candidates.get(match.external_id.descriptor)
+            if candidate is None:
+                continue
+
+            resolved = ResolvedTarget(
+                match=match,
+                mappings=tuple(candidate_mappings.get(candidate.descriptor, ())),
+                source_id=candidate_sources.get(candidate.descriptor),
+                target_id=candidate,
             )
-        )
+            existing = by_ref.get(match.ref)
+            if existing is None:
+                by_ref[match.ref] = resolved
+                continue
 
-    return results
+            confidence = resolved.match.confidence or 0
+            existing_confidence = existing.match.confidence or 0
+            if confidence > existing_confidence or (
+                confidence == existing_confidence
+                and bool(resolved.mappings)
+                and not existing.mappings
+            ):
+                by_ref[match.ref] = resolved
 
-
-async def resolve_list_targets(
-    *,
-    animap_client: AnimapClient,
-    list_provider: ListProvider,
-    media_items: Sequence[LibraryEntry],
-) -> tuple[ResolvedListTarget, ...]:
-    """Resolve mapping descriptors for one logical media item."""
-    descriptors: list[MappingDescriptor] = []
-    for media in media_items:
-        descriptors.extend(media.mapping_descriptors())
-    resolved = await resolve_list_targets_batch(
-        animap_client=animap_client,
-        list_provider=list_provider,
-        descriptor_sets=[descriptors],
-    )
-    return resolved[0] if resolved else tuple()
+        return tuple(by_ref.values())

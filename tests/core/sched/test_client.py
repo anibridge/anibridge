@@ -1,82 +1,24 @@
-"""Tests for scheduler components."""
+"""Tests for the single-queue scheduler client."""
 
 import asyncio
-import contextlib
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 
 import pytest
+from anibridge.provider.base import Ref
 
 import anibridge.app.core.sched.client as sched_module
-from anibridge.app.config.settings import ScanMode
-from anibridge.app.core.sched import ProfileScheduler, SchedulerClient
-from anibridge.app.exceptions import ProfileNotFoundError, SchedulerUnavailableError
-
-
-@dataclass
-class FakeProfileConfig:
-    """Minimal profile config stub."""
-
-    library_provider: str = "lib"
-    list_provider: str = "list"
-    poll_interval: int = 60
-    scan_interval: int = 10
-    scan_modes: list[ScanMode] = field(default_factory=list)
-    full_scan: bool = False
-    destructive_sync: bool = False
-
-    def __post_init__(self) -> None:
-        if self.scan_modes is None:
-            self.scan_modes = []
-
-
-class FakeProvider:
-    """Provider stub exposing namespace and optional user."""
-
-    def __init__(self, namespace: str, title: str | None = None) -> None:
-        self.NAMESPACE = namespace
-        self._user = SimpleNamespace(title=title) if title else None
-        self.cleared = False
-
-    def user(self):
-        return self._user
-
-    async def clear_cache(self) -> None:
-        self.cleared = True
-
-
-class FakeBridgeClient:
-    """Bridge client stub for scheduler tests."""
-
-    def __init__(self, profile_name: str) -> None:
-        self.profile_name = profile_name
-        self.library_provider = FakeProvider("lib", "LibraryUser")
-        self.list_provider = FakeProvider("list", "ListUser")
-        self.last_synced: datetime | None = None
-        self.current_sync = None
-        self.sync_calls: list[tuple[bool, list[str] | None]] = []
-        self.closed = False
-        self.initialized = False
-        self.backed_up = False
-
-    async def initialize(self) -> None:
-        self.initialized = True
-
-    async def close(self) -> None:
-        self.closed = True
-
-    async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-        self.sync_calls.append((poll, library_keys))
-
-    async def _backup_list(self) -> None:
-        self.backed_up = True
+from anibridge.app.config.settings import AnibridgeConfig
+from anibridge.app.core.bridge import BridgeClient
+from anibridge.app.core.sched.client import SchedulerClient
+from anibridge.app.core.sync import RecordUndoRequest, SyncRequest, SyncTrigger
+from anibridge.app.exceptions import ProfileNotFoundError
 
 
 class FakeAnimapClient:
-    """Animap client stub for scheduler tests."""
+    """Shared AniMap client stub."""
 
     def __init__(self, *_args, **_kwargs) -> None:
         self.initialized = False
@@ -93,988 +35,742 @@ class FakeAnimapClient:
         self.synced = True
 
 
+class FakeProvider:
+    """Provider stub with namespace and account metadata."""
+
+    def __init__(self, namespace: str, title: str) -> None:
+        self.NAMESPACE = namespace
+        self._account = SimpleNamespace(title=title)
+
+    def account(self):
+        return self._account
+
+
+class FakeBridge:
+    """Bridge client stub used by the scheduler."""
+
+    def __init__(self) -> None:
+        self.source_provider = FakeProvider("source", "Source")
+        self.target_provider = FakeProvider("target", "Target")
+        self.last_synced = None
+        self.current_sync = None
+        self.sync_calls: list[SyncRequest] = []
+        self.closed = False
+        self.backed_up = False
+        self.sync_error: Exception | None = None
+        self.backup_error: Exception | None = None
+
+    async def sync(self, *, request: SyncRequest) -> None:
+        if self.sync_error is not None:
+            raise self.sync_error
+        self.sync_calls.append(request)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def _backup_target(self) -> None:
+        if self.backup_error is not None:
+            raise self.backup_error
+        self.backed_up = True
+
+
 class FakeConfig:
-    """Config stub with profile lookup."""
+    """Minimal global config for SchedulerClient tests."""
 
-    def __init__(self, profiles: dict[str, FakeProfileConfig], data_path: Path) -> None:
-        self.profiles = profiles
-        self.data_path = data_path
+    def __init__(self, tmp_path: Path) -> None:
+        self.data_path = tmp_path
         self.mappings_url = None
+        self.profiles = {
+            "default": SimpleNamespace(
+                source_provider="configured-source",
+                target_provider="configured-target",
+                scan_modes=[],
+                scan_interval=60,
+                poll_interval=30,
+                full_scan=False,
+                destructive_sync=False,
+            )
+        }
 
-    def get_profile(self, name: str) -> FakeProfileConfig:
+    def get_profile(self, name: str):
         return self.profiles[name]
 
 
-def test_profile_scheduler_sync_runs_bridge_sync():
-    """ProfileScheduler should call bridge_client.sync."""
-
-    class Bridge:
-        def __init__(self) -> None:
-            self.calls: list[tuple[bool, list[str] | None]] = []
-
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            self.calls.append((poll, library_keys))
-
-    bridge = Bridge()
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", bridge),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    asyncio.run(scheduler.sync(poll=True, library_keys=["a"]))
-
-    assert bridge.calls == [(True, ["a"])]
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_start_spawns_loops(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Start should spawn periodic and poll loops when enabled."""
-    calls: list[tuple[str, int, bool]] = []
-
-    class Bridge:
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            return None
-
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", Bridge()),
-        scan_interval=5,
-        scan_modes=[ScanMode.PERIODIC, ScanMode.POLL],
-        poll_interval=2,
-    )
-
-    def _spawn_loop(*, name: str, interval: int, poll: bool) -> None:
-        calls.append((name, interval, poll))
-
-    monkeypatch.setattr(scheduler, "_spawn_loop", _spawn_loop)
-
-    await scheduler.start()
-
-    assert calls == [("periodic", 5, False), ("poll", 2, True)]
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_stop_cancels_tasks() -> None:
-    """Stop should cancel background tasks."""
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    start_event = asyncio.Event()
-
-    async def _waiter():
-        start_event.set()
-        await asyncio.Event().wait()
-
-    task = asyncio.create_task(_waiter())
-    await start_event.wait()
-    scheduler._tasks.add(task)
-
-    await scheduler.stop()
-
-    assert task.cancelled() or task.done()
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_stop_without_setting_stop_event() -> None:
-    """Stopping a single profile should not require tripping the shared stop event."""
-    stop_event = asyncio.Event()
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-        stop_event=stop_event,
-    )
-
-    await scheduler.stop(set_stop_event=False)
-
-    assert stop_event.is_set() is False
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_sync_cancellation() -> None:
-    """Cancellation should propagate and clear current task."""
-    start_event = asyncio.Event()
-
-    class Bridge:
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            start_event.set()
-            await asyncio.Event().wait()
-
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", Bridge()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    task = asyncio.create_task(scheduler.sync())
-    await start_event.wait()
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert scheduler._current_task is None
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_run_loop_stops_on_event(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Loop should stop once stop_event is set."""
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    async def _sync(*_args, **_kwargs) -> None:
-        scheduler.stop_event.set()
-
-    monkeypatch.setattr(scheduler, "sync", _sync)
-
-    scheduler._running = True
-    await scheduler._run_loop(name="periodic", interval=1, poll=False)
-
-    assert scheduler.stop_event.is_set()
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_run_loop_handles_exception(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Errors inside the loop should be caught and retried."""
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    async def _boom(*_args, **_kwargs) -> None:
-        scheduler.stop_event.set()
-        raise RuntimeError("boom")
-
-    async def _fast_sleep(_seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr(scheduler, "sync", _boom)
-    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
-
-    scheduler._running = True
-    await scheduler._run_loop(name="poll", interval=1, poll=True)
-
-    assert scheduler.stop_event.is_set()
-
-
-@pytest.mark.asyncio
-async def test_scheduler_initialize_and_start(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Scheduler should initialize animap and bridge clients."""
-    profiles = {
-        "good": FakeProfileConfig(scan_modes=[]),
-        "bad": FakeProfileConfig(scan_modes=[]),
-    }
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-
-    created: list[FakeBridgeClient] = []
-
-    def fake_bridge_client(profile_name: str, *_args, **_kwargs):
-        client = FakeBridgeClient(profile_name)
-        if profile_name == "bad":
-            raise RuntimeError("boom")
-        created.append(client)
-        return client
-
+@pytest.fixture()
+def scheduler(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SchedulerClient:
+    """Build a scheduler with stubbed external clients."""
     monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
-    monkeypatch.setattr(sched_module, "BridgeClient", fake_bridge_client)
+    client = SchedulerClient(cast(AnibridgeConfig, FakeConfig(tmp_path)))
+    client.bridge_clients["default"] = cast(BridgeClient, FakeBridge())
+    return client
 
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    await scheduler.initialize()
 
-    assert cast(FakeAnimapClient, scheduler.shared_animap_client).initialized is True
-    assert "good" in scheduler.bridge_clients
-    assert "bad" not in scheduler.bridge_clients
-    assert scheduler.failed_profile_errors.get("bad") == "boom"
+def test_coalesced_request_preserves_full_manual_scan() -> None:
+    """Manual full scans should dominate queued targeted refs."""
+    request = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("a"),)),
+            SyncRequest(trigger=SyncTrigger.MANUAL),
+            SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("b"),)),
+        ]
+    )
+
+    assert request.trigger == SyncTrigger.MANUAL
+    assert request.source_refs is None
+
+
+def test_coalesced_request_deduplicates_targeted_refs() -> None:
+    """Targeted queue coalescing should preserve first-seen ref order."""
+    request = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(
+                trigger=SyncTrigger.WEBHOOK,
+                source_refs=(Ref.anchor("a"), Ref.anchor("b")),
+            ),
+            SyncRequest(
+                trigger=SyncTrigger.WEBHOOK,
+                source_refs=(Ref.anchor("a"), Ref.anchor("c")),
+            ),
+        ]
+    )
+
+    assert request.trigger == SyncTrigger.WEBHOOK
+    assert request.source_refs == (Ref.anchor("a"), Ref.anchor("b"), Ref.anchor("c"))
+
+
+def test_coalesced_request_preserves_record_undos() -> None:
+    """Queued undo requests should survive request coalescing."""
+    undo = RecordUndoRequest(
+        source_ref=Ref.anchor("source"),
+        target_ref=Ref.anchor("target"),
+        before=None,
+        after=None,
+    )
+
+    request = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.MANUAL),
+            SyncRequest(
+                trigger=SyncTrigger.MANUAL,
+                record_undos=(undo,),
+                source_refs=(),
+            ),
+        ]
+    )
+
+    assert request.source_refs is None
+    assert request.record_undos == (undo,)
+
+
+def test_coalesced_request_preserves_poll_fallback_coverage() -> None:
+    """Broad polls should retain fallback coverage when targeted refs merge in."""
+    poll_with_target = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("a"),)),
+            SyncRequest(trigger=SyncTrigger.POLL),
+        ]
+    )
+
+    assert poll_with_target.trigger == SyncTrigger.POLL
+    assert poll_with_target.source_refs == (Ref.anchor("a"),)
+    assert poll_with_target.full_scan_on_poll_fallback is True
+
+    manual_with_poll = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.MANUAL, source_refs=(Ref.anchor("a"),)),
+            SyncRequest(trigger=SyncTrigger.POLL),
+        ]
+    )
+
+    assert manual_with_poll.trigger == SyncTrigger.MANUAL
+    assert manual_with_poll.source_refs is None
+    assert manual_with_poll.full_scan_on_poll_fallback is False
+
+
+def test_coalesced_request_preserves_user_trigger_attribution() -> None:
+    """Manual and poll requests should not be reported as periodic work."""
+    manual_with_periodic = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.PERIODIC),
+            SyncRequest(trigger=SyncTrigger.MANUAL, source_refs=(Ref.anchor("a"),)),
+        ]
+    )
+    poll_with_periodic = SchedulerClient._coalesced_request(
+        [
+            SyncRequest(trigger=SyncTrigger.PERIODIC),
+            SyncRequest(trigger=SyncTrigger.POLL),
+        ]
+    )
+
+    assert manual_with_periodic.trigger == SyncTrigger.MANUAL
+    assert manual_with_periodic.source_refs is None
+    assert poll_with_periodic.trigger == SyncTrigger.POLL
+    assert poll_with_periodic.source_refs is None
+    assert poll_with_periodic.full_scan_on_poll_fallback is True
 
 
 @pytest.mark.asyncio
-async def test_scheduler_reinitialize_failed_profile(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+async def test_trigger_profile_sync_runs_immediately_when_stopped(
+    scheduler: SchedulerClient,
 ) -> None:
-    """Failed profiles should be reinitialized into active bridge clients."""
-    profiles = {"broken": FakeProfileConfig(scan_modes=[])}
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
+    """A stopped scheduler should execute manual syncs directly."""
+    request = SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("a"),))
 
-    monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
-    monkeypatch.setattr(
-        sched_module,
-        "BridgeClient",
-        lambda profile_name, *_args, **_kwargs: FakeBridgeClient(profile_name),
-    )
+    await scheduler.trigger_profile_sync("default", request=request, source="test")
 
-    class StubScheduler:
-        def __init__(self, *_, **__):
-            self.started = False
-
-        async def start(self) -> None:
-            self.started = True
-
-        async def stop(self) -> None:
-            return None
-
-    monkeypatch.setattr(sched_module, "ProfileScheduler", StubScheduler)
-
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    scheduler._running = True
-    scheduler.failed_profile_errors["broken"] = "Provider auth failed"
-
-    await scheduler.reinitialize_profile("broken")
-
-    assert "broken" in scheduler.bridge_clients
-    assert scheduler.failed_profile_errors.get("broken") is None
-    assert (
-        cast(FakeBridgeClient, scheduler.bridge_clients["broken"]).initialized is True
-    )
-    assert cast(StubScheduler, scheduler.profile_schedulers["broken"]).started is True
+    bridge = scheduler.bridge_clients["default"]
+    assert isinstance(bridge, FakeBridge)
+    assert bridge.sync_calls == [request]
 
 
 @pytest.mark.asyncio
-async def test_scheduler_reinitialize_failed_profile_preserves_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+async def test_get_status_reports_single_queue_scheduler(
+    scheduler: SchedulerClient,
 ) -> None:
-    """Retrying a failed profile should surface and store the latest error."""
-    profiles = {"broken": FakeProfileConfig(scan_modes=[])}
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-
-    monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
-
-    class BrokenBridge(FakeBridgeClient):
-        async def initialize(self) -> None:
-            raise RuntimeError("still broken")
-
-    monkeypatch.setattr(
-        sched_module,
-        "BridgeClient",
-        lambda profile_name, *_args, **_kwargs: BrokenBridge(profile_name),
-    )
-
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    scheduler.failed_profile_errors["broken"] = "Provider auth failed"
-
-    with pytest.raises(SchedulerUnavailableError, match="still broken"):
-        await scheduler.reinitialize_profile("broken")
-
-    assert scheduler.failed_profile_errors["broken"] == "still broken"
-    assert "broken" not in scheduler.bridge_clients
-
-
-@pytest.mark.asyncio
-async def test_scheduler_reinitialize_profile_keeps_global_stop_event_clear(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Reinitializing one healthy profile should not stop the whole scheduler."""
-    profiles = {"good": FakeProfileConfig(scan_modes=[])}
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-
-    monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
-    monkeypatch.setattr(
-        sched_module,
-        "BridgeClient",
-        lambda profile_name, *_args, **_kwargs: FakeBridgeClient(profile_name),
-    )
-
-    class StubScheduler:
-        def __init__(self, *_, **__):
-            self.stop_calls: list[bool] = []
-            self.started = False
-            self._running = True
-
-        async def start(self) -> None:
-            self.started = True
-
-        async def stop(self, *, set_stop_event: bool = True) -> None:
-            self.stop_calls.append(set_stop_event)
-
-    monkeypatch.setattr(sched_module, "ProfileScheduler", StubScheduler)
-
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    scheduler._running = True
-    scheduler.bridge_clients["good"] = FakeBridgeClient("good")  # ty:ignore[invalid-assignment]
-    scheduler.profile_schedulers["good"] = cast(
-        sched_module.ProfileScheduler, StubScheduler()
-    )
-
-    await scheduler.reinitialize_profile("good")
-
-    assert scheduler.stop_event.is_set() is False
-    assert cast(StubScheduler, scheduler.profile_schedulers["good"]).started is True
-
-
-@pytest.mark.asyncio
-async def test_scheduler_start_and_stop(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Start should create profile schedulers and stop should close resources."""
-    profiles = {"good": FakeProfileConfig(scan_modes=[])}
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-
-    monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
-
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    cast(dict[str, object], scheduler.bridge_clients)["good"] = FakeBridgeClient("good")
-
-    class StubScheduler:
-        def __init__(self, *_, **__):
-            self._running = False
-
-        async def start(self) -> None:
-            self._running = True
-
-        async def stop(self) -> None:
-            self._running = False
-
-    monkeypatch.setattr(sched_module, "ProfileScheduler", StubScheduler)
-
-    await scheduler.start()
-    assert scheduler.is_running is True
-    assert scheduler.profile_schedulers
-
-    await scheduler.stop()
-    assert scheduler.is_running is False
-    assert cast(FakeAnimapClient, scheduler.shared_animap_client).closed is True
-    assert not scheduler.bridge_clients
-
-
-@pytest.mark.asyncio
-async def test_scheduler_trigger_sync(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Manual sync should target requested profiles or all."""
-    profiles = {
-        "one": FakeProfileConfig(scan_modes=[]),
-        "two": FakeProfileConfig(scan_modes=[]),
-    }
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    cast(dict[str, object], scheduler.bridge_clients)["one"] = FakeBridgeClient("one")
-    cast(dict[str, object], scheduler.bridge_clients)["two"] = FakeBridgeClient("two")
-
-    class StubScheduler:
-        def __init__(self) -> None:
-            self.calls: list[tuple[bool, list[str] | None, str]] = []
-
-        async def sync(
-            self,
-            *,
-            poll: bool = False,
-            library_keys=None,
-            source: str = "manual",
-        ) -> None:
-            self.calls.append((poll, library_keys, source))
-
-    cast(dict[str, object], scheduler.profile_schedulers)["one"] = StubScheduler()
-    cast(dict[str, object], scheduler.profile_schedulers)["two"] = StubScheduler()
-
-    await scheduler.trigger_profile_sync("one", poll=True, library_keys=["x"])
-
-    assert cast(StubScheduler, scheduler.profile_schedulers["one"]).calls == [
-        (True, ["x"], "manual")
-    ]
-
-    await scheduler.trigger_all_profiles_sync(poll=False, library_keys=None)
-
-    assert cast(StubScheduler, scheduler.profile_schedulers["two"]).calls == [
-        (False, None, "manual")
-    ]
-
-    with pytest.raises(ProfileNotFoundError):
-        await scheduler.trigger_profile_sync("missing")
-
-
-@pytest.mark.asyncio
-async def test_scheduler_trigger_profile_sync_without_running_scheduler(
-    tmp_path: Path,
-) -> None:
-    """Manual trigger should fall back to a one-off bridge sync when not started."""
-    profiles = {"one": FakeProfileConfig(scan_modes=[])}
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    bridge = FakeBridgeClient("one")
-    cast(dict[str, object], scheduler.bridge_clients)["one"] = bridge
-
-    await scheduler.trigger_profile_sync("one", poll=True, library_keys=["k1"])
-
-    assert bridge.sync_calls == [(True, ["k1"])]
-
-
-@pytest.mark.asyncio
-async def test_scheduler_trigger_all_profiles_sync_raises_on_failures(
-    tmp_path: Path,
-) -> None:
-    """Aggregated trigger should raise if any profile sync fails."""
-    profiles = {
-        "good": FakeProfileConfig(scan_modes=[]),
-        "bad": FakeProfileConfig(scan_modes=[]),
-    }
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    class GoodBridge(FakeBridgeClient):
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            self.sync_calls.append((poll, library_keys))
-
-    class BadBridge(FakeBridgeClient):
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            raise RuntimeError("boom")
-
-    cast(dict[str, object], scheduler.bridge_clients)["good"] = GoodBridge("good")
-    cast(dict[str, object], scheduler.bridge_clients)["bad"] = BadBridge("bad")
-
-    with pytest.raises(ExceptionGroup):
-        await scheduler.trigger_all_profiles_sync(source="test:all")
-
-    assert cast(GoodBridge, scheduler.bridge_clients["good"]).sync_calls == [
-        (False, None)
-    ]
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_metrics_include_pending_and_last_sources() -> None:
-    """Runtime metrics should expose mailbox state and source attribution."""
-
-    class Bridge:
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            return None
-
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", Bridge()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    await scheduler.sync(source="test:manual")
-    metrics = await scheduler.get_runtime_metrics()
-
-    assert metrics["last_sync_sources"] == ["test:manual"]
-    assert metrics["requests_total"] == 0
-    assert metrics["requests_rejected"] == 0
-
-
-@pytest.mark.asyncio
-async def test_profile_scheduler_rejects_when_pending_waiters_full() -> None:
-    """Enqueue should reject when pending waiters exceed configured limit."""
-
-    class Bridge:
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            return None
-
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", Bridge()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-        max_pending_waiters=1,
-    )
-    scheduler._running = True
-    scheduler._worker_task = asyncio.create_task(asyncio.sleep(10))
-
-    first = await scheduler._enqueue_sync(source="test:first")
-    assert not first.done()
-
-    with pytest.raises(SchedulerUnavailableError):
-        await scheduler._enqueue_sync(source="test:second")
-
-    metrics = await scheduler.get_runtime_metrics()
-    assert metrics["requests_total"] == 1
-    assert metrics["requests_rejected"] == 1
-
-    scheduler._worker_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await scheduler._worker_task
-
-
-def test_scheduler_get_next_database_sync_at(tmp_path: Path) -> None:
-    """Next sync time should be None when not running."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    assert scheduler.get_next_database_sync_at() is None
-
-    scheduler._running = True
-    next_time = scheduler.get_next_database_sync_at()
-    assert next_time is not None
-
-
-@pytest.mark.asyncio
-async def test_scheduler_get_status(tmp_path: Path) -> None:
-    """Status should include profile runtime data and init failures."""
-    profiles = {
-        "one": FakeProfileConfig(scan_modes=[]),
-        "broken": FakeProfileConfig(
-            library_provider="jellyfin", list_provider="anilist", scan_modes=[]
-        ),
-    }
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    bridge = FakeBridgeClient("one")
-    bridge.last_synced = datetime(2025, 1, 1, tzinfo=UTC)
-    cast(dict[str, object], scheduler.bridge_clients)["one"] = bridge
-
-    class SchedulerStub:
-        _running = True
-
-        async def get_runtime_metrics(
-            self,
-        ) -> dict[str, Any]:
-            return {
-                "pending_waiters": 0,
-                "requests_total": 0,
-                "requests_coalesced": 0,
-                "requests_rejected": 0,
-                "max_pending_waiters": 0,
-                "last_sync_sources": [],
-                "running": True,
-                "sync_active": False,
-            }
-
-    scheduler.profile_schedulers["one"] = cast(
-        "sched_module.ProfileScheduler", SchedulerStub()
-    )
-    scheduler.failed_profile_errors["broken"] = "Provider auth failed"
-
+    """Status should expose provider metadata and queue metrics."""
     status = await scheduler.get_status()
 
-    assert status["one"]["config"]["library_namespace"] == "Lib"
-    assert status["one"]["status"]["last_synced"] == "2025-01-01T00:00:00+00:00"
-    assert status["one"]["status"]["initialization_error"] is None
-    assert status["broken"]["config"]["library_namespace"] == "Jellyfin"
-    assert status["broken"]["config"]["list_namespace"] == "Anilist"
-    assert status["broken"]["status"]["initialization_error"] == "Provider auth failed"
+    profile = status["default"]
+    assert profile["config"]["source_namespace"] == "source"
+    assert profile["config"]["target_namespace"] == "target"
+    assert profile["status"]["scheduler"]["pending_waiters"] == 0
+    assert profile["status"]["scheduler"]["sync_active"] is False
 
 
-@pytest.mark.asyncio
-async def test_daily_db_sync_loop_runs(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_get_profiles_for_source_provider_uses_bridge_sources(
+    scheduler: SchedulerClient,
 ) -> None:
-    """Daily loop should invoke sync and backups."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-    scheduler.shared_animap_client = cast(sched_module.AnimapClient, FakeAnimapClient())
-    cast(dict[str, object], scheduler.bridge_clients)["one"] = FakeBridgeClient("one")
-
-    scheduler._running = True
-
-    def _next_sync(_now: datetime) -> datetime:
-        return datetime.now(UTC)
-
-    _real_wait_for = asyncio.wait_for
-
-    async def _fast_wait(coro, *_args, **_kwargs):
-        # let maintenance timeout work normally
-        if getattr(coro, "__qualname__", "").endswith(".wait"):
-            coro.close()
-            raise TimeoutError
-        return await _real_wait_for(coro, *_args, **_kwargs)
-
-    monkeypatch.setattr(scheduler, "_get_next_1am_utc", _next_sync)
-    monkeypatch.setattr(asyncio, "wait_for", _fast_wait)
-
-    async def _sync_db() -> None:
-        cast(FakeAnimapClient, scheduler.shared_animap_client).synced = True
-        scheduler.stop_event.set()
-
-    monkeypatch.setattr(scheduler.shared_animap_client, "sync_db", _sync_db)
-
-    await scheduler._daily_db_sync_loop()
-
-    assert cast(FakeAnimapClient, scheduler.shared_animap_client).synced is True
-    assert cast(FakeBridgeClient, scheduler.bridge_clients["one"]).backed_up is True
+    """Webhook routing should find profiles by source provider namespace."""
+    assert scheduler.get_profiles_for_source_provider("source") == ["default"]
 
 
 @pytest.mark.asyncio
-async def test_trigger_database_sync_runs_refresh(tmp_path: Path) -> None:
-    """Database sync entrypoint should sync mappings and run profile backups."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-    scheduler.shared_animap_client = cast(sched_module.AnimapClient, FakeAnimapClient())
+async def test_trigger_database_sync_runs_database_and_backups(
+    scheduler: SchedulerClient,
+) -> None:
+    """Maintenance sync should run AniMap sync and target backups under one lock."""
+    await scheduler.trigger_database_sync(source="test")
 
-    bridge = FakeBridgeClient("one")
-    cast(dict[str, object], scheduler.bridge_clients)["one"] = bridge
-
-    await scheduler.trigger_database_sync(source="test:database")
-
-    assert cast(FakeAnimapClient, scheduler.shared_animap_client).synced is True
+    assert isinstance(scheduler.shared_animap_client, FakeAnimapClient)
+    assert scheduler.shared_animap_client.synced is True
+    bridge = scheduler.bridge_clients["default"]
+    assert isinstance(bridge, FakeBridge)
     assert bridge.backed_up is True
 
 
 @pytest.mark.asyncio
-async def test_scheduler_runtime_metrics_include_coordinator(tmp_path: Path) -> None:
-    """Scheduler runtime metrics should include global coordinator counters."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    metrics = await scheduler.get_runtime_metrics()
-
-    assert metrics["running"] is False
-    assert metrics["profile_count"] == 0
-    assert metrics["bridge_count"] == 0
-    assert metrics["daily_sync_active"] is False
-
-    coordinator = metrics["coordinator"]
-    assert coordinator["active_profile_syncs"] == 0
-    assert coordinator["maintenance_active"] is False
-    assert coordinator["maintenance_waiting"] == 0
-
-
-def test_get_profiles_for_library_provider(tmp_path: Path) -> None:
-    """Profiles should be grouped by library provider namespace."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    cast(dict[str, object], scheduler.bridge_clients)["one"] = FakeBridgeClient("one")
-
-    scheduler.get_profiles_for_library_provider.cache_clear()
-
-    profiles = scheduler.get_profiles_for_library_provider("lib")
-    assert profiles == ["one"]
-
-    scheduler.get_profiles_for_library_provider.cache_clear()
-
-    with pytest.raises(ProfileNotFoundError):
-        scheduler.get_profiles_for_library_provider("missing")
-
-
-def test_request_shutdown_sets_event(tmp_path: Path) -> None:
-    """Request shutdown should set the stop event."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    scheduler.request_shutdown()
-
-    assert scheduler.stop_event.is_set()
-
-
-def test_get_next_1am_utc_rolls_over(tmp_path: Path) -> None:
-    """Next 1AM UTC should roll over after 1AM."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-
-    now = datetime(2025, 1, 1, 2, 0, tzinfo=UTC)
-    next_time = scheduler._get_next_1am_utc(now)
-
-    assert next_time.day == 2
-    assert next_time.hour == 1
+async def test_start_without_scan_modes_starts_only_global_tasks(
+    scheduler: SchedulerClient,
+) -> None:
+    """Profiles without scan modes should not create producer tasks."""
+    await scheduler.start()
+    try:
+        assert scheduler.is_running is True
+        assert len(scheduler._producer_tasks) == 0
+    finally:
+        await scheduler.stop()
 
 
 @pytest.mark.asyncio
-async def test_wait_for_completion_returns_when_stopped(tmp_path: Path) -> None:
-    """wait_for_completion should return when stop_event is set."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    scheduler._running = True
+async def test_initialize_tracks_success_and_failed_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Initialization should keep usable profiles and record failed profiles."""
+    monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
+    monkeypatch.setattr(sched_module, "release_memory", lambda: None)
 
-    scheduler.stop_event.set()
-    await scheduler.wait_for_completion()
+    class InitBridge(FakeBridge):
+        def __init__(self, *, profile_name: str, **_kwargs) -> None:
+            super().__init__()
+            self.profile_name = profile_name
 
+        async def initialize(self) -> None:
+            if self.profile_name == "broken":
+                raise RuntimeError("bad profile")
 
-@pytest.mark.asyncio
-async def test_profile_scheduler_sync_cancels_inner_task() -> None:
-    """Cancelling sync should cancel the in-flight bridge task."""
-    started = asyncio.Event()
-
-    class Bridge:
-        def __init__(self) -> None:
-            self.cancelled = False
-
-        async def sync(self, *, poll: bool = False, library_keys=None) -> None:
-            started.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                self.cancelled = True
-                raise
-
-    bridge = Bridge()
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast(sched_module.BridgeClient, bridge),
-        scan_interval=1,
+    config = FakeConfig(tmp_path)
+    config.profiles["broken"] = SimpleNamespace(
+        source_provider="broken-source",
+        target_provider="broken-target",
         scan_modes=[],
-        poll_interval=1,
+        scan_interval=60,
+        poll_interval=30,
+        full_scan=False,
+        destructive_sync=False,
     )
+    monkeypatch.setattr(sched_module, "BridgeClient", InitBridge)
+    scheduler = SchedulerClient(cast(AnibridgeConfig, config))
 
-    task = asyncio.create_task(scheduler.sync())
-    await started.wait()
-    task.cancel()
+    await scheduler.initialize()
 
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert bridge.cancelled is True
-    assert scheduler._current_task is None
+    assert isinstance(scheduler.shared_animap_client, FakeAnimapClient)
+    assert scheduler.shared_animap_client.initialized is True
+    assert set(scheduler.bridge_clients) == {"default"}
+    assert scheduler.failed_profile_errors == {"broken": "bad profile"}
+    status = await scheduler.get_status()
+    assert status["broken"]["config"]["source_namespace"] == "broken-source"
+    assert status["broken"]["config"]["target_namespace"] == "broken-target"
 
 
 @pytest.mark.asyncio
-async def test_profile_scheduler_start_returns_when_running(
+async def test_initialize_bridge_client_closes_partial_client_on_failure(
+    scheduler: SchedulerClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Calling start while running should be a no-op."""
-    scheduler = ProfileScheduler(
+    closed: list[FakeBridge] = []
+
+    class BrokenBridge(FakeBridge):
+        def __init__(self, **_kwargs) -> None:
+            super().__init__()
+
+        async def initialize(self) -> None:
+            raise RuntimeError("init failed")
+
+        async def close(self) -> None:
+            closed.append(self)
+            await super().close()
+
+    monkeypatch.setattr(sched_module, "BridgeClient", BrokenBridge)
+    with pytest.raises(RuntimeError, match="init failed"):
+        await scheduler._initialize_bridge_client("default", object())
+    assert len(closed) == 1
+    assert closed[0].closed is True
+
+
+def test_start_profile_producers_uses_enabled_scan_modes(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, SyncTrigger]] = []
+    profile = scheduler.global_config.get_profile("default")
+    profile.scan_modes = [sched_module.ScanMode.PERIODIC, sched_module.ScanMode.POLL]
+
+    def spawn(**kwargs) -> None:
+        calls.append((kwargs["name"], kwargs["request"].trigger))
+
+    monkeypatch.setattr(scheduler, "_spawn_producer", spawn)
+
+    scheduler._start_profile_producers("default")
+
+    assert calls == [
+        ("periodic", SyncTrigger.PERIODIC),
+        ("poll", SyncTrigger.POLL),
+    ]
+
+
+def test_lifecycle_helpers_report_shutdown_and_next_database_sync(
+    scheduler: SchedulerClient,
+) -> None:
+    assert scheduler.get_next_database_sync_at() is None
+    scheduler._running = True
+    assert scheduler.get_next_database_sync_at() is not None
+    assert scheduler._get_next_1am_utc(
+        datetime(2026, 1, 1, 0, 30, tzinfo=UTC)
+    ) == datetime(2026, 1, 1, 1, tzinfo=UTC)
+    assert scheduler._get_next_1am_utc(
+        datetime(2026, 1, 1, 1, 30, tzinfo=UTC)
+    ) == datetime(2026, 1, 2, 1, tzinfo=UTC)
+
+    scheduler.request_shutdown()
+    scheduler.request_shutdown()
+    assert scheduler.stop_event.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_spawn_and_cancel_profile_producer(
+    scheduler: SchedulerClient,
+) -> None:
+    scheduler._running = True
+    scheduler._spawn_producer(
         profile_name="default",
-        bridge_client=cast(sched_module.BridgeClient, SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[ScanMode.PERIODIC],
-        poll_interval=1,
+        name="poll",
+        interval=3600,
+        request=SyncRequest(trigger=SyncTrigger.POLL),
     )
-    scheduler._running = True
+    task = next(iter(scheduler._producer_tasks))
+    assert task.get_name() == "profile:default:poll"
 
-    def _spawn_loop(*_args, **_kwargs):
-        raise AssertionError("spawn loop should not be called")
-
-    monkeypatch.setattr(scheduler, "_spawn_loop", _spawn_loop)
-
-    await scheduler.start()
+    scheduler._cancel_profile_producers("default")
+    await asyncio.gather(task, return_exceptions=True)
+    assert task.cancelled() is True
 
 
 @pytest.mark.asyncio
-async def test_profile_scheduler_stop_cancels_current_task() -> None:
-    """Stopping should cancel a running current task."""
-    scheduler = ProfileScheduler(
+async def test_producer_loop_triggers_once_and_respects_shutdown(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, SyncTrigger, str]] = []
+    scheduler._running = True
+    monkeypatch.setattr(sched_module, "get_next_interval_seconds", lambda *_args: 0)
+
+    async def trigger(profile_name: str, *, request: SyncRequest, source: str) -> None:
+        calls.append((profile_name, request.trigger, source))
+        scheduler.request_shutdown()
+
+    monkeypatch.setattr(scheduler, "trigger_profile_sync", trigger)
+
+    await scheduler._producer_loop(
         profile_name="default",
-        bridge_client=cast(sched_module.BridgeClient, SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
+        name="poll",
+        interval=30,
+        request=SyncRequest(trigger=SyncTrigger.POLL),
     )
 
-    async def _waiter():
-        await asyncio.Event().wait()
-
-    scheduler._current_task = asyncio.create_task(_waiter())
-    await scheduler.stop()
-
-    assert scheduler._current_task.cancelled() or scheduler._current_task.done()
+    assert calls == [("default", SyncTrigger.POLL, "loop:poll")]
 
 
 @pytest.mark.asyncio
-async def test_profile_scheduler_run_loop_cancellation() -> None:
-    """Cancelling a loop task should hit cancellation handling."""
-    scheduler = ProfileScheduler(
-        profile_name="default",
-        bridge_client=cast("sched_module.BridgeClient", SimpleNamespace()),
-        scan_interval=1,
-        scan_modes=[],
-        poll_interval=1,
-    )
-
-    async def _sync(*_args, **_kwargs) -> None:
-        await asyncio.Event().wait()
-
-    scheduler._running = True
-    scheduler.sync = _sync  # # ty:ignore[invalid-assignment]
-
-    task = asyncio.create_task(
-        scheduler._run_loop(name="periodic", interval=1, poll=False)
-    )
-    await asyncio.sleep(0)
-    task.cancel()
-    await task
-
-
-@pytest.mark.asyncio
-async def test_scheduler_start_with_scan_modes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+async def test_producer_loop_logs_errors_and_cancelled_runs(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Start should compute next sync time when scan modes are enabled."""
-    profiles = {"good": FakeProfileConfig(scan_modes=[ScanMode.PERIODIC])}
-    config = FakeConfig(profiles=profiles, data_path=tmp_path)
-
-    class StubScheduler:
-        def __init__(self, *_, **__):
-            self._running = False
-
-        async def start(self) -> None:
-            self._running = True
-
-        async def stop(self) -> None:
-            self._running = False
-
-    monkeypatch.setattr(sched_module, "AnimapClient", FakeAnimapClient)
-    monkeypatch.setattr(sched_module, "ProfileScheduler", StubScheduler)
-
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-    cast(dict[str, object], scheduler.bridge_clients)["good"] = FakeBridgeClient("good")
-
-    await scheduler.start()
-
-    assert scheduler.profile_schedulers
-
-    await scheduler.stop()
-
-
-@pytest.mark.asyncio
-async def test_scheduler_start_without_profiles(tmp_path: Path) -> None:
-    """Starting without profiles should leave schedulers empty."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-
-    await scheduler.start()
-
-    assert scheduler.profile_schedulers == {}
-
-    await scheduler.stop()
-
-
-@pytest.mark.asyncio
-async def test_scheduler_stop_returns_when_not_running(tmp_path: Path) -> None:
-    """Stop should no-op when scheduler is not running."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-
-    await scheduler.stop()
-
-    assert scheduler.is_running is False
-
-
-@pytest.mark.asyncio
-async def test_wait_for_completion_cancelled(tmp_path: Path) -> None:
-    """Cancelling wait_for_completion should propagate the cancellation."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
     scheduler._running = True
+    monkeypatch.setattr(sched_module, "get_next_interval_seconds", lambda *_args: 0)
+    monkeypatch.setattr(sched_module, "get_next_run_datetime", lambda *_args: "now")
 
-    task = asyncio.create_task(scheduler.wait_for_completion())
-    await asyncio.sleep(0)
-    task.cancel()
+    async def trigger_error(*_args, **_kwargs) -> None:
+        scheduler.request_shutdown()
+        raise RuntimeError("producer boom")
 
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-
-@pytest.mark.asyncio
-async def test_daily_db_sync_loop_breaks_on_stop(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Daily loop should break when stop event is signaled during wait."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-    scheduler._running = True
-
-    async def _wait_for(coro, *_args, **_kwargs):
-        scheduler.stop_event.set()
-        return await coro
-
-    monkeypatch.setattr(asyncio, "wait_for", _wait_for)
-
-    await scheduler._daily_db_sync_loop()
-
-
-@pytest.mark.asyncio
-async def test_daily_db_sync_loop_handles_sync_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Errors during sync_db should be handled and logged."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
-    scheduler.shared_animap_client = cast(sched_module.AnimapClient, FakeAnimapClient())
-    scheduler._running = True
-
-    def _next_sync(_now: datetime) -> datetime:
-        return datetime.now(UTC)
-
-    _real_wait_for = asyncio.wait_for
-
-    async def _fast_wait(coro, *_args, **_kwargs):
-        # Only skip the stop_event sleep; let maintenance timeout work normally
-        if getattr(coro, "__qualname__", "").endswith(".wait"):
-            coro.close()
-            raise TimeoutError
-        return await _real_wait_for(coro, *_args, **_kwargs)
-
-    async def _sync_db() -> None:
-        scheduler.stop_event.set()
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(scheduler, "_get_next_1am_utc", _next_sync)
-    monkeypatch.setattr(asyncio, "wait_for", _fast_wait)
-    monkeypatch.setattr(scheduler.shared_animap_client, "sync_db", _sync_db)
-
-    await scheduler._daily_db_sync_loop()
-
-
-@pytest.mark.asyncio
-async def test_daily_db_sync_loop_handles_loop_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Unexpected errors in the loop should trigger retry sleep."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    scheduler._running = True
-
-    def _boom(_now: datetime) -> datetime:
-        scheduler._running = False
-        raise RuntimeError("boom")
-
-    async def _fast_sleep(_seconds: float) -> None:
+    async def fake_sleep(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(scheduler, "_get_next_1am_utc", _boom)
-    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(scheduler, "trigger_profile_sync", trigger_error)
+    monkeypatch.setattr(sched_module.asyncio, "sleep", fake_sleep)
 
-    await scheduler._daily_db_sync_loop()
-
-
-def test_get_profiles_for_library_provider_skips_none(tmp_path: Path) -> None:
-    """None bridge clients should be ignored when grouping profiles."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    cast(dict[str, object | None], scheduler.bridge_clients)["none"] = None
-    cast(dict[str, object | None], scheduler.bridge_clients)["good"] = FakeBridgeClient(
-        "good"
+    await scheduler._producer_loop(
+        profile_name="default",
+        name="poll",
+        interval="* * * * *",
+        request=SyncRequest(trigger=SyncTrigger.POLL),
     )
 
-    scheduler.get_profiles_for_library_provider.cache_clear()
+    scheduler.stop_event = asyncio.Event()
+    scheduler._running = True
 
-    profiles = scheduler.get_profiles_for_library_provider("lib")
-    assert profiles == ["good"]
+    async def trigger_cancel(*_args, **_kwargs) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(scheduler, "trigger_profile_sync", trigger_cancel)
+    await scheduler._producer_loop(
+        profile_name="default",
+        name="poll",
+        interval=30,
+        request=SyncRequest(trigger=SyncTrigger.POLL),
+    )
 
 
 @pytest.mark.asyncio
-async def test_scheduler_context_manager_calls_stop(tmp_path: Path) -> None:
-    """Async context manager should call stop on exit."""
-    config = FakeConfig(profiles={}, data_path=tmp_path)
-    scheduler = SchedulerClient(cast("sched_module.AnibridgeConfig", config))
-    called = {"stop": False}
+async def test_stop_cancels_background_tasks_and_pending_queue(
+    scheduler: SchedulerClient,
+) -> None:
+    scheduler._running = True
+    scheduler._producer_tasks.add(asyncio.create_task(asyncio.sleep(60)))
+    scheduler._daily_sync_task = asyncio.create_task(asyncio.sleep(60))
+    scheduler._sync_worker_task = asyncio.create_task(asyncio.sleep(60))
+    pending = scheduler._enqueue_sync(
+        profile_name="default",
+        request=SyncRequest(),
+        source="api",
+    )
 
-    async def _stop() -> None:
-        called["stop"] = True
+    await scheduler.stop()
 
-    scheduler.stop = _stop  # ty:ignore[invalid-assignment]
+    bridge = scheduler.bridge_clients.get("default")
+    assert bridge is None
+    assert isinstance(scheduler.shared_animap_client, FakeAnimapClient)
+    assert scheduler.shared_animap_client.closed is True
+    with pytest.raises(asyncio.CancelledError):
+        await pending
 
-    async with scheduler:
-        pass
 
-    assert called["stop"] is True
+@pytest.mark.asyncio
+async def test_sync_worker_completes_queued_requests(
+    scheduler: SchedulerClient,
+) -> None:
+    request = SyncRequest(trigger=SyncTrigger.WEBHOOK, source_refs=(Ref.anchor("a"),))
+    scheduler._running = True
+    worker = asyncio.create_task(scheduler._sync_worker())
+    scheduler._sync_worker_task = worker
+    try:
+        await scheduler.trigger_profile_sync("default", request=request, source="api")
+        bridge = scheduler.bridge_clients["default"]
+        assert isinstance(bridge, FakeBridge)
+        assert bridge.sync_calls == [request]
+        assert scheduler._last_sync_sources["default"] == ("api",)
+        assert scheduler._pending_sync_counts == {}
+    finally:
+        scheduler.request_shutdown()
+        await worker
+
+
+@pytest.mark.asyncio
+async def test_sync_worker_propagates_profile_errors(
+    scheduler: SchedulerClient,
+) -> None:
+    bridge = scheduler.bridge_clients["default"]
+    assert isinstance(bridge, FakeBridge)
+    bridge.sync_error = RuntimeError("sync boom")
+    scheduler._running = True
+    worker = asyncio.create_task(scheduler._sync_worker())
+    scheduler._sync_worker_task = worker
+    try:
+        with pytest.raises(RuntimeError, match="sync boom"):
+            await scheduler.trigger_profile_sync("default", source="api")
+    finally:
+        scheduler.request_shutdown()
+        await worker
+
+
+@pytest.mark.asyncio
+async def test_sync_worker_cancels_waiter_when_stopped_with_ready_queue(
+    scheduler: SchedulerClient,
+) -> None:
+    scheduler._running = True
+    future = scheduler._enqueue_sync(
+        profile_name="default",
+        request=SyncRequest(),
+        source="api",
+    )
+    scheduler.request_shutdown()
+
+    await scheduler._sync_worker()
+
+    with pytest.raises(asyncio.CancelledError):
+        await future
+
+
+@pytest.mark.asyncio
+async def test_queue_helpers_reject_coalesce_and_fail_pending(
+    scheduler: SchedulerClient,
+) -> None:
+    scheduler._sync_queue = asyncio.Queue(maxsize=1)
+    future = scheduler._enqueue_sync(
+        profile_name="default",
+        request=SyncRequest(
+            trigger=SyncTrigger.WEBHOOK,
+            source_refs=(Ref.anchor("a"),),
+        ),
+        source="one",
+    )
+    with pytest.raises(sched_module.SchedulerUnavailableError):
+        scheduler._enqueue_sync(
+            profile_name="default",
+            request=SyncRequest(),
+            source="two",
+        )
+    assert scheduler._sync_requests_rejected == 1
+
+    scheduler._fail_queued(RuntimeError("shutdown"))
+    with pytest.raises(RuntimeError, match="shutdown"):
+        await future
+    assert scheduler._pending_sync_counts == {}
+
+    scheduler._sync_queue = asyncio.Queue()
+    first = scheduler._enqueue_sync(
+        profile_name="default",
+        request=SyncRequest(
+            trigger=SyncTrigger.WEBHOOK,
+            source_refs=(Ref.anchor("a"),),
+        ),
+        source="api",
+    )
+    scheduler._enqueue_sync(
+        profile_name="default",
+        request=SyncRequest(trigger=SyncTrigger.POLL),
+        source="poll",
+    )
+    scheduler.bridge_clients["other"] = cast(BridgeClient, FakeBridge())
+    scheduler._enqueue_sync(
+        profile_name="other",
+        request=SyncRequest(trigger=SyncTrigger.MANUAL),
+        source="manual",
+    )
+    first_item = scheduler._sync_queue.get_nowait()
+    request, waiters, sources = scheduler._coalesce_profile_requests(first_item)
+
+    assert request.trigger == SyncTrigger.POLL
+    assert request.source_refs == (Ref.anchor("a"),)
+    assert request.full_scan_on_poll_fallback is True
+    assert waiters[0] is first
+    assert sources == ("api", "poll")
+    assert scheduler._pending_sync_counts == {"other": 1}
+    assert scheduler._sync_queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_trigger_all_profiles_sync_handles_empty_and_failures(
+    scheduler: SchedulerClient,
+) -> None:
+    scheduler.bridge_clients.clear()
+    await scheduler.trigger_all_profiles_sync(source="api")
+
+    good = FakeBridge()
+    bad = FakeBridge()
+    bad.sync_error = RuntimeError("bad")
+    scheduler.bridge_clients.update(
+        default=cast(BridgeClient, good),
+        broken=cast(BridgeClient, bad),
+    )
+
+    with pytest.raises(ExceptionGroup, match="profile sync triggers failed"):
+        await scheduler.trigger_all_profiles_sync(source="api")
+    assert good.sync_calls
+
+
+@pytest.mark.asyncio
+async def test_status_metrics_and_lookup_error(
+    scheduler: SchedulerClient,
+) -> None:
+    scheduler.failed_profile_errors["default"] = "bad config"
+    status = await scheduler.get_status()
+    assert status["default"]["status"]["initialization_error"] == "bad config"
+
+    metrics = await scheduler.get_runtime_metrics()
+    assert metrics["profile_count"] == 1
+    assert metrics["bridge_count"] == 1
+    assert metrics["queue_depth"] == 0
+
+    with pytest.raises(ProfileNotFoundError):
+        scheduler.get_profiles_for_source_provider("missing")
+
+
+@pytest.mark.asyncio
+async def test_database_sync_raises_backup_failures(
+    scheduler: SchedulerClient,
+) -> None:
+    bridge = scheduler.bridge_clients["default"]
+    assert isinstance(bridge, FakeBridge)
+    bridge.backup_error = RuntimeError("backup boom")
+
+    with pytest.raises(ExceptionGroup, match="daily profile backups failed"):
+        await scheduler.trigger_database_sync(source="test")
+
+
+@pytest.mark.asyncio
+async def test_database_sync_timeout_is_propagated(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def slow_sync_db() -> None:
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(scheduler.shared_animap_client, "sync_db", slow_sync_db)
+    monkeypatch.setattr(sched_module, "_MAINTENANCE_TIMEOUT", 0.01)
+
+    with pytest.raises(TimeoutError):
+        await scheduler.trigger_database_sync(source="test")
+
+
+@pytest.mark.asyncio
+async def test_daily_loop_runs_due_database_sync_once(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    scheduler._running = True
+    monkeypatch.setattr(scheduler, "_get_next_1am_utc", lambda now: now)
+
+    async def trigger_database_sync(*, source: str) -> None:
+        calls.append(source)
+        scheduler.request_shutdown()
+
+    monkeypatch.setattr(scheduler, "trigger_database_sync", trigger_database_sync)
+
+    await scheduler._daily_db_sync_loop()
+
+    assert calls == ["loop:daily_db"]
+
+
+@pytest.mark.asyncio
+async def test_daily_loop_logs_errors_then_continues(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    scheduler._running = True
+    monkeypatch.setattr(scheduler, "_get_next_1am_utc", lambda now: now)
+
+    async def trigger_database_sync(*, source: str) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError(source)
+
+    async def fake_sleep(_seconds: float) -> None:
+        scheduler.request_shutdown()
+
+    monkeypatch.setattr(scheduler, "trigger_database_sync", trigger_database_sync)
+    monkeypatch.setattr(sched_module.asyncio, "sleep", fake_sleep)
+
+    await scheduler._daily_db_sync_loop()
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_and_remove_profile(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_bridge = scheduler.bridge_clients["default"]
+    new_bridge = FakeBridge()
+    spawned: list[str] = []
+    scheduler._running = True
+
+    async def initialize_bridge(*_args, **_kwargs):
+        return cast(BridgeClient, new_bridge)
+
+    monkeypatch.setattr(scheduler, "_initialize_bridge_client", initialize_bridge)
+    monkeypatch.setattr(
+        scheduler,
+        "_start_profile_producers",
+        lambda profile_name: spawned.append(profile_name),
+    )
+
+    await scheduler.reinitialize_profile("default")
+
+    assert isinstance(old_bridge, FakeBridge)
+    assert old_bridge.closed is True
+    assert scheduler.bridge_clients["default"] is new_bridge
+    assert spawned == ["default"]
+
+    with pytest.raises(ProfileNotFoundError):
+        await scheduler.reinitialize_profile("missing")
+
+    scheduler.failed_profile_errors["default"] = "bad"
+    await scheduler.remove_profile("default")
+    assert new_bridge.closed is True
+    assert "default" not in scheduler.bridge_clients
+    assert scheduler.failed_profile_errors == {}
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_profile_wraps_initialization_errors(
+    scheduler: SchedulerClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def initialize_bridge(*_args, **_kwargs):
+        raise RuntimeError("cannot init")
+
+    monkeypatch.setattr(scheduler, "_initialize_bridge_client", initialize_bridge)
+
+    with pytest.raises(sched_module.SchedulerUnavailableError, match="cannot init"):
+        await scheduler.reinitialize_profile("default")
+    assert scheduler.failed_profile_errors == {"default": "cannot init"}
+
+
+@pytest.mark.asyncio
+async def test_context_manager_and_wait_for_completion(
+    scheduler: SchedulerClient,
+) -> None:
+    async with scheduler as entered:
+        assert entered is scheduler
+
+    assert await scheduler.wait_for_completion() is None
+    scheduler._running = True
+    waiter = asyncio.create_task(scheduler.wait_for_completion())
+    await asyncio.sleep(0)
+    scheduler.request_shutdown()
+    await waiter

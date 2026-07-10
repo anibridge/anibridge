@@ -109,11 +109,7 @@ class MediaListStatus(AniListBaseEnum):
     REPEATING = "REPEATING"
 
 
-class AniListBaseModel(
-    msgspec.Struct,
-    rename="camel",
-    kw_only=True,
-):
+class AniListBaseModel(msgspec.Struct, rename="camel", kw_only=True):
     """Base, abstract class for all AniList models to represent GraphQL objects.
 
     Provides serialization, aliasing, and GraphQL query generation utilities.
@@ -122,11 +118,7 @@ class AniListBaseModel(
     _processed_models: ClassVar[set[str]] = set()
 
     def unset_fields(self, fields: Iterable[str]) -> None:
-        """Unset specified fields to their default values.
-
-        Args:
-            fields (Iterable[str]): Field names to unset.
-        """
+        """Unset specified fields to their default values."""
         field_set = set(fields)
         for field_info in msgspec.structs.fields(type(self)):
             if field_info.name not in field_set:
@@ -139,11 +131,7 @@ class AniListBaseModel(
     @classmethod
     @cache
     def model_dump_graphql(cls) -> str:
-        """Generate GraphQL query fields for this model.
-
-        Returns:
-            str: The GraphQL query fields.
-        """
+        """Generate GraphQL query fields for this model."""
         if cls.__name__ in cls._processed_models:
             return ""
 
@@ -211,19 +199,11 @@ class MediaTitle(AniListBaseModel):
     user_preferred: str | None = None
 
     def titles(self) -> list[str]:
-        """Return a list of all the available titles.
-
-        Returns:
-            list[str]: All the available titles.
-        """
+        """Return a list of all the available titles."""
         return [getattr(self, field) for field in self.__struct_fields__ if field]
 
     def __str__(self) -> str:
-        """Return the first available title or an empty string.
-
-        Returns:
-            str: A title or an empty string.
-        """
+        """Return the first available title or an empty string."""
         return self.user_preferred or self.english or self.romaji or self.native or ""
 
 

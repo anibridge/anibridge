@@ -8,20 +8,21 @@
     import { browser } from "$app/environment";
     import { goto } from "$app/navigation";
     import { resolve } from "$app/paths";
-    import { clearCapabilitiesCache } from "$lib/components/mappings/capabilities-cache";
-    import {
-        COLUMNS_STORAGE_KEY,
-        STATIC_COLUMNS,
-        type ColumnConfig,
-    } from "$lib/components/mappings/columns";
-    import EditModal from "$lib/components/mappings/edit-modal.svelte";
-    import IncludesModal from "$lib/components/mappings/includes-modal.svelte";
-    import MappingsTable from "$lib/components/mappings/mappings-table.svelte";
-    import SearchBar from "$lib/components/mappings/tool-bar.svelte";
+    import PageHeader from "$lib/components/page-header.svelte";
     import Pagination from "$lib/components/pagination.svelte";
     import type { Mapping } from "$lib/types/api";
     import { apiFetch, isAbortError } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import { clearCapabilitiesCache } from "./_components/capabilities-cache";
+    import {
+        COLUMNS_STORAGE_KEY,
+        STATIC_COLUMNS,
+        type ColumnConfig,
+    } from "./_components/columns";
+    import EditModal from "./_components/edit-modal.svelte";
+    import IncludesModal from "./_components/includes-modal.svelte";
+    import MappingsTable from "./_components/mappings-table.svelte";
+    import SearchBar from "./_components/tool-bar.svelte";
 
     let items: Mapping[] = $state([]);
     let total = $state(0);
@@ -174,9 +175,9 @@
     function collectProviders(list: Mapping[]): string[] {
         const providers = new SvelteSet<string>();
         for (const item of list) {
-            if (item.provider) providers.add(item.provider);
+            if (item.authority) providers.add(item.authority);
             for (const edge of item.edges || []) {
-                providers.add(edge.target_provider);
+                providers.add(edge.target_authority);
             }
         }
         return Array.from(providers).sort();
@@ -196,7 +197,7 @@
         const dynamic = providers.map(
             (p) =>
                 ({
-                    id: `provider:${p}`,
+                    id: `authority:${p}`,
                     title: normalizeColumnTitle(p),
                     visible: true,
                     width: 200,
@@ -249,29 +250,25 @@
 </script>
 
 <div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div class="space-y-1 sm:flex-1">
-            <div class="flex items-center gap-2">
-                <List class="inline h-4 w-4 text-slate-300" />
-                <h2 class="text-lg font-semibold">Mappings</h2>
-            </div>
-            <p class="text-xs text-slate-400">
-                Browse and override external ID mappings
-            </p>
-        </div>
-        {#key searchBarKey}
-            <SearchBar
-                bind:query
-                bind:customOnly
-                bind:page
-                {loading}
-                onLoad={load}
-                onCancel={cancelLoad}
-                onCreate={openCreateEditor}
-                onIncludes={openIncludesEditor}
-                onSubmit={handleSearchSubmit} />
-        {/key}
-    </div>
+    <PageHeader
+        icon={List}
+        title="Mappings"
+        description="Browse and override external ID mappings">
+        {#snippet extra()}
+            {#key searchBarKey}
+                <SearchBar
+                    bind:query
+                    bind:customOnly
+                    bind:page
+                    {loading}
+                    onLoad={load}
+                    onCancel={cancelLoad}
+                    onCreate={openCreateEditor}
+                    onIncludes={openIncludesEditor}
+                    onSubmit={handleSearchSubmit} />
+            {/key}
+        {/snippet}
+    </PageHeader>
     <div
         class="relative flex h-[70vh] flex-col overflow-hidden rounded-md border border-slate-800/70 bg-slate-900/40 backdrop-blur-sm">
         <div

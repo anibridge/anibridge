@@ -16,10 +16,38 @@ export interface ProviderMediaMetadata {
     labels?: string[] | null;
 }
 
+export interface RefStepPayload {
+    axis: string;
+    value: string | number;
+}
+
+export interface RefPayload {
+    key: string;
+    path?: RefStepPayload[];
+}
+
+export interface RecordSnapshotValue {
+    state?: { native?: string | null; status?: string | null };
+    progress?: { current?: number | null; total?: number | null; unit?: string | null };
+    rating?: { value: number; scale: [number, number, number] };
+    scalar?: string | number | boolean;
+    date_value?: string;
+    datetime_value?: string;
+}
+
+export interface RecordSnapshot {
+    ref: RefPayload;
+    kind?: string;
+    surface?: string;
+    key?: string | null;
+    ids?: string[];
+    values?: Record<string, RecordSnapshotValue>;
+}
+
 // --- Mappings API ---
 export interface MappingEdge {
-    target_provider: string;
-    target_entry_id: string;
+    target_authority: string;
+    target_value: string;
     target_scope: string | null;
     source_range: string;
     destination_range?: string | null;
@@ -28,8 +56,8 @@ export interface MappingEdge {
 
 export interface Mapping {
     descriptor: string;
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope: string | null;
     edges: MappingEdge[];
     custom?: boolean;
@@ -43,8 +71,8 @@ export interface RangeInputPayload {
 }
 
 export interface TargetPayload {
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope?: string | null;
     ranges: RangeInputPayload[];
     deleted?: boolean;
@@ -73,8 +101,8 @@ export interface MappingRangeView {
 
 export interface MappingTarget {
     descriptor: string;
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope: string | null;
     origin: TargetOrigin;
     deleted?: boolean;
@@ -89,8 +117,8 @@ export interface MappingLayers {
 
 export interface MappingDetail {
     descriptor: string;
-    provider: string;
-    entry_id: string;
+    authority: string;
+    value: string;
     scope: string | null;
     layers: MappingLayers;
     targets: MappingTarget[];
@@ -111,8 +139,6 @@ export interface ListMappingsResponse {
     pages: number;
     with_anilist: boolean;
 }
-
-export type DeleteMappingResponse = OkResponse;
 
 export type FieldType = "int" | "string" | "enum";
 export type FieldOperator = "=" | ">" | ">=" | "<" | "<=" | "*" | "?" | "range" | "in";
@@ -146,27 +172,27 @@ export interface LogEntry {
 
 // --- Status / System API ---
 export interface ProfileConfig {
-    library_namespace?: string;
-    list_namespace?: string;
-    library_user?: string | null;
-    list_user?: string | null;
+    source_namespace: string;
+    target_namespace: string;
+    source_account?: string | null;
+    target_account?: string | null;
     scan_interval?: number | string | null;
     poll_interval?: number | string | null;
     scan_modes?: string[];
     full_scan?: boolean | null;
     destructive_sync?: boolean | null;
-    batch_requests?: boolean | null;
 }
 
 export interface CurrentSync {
-    state?: string;
-    started_at?: string;
-    section_index?: number;
-    section_count?: number;
-    section_title?: string | null;
-    stage?: string;
-    section_items_total?: number;
-    section_items_processed?: number;
+    state: "running" | "idle" | string;
+    started_at: string;
+    stage: string;
+    source_namespace: string;
+    target_namespace: string;
+    trigger: string;
+    scanned_items: number;
+    processed_items: number;
+    total_items?: number | null;
 }
 
 export interface ProfileRuntimeStatus {
@@ -174,6 +200,7 @@ export interface ProfileRuntimeStatus {
     last_synced?: string | null;
     current_sync?: CurrentSync | null;
     initialization_error?: string | null;
+    scheduler?: Record<string, unknown> | null;
 }
 
 export interface ProfileStatus {
@@ -183,6 +210,7 @@ export interface ProfileStatus {
 
 export interface StatusResponse {
     profiles: Record<string, ProfileStatus>;
+    scheduler?: Record<string, unknown> | null;
 }
 
 export interface SettingsProfile {
@@ -271,57 +299,68 @@ export interface RestartResponse {
 }
 
 // --- History API ---
-export interface HistoryItem {
+export interface HistoryOperation {
     id: number;
+    group_id: number;
     profile_name: string;
-    library_namespace?: string | null;
-    library_section_key?: string | null;
-    library_media_key?: string | null;
-    list_namespace?: string | null;
-    list_media_key?: string | null;
-    animap_provider?: string | null;
-    animap_id?: string | null;
-    animap_scope?: string | null;
-    media_kind?: string | null;
+    resource_kind: string;
+    action: string;
     outcome: string;
-    before_state?: Record<string, unknown> | null;
-    after_state?: Record<string, unknown> | null;
+    timestamp: string;
+    source_namespace?: string | null;
+    source_ref?: RefPayload | null;
+    target_namespace?: string | null;
+    target_ref?: RefPayload | null;
+    source_surface?: string | null;
+    target_surface?: string | null;
+    resource_key?: string | null;
+    before_state?: RecordSnapshot | null;
+    after_state?: RecordSnapshot | null;
     info?: Record<string, string> | null;
     error_message?: string | null;
     ephemeral?: boolean;
+    pinned?: boolean;
+}
+
+export interface HistoryGroup {
+    id: number;
+    run_id: number;
+    profile_name: string;
+    outcome: string;
     timestamp: string;
-    library_media?: ProviderMediaMetadata | null;
-    list_media?: ProviderMediaMetadata | null;
-    pinned_fields?: string[] | null;
+    source_namespace?: string | null;
+    source_parent_ref?: RefPayload | null;
+    target_namespace?: string | null;
+    target_parent_ref?: RefPayload | null;
+    animap_authority?: string | null;
+    animap_value?: string | null;
+    animap_scope?: string | null;
+    operation_count?: number;
+    record_count?: number;
+    event_count?: number;
+    node_count?: number;
+    error_count?: number;
+    info?: Record<string, string> | null;
+    ephemeral?: boolean;
+    source_media?: ProviderMediaMetadata | null;
+    target_media?: ProviderMediaMetadata | null;
+    operations?: HistoryOperation[];
 }
 
 export interface GetHistoryResponse {
-    items: HistoryItem[];
+    groups: HistoryGroup[];
     limit: number;
     has_more: boolean;
     next_before_id?: number | null;
-    latest_id?: number | null;
+    latest_group_id?: number | null;
     stats?: Record<string, number> | null;
-}
-
-export interface UndoResponse {
-    item: HistoryItem;
-}
-
-export interface RetryResponse {
-    ok: boolean;
-}
-
-export interface PinFieldOption {
-    value: string;
-    label: string;
+    resource_stats?: Record<string, number> | null;
 }
 
 export interface PinResponse {
     profile_name: string;
-    list_namespace: string;
-    list_media_key: string;
-    fields: string[];
+    target_namespace: string;
+    target_parent_ref: RefPayload;
     created_at: string;
     updated_at: string;
     media?: ProviderMediaMetadata | null;
@@ -329,10 +368,6 @@ export interface PinResponse {
 
 export interface PinListResponse {
     pins: PinResponse[];
-}
-
-export interface PinOptionsResponse {
-    options: PinFieldOption[];
 }
 
 export interface PinSearchResult {

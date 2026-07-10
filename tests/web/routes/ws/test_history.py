@@ -10,11 +10,26 @@ from anibridge.app.web.routes.ws import history as history_ws_module
 
 
 class _FakeHistoryWebSocket:
-    def __init__(self, *, outcome: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        outcome: str | None = None,
+        source_namespace: str | None = None,
+        target_namespace: str | None = None,
+        resource_kind: str | None = None,
+    ) -> None:
         self.accepted = False
         self.closed = False
         self.messages: list[dict] = []
-        self.query_params = {"outcome": outcome} if outcome is not None else {}
+        self.query_params = {}
+        if outcome is not None:
+            self.query_params["outcome"] = outcome
+        if source_namespace is not None:
+            self.query_params["source_namespace"] = source_namespace
+        if target_namespace is not None:
+            self.query_params["target_namespace"] = target_namespace
+        if resource_kind is not None:
+            self.query_params["resource_kind"] = resource_kind
 
     async def accept(self) -> None:
         self.accepted = True
@@ -28,12 +43,28 @@ class _FakeHistoryWebSocket:
 
 @pytest.mark.asyncio
 async def test_history_websocket_sends_latest_id_updates(monkeypatch) -> None:
-    websocket = _FakeHistoryWebSocket(outcome="synced")
+    websocket = _FakeHistoryWebSocket(
+        outcome="synced",
+        source_namespace="plex",
+        target_namespace="anilist",
+        resource_kind="record",
+    )
 
     class _Service:
-        async def get_latest_id(self, *, profile: str, outcome: str | None):
+        async def get_latest_id(
+            self,
+            *,
+            profile: str,
+            outcome: str | None,
+            source_namespace: str | None,
+            target_namespace: str | None,
+            resource_kind: str | None,
+        ):
             assert profile == "default"
             assert outcome == "synced"
+            assert source_namespace == "plex"
+            assert target_namespace == "anilist"
+            assert resource_kind == "record"
             return 42
 
     async def _disconnect(_seconds: float) -> None:
@@ -46,7 +77,14 @@ async def test_history_websocket_sends_latest_id_updates(monkeypatch) -> None:
 
     assert websocket.accepted is True
     assert websocket.messages == [
-        {"profile": "default", "outcome": "synced", "latest_id": 42}
+        {
+            "profile": "default",
+            "outcome": "synced",
+            "source_namespace": "plex",
+            "target_namespace": "anilist",
+            "resource_kind": "record",
+            "latest_group_id": 42,
+        }
     ]
 
 
@@ -55,7 +93,15 @@ async def test_history_websocket_closes_on_unexpected_errors(monkeypatch) -> Non
     websocket = _FakeHistoryWebSocket()
 
     class _Service:
-        async def get_latest_id(self, *, profile: str, outcome: str | None):
+        async def get_latest_id(
+            self,
+            *,
+            profile: str,
+            outcome: str | None,
+            source_namespace: str | None,
+            target_namespace: str | None,
+            resource_kind: str | None,
+        ):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(history_ws_module, "get_history_service", lambda: _Service())

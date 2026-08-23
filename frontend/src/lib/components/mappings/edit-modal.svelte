@@ -145,7 +145,7 @@
     function buildDescriptor(
         provider: string,
         entryId: string,
-        scope?: string | null,
+        scope: string | null | undefined = undefined,
     ): string {
         const base = `${provider}:${entryId}`;
         const cleanedScope = (scope ?? "").trim();
@@ -506,7 +506,7 @@
         return { descriptor, targets: payloadTargets };
     }
 
-    async function loadDetail(explicit?: string) {
+    async function loadDetail(explicit: string | undefined = undefined) {
         const descriptor = explicit?.trim() || descriptorFromState();
         if (!descriptor) {
             error = "Descriptor is required";

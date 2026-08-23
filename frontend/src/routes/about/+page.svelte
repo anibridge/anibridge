@@ -47,7 +47,7 @@
         return Object.entries(profiles).sort((a, b) => a[0].localeCompare(b[0]));
     }
 
-    function formatRelative(ts?: string | null): string {
+    function formatRelative(ts: string | null | undefined = undefined): string {
         if (!ts) return "—";
         const d = new Date(ts);
         const diff = Date.now() - d.getTime();
@@ -62,7 +62,7 @@
         return `${day}d ago`;
     }
 
-    function formatDateTime(ts?: string | null): string {
+    function formatDateTime(ts: string | null | undefined = undefined): string {
         if (!ts) return "—";
         try {
             return new Date(ts).toLocaleString();

@@ -111,12 +111,16 @@
         );
     }
 
-    const buildQuery = (opts?: {
-        beforeId?: number | null;
-        afterId?: number | null;
-        includeStats?: boolean;
-        limitOverride?: number;
-    }) => {
+    const buildQuery = (
+        opts:
+            | {
+                  beforeId?: number | null;
+                  afterId?: number | null;
+                  includeStats?: boolean;
+                  limitOverride?: number;
+              }
+            | undefined = undefined,
+    ) => {
         const u = new SvelteURLSearchParams({
             limit: String(opts?.limitOverride ?? limit),
         });

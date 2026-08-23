@@ -28,18 +28,18 @@
         return Object.entries(profiles).sort((a, b) => a[0].localeCompare(b[0]));
     }
 
-    function isProfileRunning(p?: ProfileStatus): boolean {
+    function isProfileRunning(p: ProfileStatus | undefined = undefined): boolean {
         return p?.status?.current_sync?.state === "running";
     }
 
-    function getProfileInitError(p?: ProfileStatus): string | null {
+    function getProfileInitError(p: ProfileStatus | undefined = undefined): string | null {
         const msg = p?.status?.initialization_error;
         if (!msg) return null;
         const trimmed = msg.trim();
         return trimmed.length > 0 ? trimmed : null;
     }
 
-    function isProfileDisabled(p?: ProfileStatus): boolean {
+    function isProfileDisabled(p: ProfileStatus | undefined = undefined): boolean {
         return getProfileInitError(p) !== null;
     }
 
@@ -61,7 +61,7 @@
         return false;
     }
 
-    function formatTimeAgo(ts?: string) {
+    function formatTimeAgo(ts: string | undefined = undefined) {
         if (!ts) return "—";
         const d = new Date(ts);
         const diff = Date.now() - d.getTime();

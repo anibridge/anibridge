@@ -59,7 +59,7 @@
         goto(target, { replaceState, keepFocus: true, noScroll: true });
     }
 
-    async function load(trigger?: Event | { type: string }) {
+    async function load(trigger: Event | { type: string } | undefined = undefined) {
         if (
             trigger &&
             "preventDefault" in trigger &&

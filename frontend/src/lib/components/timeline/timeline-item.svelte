@@ -119,7 +119,7 @@
 
     const ui = () => ensureDiffUi?.(item.id) ?? fallbackDiffUi;
 
-    function formatTimestamp(raw?: string): string | null {
+    function formatTimestamp(raw: string | undefined = undefined): string | null {
         if (!raw) return null;
         const normalized = raw.endsWith("Z") || raw.endsWith("z") ? raw : `${raw}Z`;
         const value = new Date(normalized);

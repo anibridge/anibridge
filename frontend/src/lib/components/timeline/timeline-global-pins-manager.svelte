@@ -41,7 +41,10 @@
     type RowKey = string;
     const ROW_KEY_SEPARATOR = "::";
 
-    const makeRowKey = (namespace?: string | null, mediaKey?: string | null) => {
+    const makeRowKey = (
+        namespace: string | null | undefined = undefined,
+        mediaKey: string | null | undefined = undefined,
+    ) => {
         if (!namespace || !mediaKey) return null;
         return `${namespace}${ROW_KEY_SEPARATOR}${mediaKey}`;
     };

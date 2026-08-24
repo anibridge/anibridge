@@ -66,8 +66,7 @@
     );
     const globalSettingsSchema = $derived(
         (topLevelSchemaProperties.global_config as
-            | Record<string, unknown>
-            | undefined) ?? null,
+            Record<string, unknown> | undefined) ?? null,
     );
     const profilesSchema = $derived(
         (topLevelSchemaProperties.profiles as Record<string, unknown> | undefined) ??

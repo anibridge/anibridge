@@ -32,7 +32,9 @@
         return p?.status?.current_sync?.state === "running";
     }
 
-    function getProfileInitError(p: ProfileStatus | undefined = undefined): string | null {
+    function getProfileInitError(
+        p: ProfileStatus | undefined = undefined,
+    ): string | null {
         const msg = p?.status?.initialization_error;
         if (!msg) return null;
         const trimmed = msg.trim();

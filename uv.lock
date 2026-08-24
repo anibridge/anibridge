@@ -302,7 +302,7 @@ dependencies = [
 [[package]]
 name = "anibridge-utils"
 version = "0.2.2"
-source = { git = "https://github.com/anibridge/anibridge-utils.git?tag=main#dd66277ef915a61b036f8aa0fd47e1b7d654e344" }
+source = { git = "https://github.com/anibridge/anibridge-utils.git?tag=main#e9af6e969670e8f9a82fd7a6cc18ada8d86fb364" }
 dependencies = [
     { name = "cachetools" },
     { name = "diskcache" },

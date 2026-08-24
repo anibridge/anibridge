@@ -3,14 +3,16 @@
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from anibridge.library import (
     HistoryEntry,
     LibraryEpisode,
+    LibraryMedia,
     LibraryMovie,
     LibrarySeason,
+    LibrarySection,
     LibraryShow,
     MediaKind,
 )
@@ -173,9 +175,9 @@ class FakeLibraryMediaBase:
         """Return the watch history entries for this item."""
         return list(self._history)
 
-    def media(self) -> FakeLibraryMediaBase:
+    def media(self) -> LibraryMedia[Any]:
         """Return a provider-native media object."""
-        return self
+        return cast(LibraryMedia[Any], self)
 
     @property
     def review(self):
@@ -190,9 +192,9 @@ class FakeLibraryMediaBase:
         """Return mapping descriptors for this item."""
         return list(self._mapping_descriptors or [])
 
-    def section(self) -> FakeSection:
+    def section(self) -> LibrarySection[Any]:
         """Return the section this item belongs to."""
-        return self._section
+        return cast(LibrarySection[Any], self._section)
 
 
 class FakeLibraryMovie(FakeLibraryMediaBase, LibraryMovie):

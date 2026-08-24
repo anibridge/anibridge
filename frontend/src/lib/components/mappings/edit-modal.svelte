@@ -100,9 +100,7 @@
 
     type EntryFieldKey = "provider" | "entry_id" | "scope";
     type EntryPlaceholderKey =
-        | "provider_placeholder"
-        | "entry_id_placeholder"
-        | "scope_placeholder";
+        "provider_placeholder" | "entry_id_placeholder" | "scope_placeholder";
 
     type EntryField = {
         key: EntryFieldKey;

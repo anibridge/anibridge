@@ -466,7 +466,7 @@
                 </div>
                 <div
                     bind:this={liveScroller}
-                    class="scrollbar-thin flex-1 overflow-y-auto p-1 font-mono text-[11px] leading-normal"
+                    class="flex-1 scrollbar-thin overflow-y-auto p-1 font-mono text-[11px] leading-normal"
                     class:overflow-x-auto={!wrap}
                     class:overflow-x-hidden={wrap}
                     style="touch-action: auto;">
@@ -625,7 +625,7 @@
                     <div class="flex min-w-0 flex-1 flex-col">
                         <div
                             bind:this={historyScroller}
-                            class="scrollbar-thin min-w-0 flex-1 overflow-y-auto p-1 font-mono text-[11px] leading-normal"
+                            class="min-w-0 flex-1 scrollbar-thin overflow-y-auto p-1 font-mono text-[11px] leading-normal"
                             class:overflow-x-auto={!wrap}
                             class:overflow-x-hidden={wrap}
                             style="touch-action: auto;">

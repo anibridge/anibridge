@@ -300,7 +300,7 @@
                             {#if p.status?.last_synced}
                                 <span
                                     title={new Date(
-                                        p.status.last_synced + "Z",
+                                        p.status.last_synced,
                                     ).toLocaleString()}
                                     >Last sync · {formatTimeAgo(
                                         p.status.last_synced,

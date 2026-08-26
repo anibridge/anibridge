@@ -810,6 +810,7 @@ async def test_batch_sync_failure_raises(stub_client: StubSyncClient, sync_db) -
         await stub_client.batch_sync()
 
     assert stub_client._pending_updates == []
+    assert stub_client.sync_stats.is_complete is False
 
 
 def test_render_diff_includes_changes(stub_client: StubSyncClient) -> None:
@@ -876,6 +877,56 @@ async def test_batch_sync_success(stub_client: StubSyncClient, sync_db) -> None:
 
     assert provider.batch_updates
     assert stub_client._pending_updates == []
+    assert stub_client.sync_stats.is_complete is True
+
+
+@pytest.mark.asyncio
+async def test_batch_sync_marks_omitted_updates_failed(
+    stub_client: StubSyncClient, sync_db
+) -> None:
+    """Entries omitted from a provider batch response should remain retryable."""
+    provider = cast(FakeListProvider, stub_client.list_provider)
+    entries = [
+        FakeListEntry(
+            provider=provider,
+            key=key,
+            title=f"Movie {key}",
+            media_type=ListMediaType.MOVIE,
+            total_units=1,
+        )
+        for key in ("700", "701")
+    ]
+    updates = []
+    for entry in entries:
+        entry.status = ListStatus.CURRENT
+        before = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
+        entry.progress = 1
+        after = EntrySnapshot.from_entry(cast(ListEntryProtocol, entry))
+        updates.append(
+            BatchUpdate(
+                item=make_movie(key=f"movie-{entry.media().key}"),
+                child=make_movie(key=f"movie-{entry.media().key}"),
+                grandchildren=(),
+                before=before,
+                after=after,
+                entry=cast(ListEntryProtocol, entry),
+                source_entry=cast(ListEntryProtocol, entry),
+                list_media_key=entry.media().key,
+            )
+        )
+    stub_client._pending_updates = updates
+
+    async def _return_first(_entries):
+        return entries[:1]
+
+    stub_client.list_provider.update_entries_batch = (  # ty:ignore[invalid-assignment]
+        _return_first
+    )
+
+    await stub_client.batch_sync()
+
+    assert stub_client.sync_stats.failed == 1
+    assert stub_client.sync_stats.is_complete is False
 
 
 @pytest.mark.asyncio

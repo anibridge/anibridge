@@ -22,7 +22,7 @@ from anibridge.app.core.animap import AnimapClient
 from anibridge.app.core.providers import build_library_provider, build_list_provider
 from anibridge.app.core.sync.movie import MovieSyncClient
 from anibridge.app.core.sync.show import ShowSyncClient
-from anibridge.app.core.sync.stats import SyncProgress, SyncStats
+from anibridge.app.core.sync.stats import ItemIdentifier, SyncProgress, SyncStats
 from anibridge.app.exceptions import MediaTypeError
 from anibridge.app.logging import get_logger
 from anibridge.app.models.db.housekeeping import Housekeeping
@@ -375,7 +375,14 @@ class BridgeClient:
             sync_completion_time = datetime.now(UTC)
             duration = sync_completion_time - sync_start_time
 
-            self._set_last_synced(sync_start_time)
+            if sync_stats.is_complete:
+                self._set_last_synced(sync_start_time)
+            else:
+                log.warning(
+                    "[%s] Sync completed with unresolved work; preserving the "
+                    "previous poll cursor",
+                    self.profile_name,
+                )
 
             log.info(
                 "[%s] Sync completed: %s synced, %s deleted, %s skipped, %s not found, "
@@ -586,6 +593,9 @@ class BridgeClient:
                 log.exception(
                     "[%s] Item sync error details",
                     self.profile_name,
+                )
+                sync_client.sync_stats.track_item(
+                    ItemIdentifier.from_item(item), SyncOutcome.FAILED
                 )
 
         try:

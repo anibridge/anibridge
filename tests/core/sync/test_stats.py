@@ -159,6 +159,29 @@ def test_sync_stats_not_found_and_total_processed() -> None:
 
     assert stats.not_found == 1
     assert stats.total_processed == 2
+    assert stats.is_complete is False
+
+
+def test_sync_stats_not_found_is_complete() -> None:
+    """A resolved missing mapping should not keep a poll cursor pending."""
+    stats = SyncStats()
+    stats.track_item(
+        ItemIdentifier(key="nf", media_kind=MediaKind.MOVIE, repr="Missing"),
+        SyncOutcome.NOT_FOUND,
+    )
+
+    assert stats.is_complete is True
+
+
+def test_sync_stats_pending_is_incomplete() -> None:
+    """Pending work should prevent a poll cursor from advancing."""
+    stats = SyncStats()
+    stats.track_item(
+        ItemIdentifier(key="pending", media_kind=MediaKind.EPISODE, repr="Pending"),
+        SyncOutcome.PENDING,
+    )
+
+    assert stats.is_complete is False
 
 
 def test_sync_stats_coverage_handles_no_grandchildren() -> None:

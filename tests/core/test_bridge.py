@@ -41,6 +41,11 @@ class FakeMedia:
     title: str
     media_kind: Any
 
+    @property
+    def key(self) -> str:
+        """Return a stable media identifier."""
+        return self.title
+
 
 class FakeLibraryProvider:
     """Library provider stub that returns preconfigured sections/items."""
@@ -172,6 +177,13 @@ class FailingSyncClient(FakeSyncClient):
         if self._prefetch_error is not None:
             raise self._prefetch_error
         await super().prefetch_entries(items)
+
+
+class ItemFailingSyncClient(FakeSyncClient):
+    """Sync client variant that fails while processing an item."""
+
+    async def process_media(self, item: FakeMedia) -> None:
+        raise RuntimeError(f"failed to process {item.title}")
 
 
 @pytest.fixture
@@ -845,6 +857,42 @@ async def test_sync_updates_last_synced_and_progress(
 
     assert client.last_synced is not None
     assert client.current_sync is None
+
+
+@pytest.mark.asyncio
+async def test_sync_preserves_last_synced_when_item_fails(
+    in_memory_db, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Caught item failures should leave the previous poll cursor unchanged."""
+    movie_section = FakeSection("Movies", bridge_module.MediaKind.MOVIE)
+    provider = FakeLibraryProvider(
+        sections=[movie_section],
+        items_by_section={
+            "Movies": [FakeMedia("Movie", bridge_module.MediaKind.MOVIE)]
+        },
+    )
+    list_provider = FakeListProvider(backup_payload="")
+    movie_sync = ItemFailingSyncClient()
+
+    monkeypatch.setattr(bridge_module, "MovieSyncClient", lambda **_: movie_sync)
+    monkeypatch.setattr(
+        bridge_module, "ShowSyncClient", lambda **_: ItemFailingSyncClient()
+    )
+
+    client = _make_bridge_client(
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        provider=provider,
+        list_provider=list_provider,
+    )
+    previous_cursor = datetime(2025, 1, 1, tzinfo=UTC)
+    client._set_last_synced(previous_cursor)
+
+    await client.sync(poll=True)
+
+    assert movie_sync.sync_stats.is_complete is False
+    assert client.last_synced == previous_cursor
+    assert client._get_last_synced() == previous_cursor
 
 
 @pytest.mark.asyncio

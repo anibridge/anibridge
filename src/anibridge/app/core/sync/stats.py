@@ -252,6 +252,14 @@ class SyncStats(msgspec.Struct):
         return self.count_items_by_outcome()
 
     @property
+    def is_complete(self) -> bool:
+        """Whether all tracked work reached a resolved, non-failing outcome."""
+        incomplete_outcomes = {SyncOutcome.FAILED, SyncOutcome.PENDING}
+        return not any(
+            outcome in incomplete_outcomes for outcome in self._item_outcomes.values()
+        )
+
+    @property
     def coverage(self) -> float:
         """Percentage of grandchild items that were successfully processed."""
         total = self.count_grandchild_items_by_outcome()

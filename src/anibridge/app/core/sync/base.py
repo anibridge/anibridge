@@ -763,6 +763,17 @@ class BaseSyncClient[
         after_fields = msgspec.structs.asdict(plan.after)
         return self._format_diff(diff_snapshots(plan.before, plan.after, after_fields))
 
+    def _track_batch_outcome(
+        self,
+        update: BatchUpdate[ParentMediaT, ChildMediaT],
+        outcome: SyncOutcome,
+    ) -> None:
+        """Reconcile queued optimistic outcomes with the provider batch result."""
+        self.sync_stats.track_items(
+            ItemIdentifier.from_items(update.grandchildren), outcome
+        )
+        self.sync_stats.track_item(ItemIdentifier.from_item(update.item), outcome)
+
     async def batch_sync(self) -> None:
         """Flush queued updates to the list provider.
 
@@ -811,18 +822,22 @@ class BaseSyncClient[
                 [u.entry for u in self._pending_updates]
             )
             updated_keys = {e.media().key for e in updated if e is not None}
+            failed_updates: list[BatchUpdate[ParentMediaT, ChildMediaT]] = []
             for update in self._pending_updates:
                 outcome = (
                     SyncOutcome.SYNCED
                     if update.after.media_key in updated_keys
                     else SyncOutcome.FAILED
                 )
+                self._track_batch_outcome(update, outcome)
                 if outcome == SyncOutcome.SYNCED:
                     self._cache.apply_planned_update(
                         source_entry=update.source_entry,
                         planned_entry=update.entry,
                         fields=self._sync_field_names,
                     )
+                else:
+                    failed_updates.append(update)
                 await self._history.create_sync_history(
                     item=update.item,
                     child_item=update.child,
@@ -835,6 +850,9 @@ class BaseSyncClient[
                     ephemeral=self.dry_run,
                 )
 
+            for update in failed_updates:
+                self._track_batch_outcome(update, SyncOutcome.FAILED)
+
             log.success(
                 "[%s] Batch sync completed for %s items with %s failures",
                 self.profile_name,
@@ -845,6 +863,7 @@ class BaseSyncClient[
             log.error("Batch sync failed: %s", exc)
             log.exception("Batch sync error details")
             for update in self._pending_updates:
+                self._track_batch_outcome(update, SyncOutcome.FAILED)
                 await self._history.create_sync_history(
                     item=update.item,
                     child_item=update.child,

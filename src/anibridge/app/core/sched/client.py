@@ -2,9 +2,9 @@
 
 import asyncio
 import contextlib
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 import msgspec
 from anibridge.utils.cache import lru_cache
@@ -25,6 +25,7 @@ __all__ = ["SchedulerClient"]
 log = get_logger(__name__)
 
 _MAINTENANCE_TIMEOUT: float = 3600
+MaintenanceResultT = TypeVar("MaintenanceResultT")
 
 
 class SchedulerClient:
@@ -428,6 +429,25 @@ class SchedulerClient:
             "coordinator": self._sync_coordinator.get_metrics(),
         }
 
+    async def run_maintenance(
+        self,
+        work: Callable[[], Awaitable[MaintenanceResultT]],
+        *,
+        source: str,
+        timeout_: float | None = _MAINTENANCE_TIMEOUT,
+    ) -> MaintenanceResultT:
+        """Run work exclusively against profile synchronization."""
+        log.info("Starting maintenance (source=%s)", source)
+        try:
+            return await self._sync_coordinator.run_maintenance(work, timeout_=timeout_)
+        except TimeoutError:
+            log.error(
+                "Maintenance timed out after %s seconds; lock released (source=%s)",
+                timeout_,
+                source,
+            )
+            raise
+
     async def trigger_database_sync(self, source: str = "manual:database") -> None:
         """Trigger a globally coordinated database sync and daily profile backups."""
 
@@ -463,18 +483,7 @@ class SchedulerClient:
                 )
 
         log.info("Starting database sync (source=%s)", source)
-        try:
-            await self._sync_coordinator.run_maintenance(
-                _sync_and_backup, timeout_=_MAINTENANCE_TIMEOUT
-            )
-        except TimeoutError:
-            log.error(
-                "Database sync timed out after %d seconds; "
-                "maintenance lock released (source=%s)",
-                _MAINTENANCE_TIMEOUT,
-                source,
-            )
-            raise
+        await self.run_maintenance(_sync_and_backup, source=source)
         release_memory()
 
     def _get_next_1am_utc(self, now: datetime) -> datetime:

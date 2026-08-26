@@ -171,6 +171,12 @@ class DummyBridge(SimpleNamespace):
 class DummyScheduler(SimpleNamespace):
     """Scheduler test double for retry-item scheduling."""
 
+    async def run_maintenance(self, work, *, source: str, timeout_=None):
+        """Execute maintenance immediately while recording its source."""
+        del timeout_
+        self.maintenance_sources.append(source)
+        return await work()
+
     async def trigger_profile_sync(self, profile: str, **kwargs):
         self.calls.append({"profile": profile, **kwargs})
 
@@ -185,7 +191,9 @@ def history_env(monkeypatch: pytest.MonkeyPatch):
         library_provider=library_provider,
         profile_config=SimpleNamespace(dry_run=False, destructive_sync=False),
     )
-    scheduler = SimpleNamespace(bridge_clients={"profile": bridge})
+    scheduler = DummyScheduler(
+        bridge_clients={"profile": bridge}, calls=[], maintenance_sources=[]
+    )
     state = get_app_state()
     state.scheduler = cast(Any, scheduler)
     yield SimpleNamespace(
@@ -414,6 +422,9 @@ async def test_history_service_undo_item_records_info(history_env):
     assert item.info.get("source_history_id") == str(row_id)
     assert item.info.get("source_outcome") == SyncOutcome.SYNCED.value
     assert history_env.list_provider.deleted_entries == ["lst1"]
+    assert history_env.scheduler.maintenance_sources == [
+        f"history_undo:profile:{row_id}"
+    ]
 
 
 @pytest.mark.asyncio

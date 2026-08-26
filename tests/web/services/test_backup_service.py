@@ -57,6 +57,12 @@ class DummyScheduler(SimpleNamespace):
     global_config: Any
     failed_profile_errors: dict[str, str]
 
+    async def run_maintenance(self, work, *, source: str, timeout_=None):
+        """Execute maintenance immediately while recording its source."""
+        del timeout_
+        self.maintenance_sources.append(source)
+        return await work()
+
 
 @pytest.fixture()
 def configured_scheduler(tmp_path: Path):
@@ -76,6 +82,7 @@ def configured_scheduler(tmp_path: Path):
             },
         ),
         failed_profile_errors={},
+        maintenance_sources=[],
     )
     state = get_app_state()
     state.scheduler = cast(Any, scheduler)
@@ -235,7 +242,7 @@ async def test_errored_profile_restore_is_blocked(configured_scheduler):
 @pytest.mark.asyncio
 async def test_restore_backup_success(configured_scheduler):
     """Restoring a valid backup should delegate raw JSON to the list provider."""
-    tmp_path, provider, _scheduler = configured_scheduler
+    tmp_path, provider, scheduler = configured_scheduler
     service = BackupService()
     backup_name = "anibridge_primary_alist_20240303030303.json"
     _write_backup(tmp_path, backup_name, [{"key": "1"}])
@@ -243,6 +250,7 @@ async def test_restore_backup_success(configured_scheduler):
     await service.restore_backup("primary", backup_name)
 
     assert provider._restored == []
+    assert scheduler.maintenance_sources == ["backup_restore:primary"]
 
 
 @pytest.mark.asyncio

@@ -710,6 +710,9 @@ class HistoryService:
             item_id,
             profile,
         )
+        scheduler = get_app_state().scheduler
+        if not scheduler:
+            raise SchedulerNotInitializedError("Scheduler not available")
         bridge = get_bridge(profile)
         list_provider = bridge.list_provider
 
@@ -764,42 +767,48 @@ class HistoryService:
                 "sync is disabled"
             )
 
-        if before_snapshot is None:
-            log.success(
-                "Deleting list entry %s as part of undo",
-                row.list_media_key,
-            )
-            if bridge.profile_config.dry_run:
-                log.info(
-                    "Dry run enabled; skipping deletion of list entry %s",
+        async def _apply_provider_undo() -> None:
+            if before_snapshot is None:
+                log.success(
+                    "Deleting list entry %s as part of undo",
                     row.list_media_key,
                 )
+                if bridge.profile_config.dry_run:
+                    log.info(
+                        "Dry run enabled; skipping deletion of list entry %s",
+                        row.list_media_key,
+                    )
+                else:
+                    await list_provider.delete_entry(row.list_media_key)
             else:
-                await list_provider.delete_entry(row.list_media_key)
-        else:
-            log.success(
-                "Restoring list entry %s to previous state",
-                before_snapshot.media_key,
-            )
-            if bridge.profile_config.dry_run:
-                log.info(
-                    "Dry run enabled; skipping restoration of list entry %s",
+                log.success(
+                    "Restoring list entry %s to previous state",
                     before_snapshot.media_key,
                 )
-            else:
-                entry = await list_provider.get_entry(before_snapshot.media_key)
-                if entry is None:
-                    raise HistoryItemNotFoundError(
-                        "List entry no longer exists on the provider"
+                if bridge.profile_config.dry_run:
+                    log.info(
+                        "Dry run enabled; skipping restoration of list entry %s",
+                        before_snapshot.media_key,
                     )
-                entry.status = before_snapshot.status
-                entry.progress = before_snapshot.progress
-                entry.repeats = before_snapshot.repeats
-                entry.review = before_snapshot.review
-                entry.user_rating = before_snapshot.user_rating
-                entry.started_at = before_snapshot.started_at
-                entry.finished_at = before_snapshot.finished_at
-                await list_provider.update_entry(before_snapshot.media_key, entry)
+                else:
+                    entry = await list_provider.get_entry(before_snapshot.media_key)
+                    if entry is None:
+                        raise HistoryItemNotFoundError(
+                            "List entry no longer exists on the provider"
+                        )
+                    entry.status = before_snapshot.status
+                    entry.progress = before_snapshot.progress
+                    entry.repeats = before_snapshot.repeats
+                    entry.review = before_snapshot.review
+                    entry.user_rating = before_snapshot.user_rating
+                    entry.started_at = before_snapshot.started_at
+                    entry.finished_at = before_snapshot.finished_at
+                    await list_provider.update_entry(before_snapshot.media_key, entry)
+
+        await scheduler.run_maintenance(
+            _apply_provider_undo,
+            source=f"history_undo:{profile}:{item_id}",
+        )
 
         with db() as ctx:
             source_info = {

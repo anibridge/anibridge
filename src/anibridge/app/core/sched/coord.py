@@ -2,7 +2,9 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TypeVar
+
+MaintenanceResultT = TypeVar("MaintenanceResultT")
 
 
 class GlobalSyncCoordinator:
@@ -39,9 +41,9 @@ class GlobalSyncCoordinator:
 
     async def run_maintenance(
         self,
-        work: Callable[[], Awaitable[None]],
+        work: Callable[[], Awaitable[MaintenanceResultT]],
         timeout_: float | None = None,
-    ) -> None:
+    ) -> MaintenanceResultT:
         """Execute maintenance work with exclusive access against profile syncs.
 
         Args:
@@ -66,9 +68,8 @@ class GlobalSyncCoordinator:
 
         try:
             if timeout_ is not None:
-                await asyncio.wait_for(work(), timeout=timeout_)
-            else:
-                await work()
+                return await asyncio.wait_for(work(), timeout=timeout_)
+            return await work()
         finally:
             self._maintenance_active = False
             self._maintenance_started_at = None

@@ -732,6 +732,54 @@ async def test_trigger_database_sync_runs_refresh(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_maintenance_returns_work_result(tmp_path: Path) -> None:
+    """The public maintenance wrapper should preserve work return values."""
+    config = FakeConfig(profiles={}, data_path=tmp_path)
+    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
+
+    async def _work() -> str:
+        return "completed"
+
+    result = await scheduler.run_maintenance(
+        _work,
+        source="test:maintenance",
+        timeout_=None,
+    )
+
+    assert result == "completed"
+    metrics = await scheduler.get_runtime_metrics()
+    assert metrics["coordinator"]["maintenance_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_maintenance_waits_for_active_profile_sync(tmp_path: Path) -> None:
+    """Maintenance should not overlap an active profile synchronization."""
+    config = FakeConfig(profiles={}, data_path=tmp_path)
+    scheduler = SchedulerClient(cast(sched_module.AnibridgeConfig, config))
+    work_started = asyncio.Event()
+
+    async def _work() -> None:
+        work_started.set()
+
+    await scheduler._sync_coordinator.acquire_profile_slot("profile")
+    maintenance_task = asyncio.create_task(
+        scheduler.run_maintenance(
+            _work,
+            source="test:contention",
+            timeout_=None,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert work_started.is_set() is False
+
+    scheduler._sync_coordinator.release_profile_slot("profile")
+    await maintenance_task
+
+    assert work_started.is_set() is True
+
+
+@pytest.mark.asyncio
 async def test_scheduler_runtime_metrics_include_coordinator(tmp_path: Path) -> None:
     """Scheduler runtime metrics should include global coordinator counters."""
     config = FakeConfig(profiles={}, data_path=tmp_path)

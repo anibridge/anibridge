@@ -244,8 +244,15 @@ class BackupService:
         path = self._resolve_backup_path(bdir, filename)
 
         raw_backup = path.read_text(encoding="utf-8")
-        try:
+
+        async def _restore() -> None:
             await bridge.list_provider.restore_list(raw_backup)
+
+        try:
+            await scheduler.run_maintenance(
+                _restore,
+                source=f"backup_restore:{profile}",
+            )
         except NotImplementedError as exc:
             raise BackupParseError(
                 "List provider does not support backup restoration"

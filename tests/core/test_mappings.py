@@ -16,6 +16,30 @@ def _make_client(tmp_path: Path) -> MappingsClient:
     return MappingsClient(data_path=tmp_path, upstream_url=None)
 
 
+@pytest.mark.asyncio
+async def test_get_session_uses_bounded_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mapping requests should bound connect, read, and total wait time."""
+    captured: dict[str, Any] = {}
+
+    class FakeSession:
+        closed = False
+
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(mappings_module.aiohttp, "ClientSession", FakeSession)
+    client = _make_client(tmp_path)
+
+    await client._get_session()
+
+    timeout = cast(aiohttp.ClientTimeout, captured["timeout"])
+    assert timeout.total == 60
+    assert timeout.connect == 10
+    assert timeout.sock_read == 30
+
+
 def test_deep_merge_merges_descriptor_targets(tmp_path: Path) -> None:
     """Deep merging of mappings combines descriptor targets correctly."""
     client = _make_client(tmp_path)
@@ -207,17 +231,20 @@ async def test_load_mappings_file_missing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [aiohttp.ClientError, TimeoutError])
 async def test_load_mappings_url_retries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
 ) -> None:
-    """URL load should retry on client errors and return empty on failure."""
+    """URL load should exhaust retryable failures and mark the snapshot incomplete."""
     client = _make_client(tmp_path)
     calls = {"count": 0}
 
     class FakeSession:
         def get(self, _url: str):
             calls["count"] += 1
-            raise aiohttp.ClientError("boom")
+            raise error_type("boom")
 
     async def _get_session():
         return FakeSession()

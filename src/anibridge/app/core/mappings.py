@@ -22,6 +22,8 @@ log = get_logger(__name__)
 
 type AnimapDict = dict[str, dict[str, Any]]
 
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
+
 
 class MappingsClient:
     """Load mappings from files or URLs and merge them together."""
@@ -59,7 +61,10 @@ class MappingsClient:
                 "Content-Type": "application/json",
                 "User-Agent": f"AniBridge/{__version__}",
             }
-            self._session = aiohttp.ClientSession(headers=headers)
+            self._session = aiohttp.ClientSession(
+                headers=headers,
+                timeout=_HTTP_TIMEOUT,
+            )
         return self._session
 
     async def close(self):

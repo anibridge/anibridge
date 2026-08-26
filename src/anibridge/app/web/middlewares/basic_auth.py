@@ -25,7 +25,7 @@ log = get_logger(__name__)
 
 
 class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
-    """Litestar authentication middleware that enforces HTTP Basic Authentication."""
+    """Enforce Basic Authentication for HTTP and WebSocket connections."""
 
     EXEMPT_PATHS: ClassVar[tuple[str, ...]] = (
         r"^/healthz/?$",
@@ -43,7 +43,9 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
     ) -> None:
         """Initialize the BasicAuthMiddleware."""
         super().__init__(
-            app=app, exclude=list(self.EXEMPT_PATHS), scopes={ScopeType.HTTP}
+            app=app,
+            exclude=list(self.EXEMPT_PATHS),
+            scopes={ScopeType.HTTP, ScopeType.WEBSOCKET},
         )
         self.username = username
         self.password = password
@@ -142,7 +144,7 @@ class BasicAuthMiddleware(AbstractAuthenticationMiddleware):
     async def authenticate_request(
         self, connection: ASGIConnection
     ) -> AuthenticationResult:
-        """Authenticate an HTTP request using Basic authentication credentials."""
+        """Authenticate a connection using Basic authentication credentials."""
         credentials = self._extract_credentials(connection.scope)
         if credentials:
             username, password = credentials

@@ -9,6 +9,7 @@ import pytest
 from litestar.app import Litestar
 from litestar.connection.request import Request
 from litestar.connection.websocket import WebSocket
+from litestar.exceptions.http_exceptions import NotAuthorizedException
 from litestar.handlers.http_handlers.decorators import get
 from litestar.handlers.websocket_handlers.route_handler import websocket
 from litestar.middleware.base import DefineMiddleware
@@ -325,8 +326,8 @@ def test_basic_auth_load_htpasswd_handles_cache_and_errors(
 
 
 @pytest.mark.asyncio
-async def test_basic_auth_middleware_passes_through_non_http() -> None:
-    """Non-HTTP scopes should be forwarded unchanged."""
+async def test_basic_auth_middleware_protects_websockets() -> None:
+    """WebSocket connections should require and expose valid credentials."""
     called = False
 
     async def app(scope, receive, send) -> None:
@@ -339,10 +340,19 @@ async def test_basic_auth_middleware_passes_through_non_http() -> None:
     async def _middleware_send(message) -> None:
         pass
 
-    middleware = BasicAuthMiddleware(app)
-    await middleware(_make_websocket_scope(), _middleware_receive, _middleware_send)
+    middleware = BasicAuthMiddleware(app, username="admin", password="secret")
+
+    with pytest.raises(NotAuthorizedException):
+        await middleware(_make_websocket_scope(), _middleware_receive, _middleware_send)
+
+    scope = _make_websocket_scope()
+    authorization = _basic_auth_header("admin", "secret")["Authorization"]
+    scope["headers"] = [(b"authorization", authorization.encode())]
+    await middleware(scope, _middleware_receive, _middleware_send)
 
     assert called is True
+    assert scope["user"] == "admin"
+    assert scope["auth"] == "basic"
 
 
 def test_create_app_registers_basic_auth_middleware_when_configured(

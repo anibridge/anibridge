@@ -223,7 +223,7 @@ def create_app(scheduler: SchedulerClient | None = None) -> Litestar:
                 realm=config.web.basic_auth.realm,
             )
         )
-        log.info("HTTP Basic Authentication enabled for web UI")
+        log.info("Basic Authentication enabled for web UI and WebSockets")
 
     route_handlers: list[ControllerRouterHandler] = [
         api_router,

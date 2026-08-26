@@ -30,8 +30,6 @@ _DEFAULT_LIBRARY_CLASSES_BY_NS: dict[str, str] = {
 _DEFAULT_LIST_CLASSES_BY_NS: dict[str, str] = {
     "anilist": f"{_ROOT_LIST_PACKAGE}.anilist.AnilistListProvider",
     "mal": f"{_ROOT_LIST_PACKAGE}.mal.MalListProvider",
-    "simkl": f"{_ROOT_LIST_PACKAGE}.simkl.SimklListProvider",
-    "trakt": f"{_ROOT_LIST_PACKAGE}.trakt.TraktListProvider",
 }
 _LOADED_CLASSES: set[str] = set()
 

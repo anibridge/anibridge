@@ -121,8 +121,6 @@ dependencies = [
     { name = "anibridge-list-base" },
     { name = "anibridge-mal-provider" },
     { name = "anibridge-plex-provider" },
-    { name = "anibridge-simkl-provider" },
-    { name = "anibridge-trakt-provider" },
     { name = "anibridge-utils" },
     { name = "bcrypt" },
     { name = "colorama" },
@@ -162,8 +160,6 @@ requires-dist = [
     { name = "anibridge-list-base", git = "https://github.com/anibridge/anibridge-list-base.git?tag=main" },
     { name = "anibridge-mal-provider", git = "https://github.com/anibridge/anibridge-mal-provider.git?tag=main" },
     { name = "anibridge-plex-provider", git = "https://github.com/anibridge/anibridge-plex-provider.git?tag=main" },
-    { name = "anibridge-simkl-provider", git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main" },
-    { name = "anibridge-trakt-provider", git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main" },
     { name = "anibridge-utils", git = "https://github.com/anibridge/anibridge-utils.git?tag=main" },
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "colorama", specifier = ">=0.4.6" },
@@ -266,37 +262,6 @@ dependencies = [
     { name = "msgspec" },
     { name = "plexapi" },
     { name = "requests" },
-]
-
-[[package]]
-name = "anibridge-provider-base"
-version = "0.1.0a3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/dd/cde930e85e766b283c37ab5ab82f3a0cde8e5ce1fdc26c7fd82a561747c8/anibridge_provider_base-0.1.0a3.tar.gz", hash = "sha256:51b7b912f1f2fe7ad2f3dd14dba5141bf344c38b412dad31551850c078aa2a3f", size = 15955, upload-time = "2026-06-25T21:52:41.474Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/b1/8fca2ecb14c564a61e128b24008ecc6ccd9994b8371b74be5d310c13a2a8/anibridge_provider_base-0.1.0a3-py3-none-any.whl", hash = "sha256:8d374b6eeab242285c7c237933468f8385b0b799f55e822ffc525844d3e31e91", size = 16817, upload-time = "2026-06-25T21:52:40.468Z" },
-]
-
-[[package]]
-name = "anibridge-simkl-provider"
-version = "0.1.0"
-source = { git = "https://github.com/anibridge/anibridge-simkl-provider.git?tag=main#d36dc55781ece8c8d4ae74f78a91dd32807ff31c" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "anibridge-list-base" },
-    { name = "anibridge-utils" },
-    { name = "msgspec" },
-]
-
-[[package]]
-name = "anibridge-trakt-provider"
-version = "0.2.0"
-source = { git = "https://github.com/anibridge/anibridge-trakt-provider.git?tag=main#4bbc68c8e510d47560ee319b05f982d442ede42a" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "anibridge-provider-base" },
-    { name = "anibridge-utils" },
-    { name = "msgspec" },
 ]
 
 [[package]]

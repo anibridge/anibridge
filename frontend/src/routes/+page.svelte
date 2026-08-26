@@ -20,6 +20,7 @@
 
     let profiles: StatusResponse["profiles"] = $state({});
     let isLoading = $state(true);
+    let statusError: string | null = $state(null);
     let lastRefreshed: number | null = $state(null);
     let ws: WebSocket | null = $state(null);
     let reinitializingProfiles: Record<string, boolean> = $state({});
@@ -82,9 +83,12 @@
             const d = await apiJson<StatusResponse>("/api/status");
             profiles = d.profiles;
             isLoading = false;
+            statusError = null;
             lastRefreshed = Date.now();
         } catch (e) {
             console.error("Failed to load status", e);
+            isLoading = false;
+            statusError = e instanceof Error ? e.message : "Failed to load status";
             toast("Failed to load status", "error");
         }
     }
@@ -100,6 +104,7 @@
                 if (data.profiles) {
                     profiles = data.profiles;
                     isLoading = false;
+                    statusError = null;
                     lastRefreshed = Date.now();
                 }
             } catch {}
@@ -253,7 +258,13 @@
                 </div>
             {/each}
         {/if}
-        {#if !isLoading && Object.keys(profiles).length === 0}
+        {#if statusError && Object.keys(profiles).length === 0}
+            <div
+                in:fade={{ duration: 150 }}
+                class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                Failed to load profiles: {statusError}
+            </div>
+        {:else if !isLoading && Object.keys(profiles).length === 0}
             <a
                 href={resolve("/settings")}
                 in:fade={{ duration: 150 }}

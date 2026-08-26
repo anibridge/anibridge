@@ -14,6 +14,7 @@
 
     let backups: BackupMeta[] = $state([]);
     let loading = $state(true);
+    let loadError: string | null = $state(null);
     let restoring = $state<string | null>(null);
     let previewing = $state<string | null>(null);
     interface BackupRawPreview {
@@ -26,10 +27,12 @@
 
     async function load() {
         loading = true;
+        loadError = null;
         try {
             backups = await listBackups(params.profile);
         } catch (e) {
             console.error(e);
+            loadError = e instanceof Error ? e.message : "Failed to load backups";
         } finally {
             loading = false;
         }
@@ -89,7 +92,6 @@
             await restoreBackup(params.profile, filename);
         } catch (e) {
             console.error(e);
-            toast("Restore failed", "error");
         } finally {
             restoring = null;
         }
@@ -113,7 +115,12 @@
         </div>
     </div>
 
-    {#if !loading && !backups.length}
+    {#if loadError}
+        <p
+            class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            Failed to load backups: {loadError}
+        </p>
+    {:else if !loading && !backups.length}
         <p class="text-sm text-slate-500">No backups found.</p>
     {:else}
         <div

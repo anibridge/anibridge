@@ -74,6 +74,18 @@ export interface ApiOptions {
     successType?: ToastType;
 }
 
+export class ApiHttpError extends Error {
+    readonly status: number;
+    readonly data: unknown;
+
+    constructor(message: string, status: number, data: unknown) {
+        super(message);
+        this.name = "ApiHttpError";
+        this.status = status;
+        this.data = data;
+    }
+}
+
 export async function apiFetch(
     input: RequestInfo | URL,
     init?: RequestInit,
@@ -114,11 +126,24 @@ export async function apiJson<T = unknown>(
     init?: RequestInit,
 ): Promise<T> {
     const r = await apiFetch(input, init);
-    // If backend returned error body but still non-ok, apiFetch already toasted; allow caller to decide what to do.
     const ct = r.headers.get("content-type") || "";
-    if (!ct.includes("application/json")) {
+    let data: unknown;
+
+    if (ct.includes("application/json")) {
+        data = await r.json();
+    } else {
         const text = await r.text();
-        return JSON.parse(text) as T; // may throw which is fine
+        if (r.ok) return JSON.parse(text) as T;
+        data = text;
     }
-    return (await r.json()) as T;
+
+    if (!r.ok) {
+        const message =
+            typeof data === "string" && data.trim()
+                ? data.slice(0, 300)
+                : extractMessage((data || {}) as ApiErrorData, r.status);
+        throw new ApiHttpError(message, r.status, data);
+    }
+
+    return data as T;
 }

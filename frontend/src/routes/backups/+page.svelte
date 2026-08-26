@@ -9,14 +9,17 @@
 
     let profiles: string[] = $state([]);
     let loading = $state(true);
+    let loadError: string | null = $state(null);
 
     async function load() {
         loading = true;
+        loadError = null;
         try {
             const data = await apiJson<StatusResponse>("/api/status");
             profiles = Object.keys(data.profiles || {}).sort();
         } catch (e) {
             console.error(e);
+            loadError = e instanceof Error ? e.message : "Failed to load profiles";
         } finally {
             loading = false;
         }
@@ -59,6 +62,11 @@
                 </div>
             {/each}
         </div>
+    {:else if loadError}
+        <p
+            class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            Failed to load profiles: {loadError}
+        </p>
     {:else if !profiles.length}
         <p class="text-sm text-slate-500">No profiles found.</p>
     {:else}

@@ -28,6 +28,7 @@
     } from "$lib/types/api";
     import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import { createReconnectableWebSocket } from "$lib/utils/reconnectable-websocket";
 
     const { params } = $props<{ params: { profile: string } }>();
 
@@ -43,10 +44,6 @@
     let outcomeFilter: string | null = $state("synced");
     let showJump = $state(false);
     let newItemsCount = $state(0);
-    let ws: WebSocket | null = null;
-    let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let wsShouldReconnect = true;
-    let statusWs: WebSocket | null = null;
     let knownIds = new SvelteSet<number>();
     let sentinel: HTMLDivElement | null = $state(null);
     let openDiff: Record<number, boolean> = $state({});
@@ -133,12 +130,6 @@
         if (outcomeFilter) u.set("outcome", outcomeFilter);
         if (opts?.includeStats) u.set("include_stats", "true");
         return `/api/history/${params.profile}?${u}`;
-    };
-
-    const resetWsReconnectTimer = () => {
-        if (!wsReconnectTimer) return;
-        clearTimeout(wsReconnectTimer);
-        wsReconnectTimer = null;
     };
 
     function mergeNewest(itemsToPrepend: HistoryItem[]): number {
@@ -426,59 +417,48 @@
     function toggleOutcomeFilter(k: string) {
         outcomeFilter = outcomeFilter === k ? null : k;
         loadFirst();
-        initWs();
+        historyConnection.connect();
     }
 
-    function initWs() {
-        try {
-            ws?.close();
-        } catch {}
-        resetWsReconnectTimer();
+    const historyConnection = createReconnectableWebSocket(
+        () => {
+            const query = new SvelteURLSearchParams();
+            if (outcomeFilter) query.set("outcome", outcomeFilter);
+            const querySuffix = query.toString() ? `?${query}` : "";
+            return buildWebSocketUrl(`/ws/history/${params.profile}${querySuffix}`);
+        },
+        {
+            onMessage: (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (typeof data.latest_id !== "number") return;
+                    if (latestId === null) {
+                        latestId = data.latest_id;
+                        void loadFirst();
+                        return;
+                    }
+                    if (data.latest_id <= latestId) return;
+                    latestId = data.latest_id;
+                    void loadNewer();
+                } catch {}
+            },
+        },
+    );
 
-        const query = new SvelteURLSearchParams();
-        if (outcomeFilter) query.set("outcome", outcomeFilter);
-        const querySuffix = query.toString() ? `?${query}` : "";
-        ws = new WebSocket(
-            buildWebSocketUrl(`/ws/history/${params.profile}${querySuffix}`),
-        );
-        ws.onmessage = (ev) => {
-            try {
-                const d = JSON.parse(ev.data);
-                if (typeof d.latest_id !== "number") return;
-                if (latestId === null) {
-                    latestId = d.latest_id;
-                    void loadFirst();
-                    return;
-                }
-                if (d.latest_id <= latestId) return;
-                latestId = d.latest_id;
-                void loadNewer();
-            } catch {}
-        };
-        ws.onclose = () => {
-            if (!wsShouldReconnect) return;
-            wsReconnectTimer = setTimeout(initWs, 2000);
-        };
-    }
-
-    function initStatusWs() {
-        try {
-            statusWs?.close();
-        } catch {}
-        statusWs = new WebSocket(buildWebSocketUrl("/ws/status"));
-        statusWs.onmessage = (ev) => {
-            try {
-                const data = JSON.parse(ev.data);
-                const prof = data?.profiles?.[params.profile];
-                const cs = prof?.status?.current_sync;
-                currentSync = cs ?? null;
-                isProfileRunning = prof?.status?.current_sync?.state === "running";
-            } catch {}
-        };
-        statusWs.onclose = () => {
-            setTimeout(initStatusWs, 2000);
-        };
-    }
+    const statusConnection = createReconnectableWebSocket(
+        () => buildWebSocketUrl("/ws/status"),
+        {
+            onMessage: (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    const profile = data?.profiles?.[params.profile];
+                    const sync = profile?.status?.current_sync;
+                    currentSync = sync ?? null;
+                    isProfileRunning = sync?.state === "running";
+                } catch {}
+            },
+        },
+    );
 
     function jumpToLatest() {
         window.scrollTo({ top: 0, behavior: "smooth" });
@@ -531,23 +511,18 @@
     }
 
     onMount(() => {
-        wsShouldReconnect = true;
         loadFirst();
         refreshProfileStatus();
-        initWs();
-        initStatusWs();
+        historyConnection.connect();
+        statusConnection.connect();
         const io = new IntersectionObserver((entries) => {
             for (const e of entries) if (e.isIntersecting) loadMore();
         });
         if (sentinel) io.observe(sentinel);
         addEventListener("scroll", handleScroll, { passive: true });
         return () => {
-            wsShouldReconnect = false;
-            try {
-                ws?.close();
-                statusWs?.close();
-            } catch {}
-            resetWsReconnectTimer();
+            historyConnection.disconnect();
+            statusConnection.disconnect();
             removeEventListener("scroll", handleScroll);
             io.disconnect();
         };
@@ -572,7 +547,11 @@
         {stats}
         active={outcomeFilter}
         onToggle={toggleOutcomeFilter}
-        onClear={() => ((outcomeFilter = null), loadFirst(), initWs())} />
+        onClear={() => (
+            (outcomeFilter = null),
+            loadFirst(),
+            historyConnection.connect()
+        )} />
 
     <div
         class="flex items-center gap-2 text-[11px] text-slate-500"

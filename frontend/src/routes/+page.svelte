@@ -17,13 +17,30 @@
     import type { ProfileStatus, StatusResponse } from "$lib/types/api";
     import { apiFetch, apiJson, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import { createReconnectableWebSocket } from "$lib/utils/reconnectable-websocket";
 
     let profiles: StatusResponse["profiles"] = $state({});
     let isLoading = $state(true);
     let statusError: string | null = $state(null);
     let lastRefreshed: number | null = $state(null);
-    let ws: WebSocket | null = $state(null);
     let reinitializingProfiles: Record<string, boolean> = $state({});
+
+    const statusConnection = createReconnectableWebSocket(
+        () => buildWebSocketUrl("/ws/status"),
+        {
+            onMessage: (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.profiles) {
+                        profiles = data.profiles;
+                        isLoading = false;
+                        statusError = null;
+                        lastRefreshed = Date.now();
+                    }
+                } catch {}
+            },
+        },
+    );
 
     function profileEntries() {
         return Object.entries(profiles).sort((a, b) => a[0].localeCompare(b[0]));
@@ -91,27 +108,6 @@
             statusError = e instanceof Error ? e.message : "Failed to load status";
             toast("Failed to load status", "error");
         }
-    }
-
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
-        ws.onmessage = (ev) => {
-            try {
-                const data = JSON.parse(ev.data);
-                if (data.profiles) {
-                    profiles = data.profiles;
-                    isLoading = false;
-                    statusError = null;
-                    lastRefreshed = Date.now();
-                }
-            } catch {}
-        };
-        ws.onclose = () => {
-            setTimeout(openWs, 2000);
-        };
     }
 
     async function syncAll(poll: boolean) {
@@ -193,7 +189,8 @@
 
     onMount(() => {
         refresh();
-        openWs();
+        statusConnection.connect();
+        return () => statusConnection.disconnect();
     });
 </script>
 

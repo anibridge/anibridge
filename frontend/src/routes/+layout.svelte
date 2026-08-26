@@ -24,13 +24,26 @@
 
     import ToastHost from "$lib/components/toast-host.svelte";
     import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
+    import { createReconnectableWebSocket } from "$lib/utils/reconnectable-websocket";
 
     let { children } = $props();
     let version = $state("?");
     let gitHash = $state("");
     let sidebarOpen = $state(false);
-    let ws: WebSocket | null = null;
     let isWsOpen = $state(false);
+
+    const statusConnection = createReconnectableWebSocket(
+        () => buildWebSocketUrl("/ws/status"),
+        {
+            reconnectDelay: 3000,
+            onOpen: () => {
+                isWsOpen = true;
+            },
+            onClose: () => {
+                isWsOpen = false;
+            },
+        },
+    );
 
     function active(href: string, rootMatch = false) {
         const path = page.url.pathname;
@@ -50,23 +63,10 @@
         }
     }
 
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/status"));
-        ws.onopen = () => {
-            isWsOpen = true;
-        };
-        ws.onclose = () => {
-            isWsOpen = false;
-            setTimeout(openWs, 3000);
-        };
-    }
-
     onMount(() => {
         loadMeta();
-        openWs();
+        statusConnection.connect();
+        return () => statusConnection.disconnect();
     });
 </script>
 

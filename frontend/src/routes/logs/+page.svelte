@@ -19,6 +19,7 @@
     import type { LogEntry, LogFile } from "$lib/types/api";
     import { apiFetch, buildWebSocketUrl } from "$lib/utils/api";
     import { toast } from "$lib/utils/notify";
+    import { createReconnectableWebSocket } from "$lib/utils/reconnectable-websocket";
 
     let tab = $state<"live" | "history">("live");
     let level = $state("DEBUG");
@@ -27,7 +28,6 @@
     let autoScroll = $state(true);
     let logs: LogEntry[] = $state([]);
     let filtered: LogEntry[] = $state([]);
-    let ws: WebSocket | null = null;
     let isWsOpen = $state(false);
     let lastReceived: number | null = $state(null);
     let files: LogFile[] = $state([]);
@@ -40,6 +40,27 @@
     let liveScroller: HTMLDivElement | null = $state(null);
     let showFiles = $state(true);
     let isMobile = $state(false);
+
+    const logsConnection = createReconnectableWebSocket(
+        () => buildWebSocketUrl("/ws/logs"),
+        {
+            onOpen: () => {
+                isWsOpen = true;
+            },
+            onMessage: (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    logs.push(data);
+                    lastReceived = Date.now();
+                    applyFilter();
+                    if (autoScroll && tab === "live") scrollToBottom("live");
+                } catch {}
+            },
+            onClose: () => {
+                isWsOpen = false;
+            },
+        },
+    );
 
     const LEVEL_ORDER: Record<string, number> = {
         DEBUG: 10,
@@ -116,29 +137,6 @@
     function scrollToBottom(which: "live" | "history") {
         const el = which === "live" ? liveScroller : historyScroller;
         if (el) el.scrollTop = el.scrollHeight;
-    }
-
-    function openWs() {
-        try {
-            ws?.close();
-        } catch {}
-        ws = new WebSocket(buildWebSocketUrl("/ws/logs"));
-        ws.onopen = () => {
-            isWsOpen = true;
-        };
-        ws.onmessage = (ev) => {
-            try {
-                const d = JSON.parse(ev.data);
-                logs.push(d);
-                lastReceived = Date.now();
-                applyFilter();
-                if (autoScroll && tab === "live") scrollToBottom("live");
-            } catch {}
-        };
-        ws.onclose = () => {
-            isWsOpen = false;
-            setTimeout(openWs, 2000);
-        };
     }
 
     async function refreshFiles() {
@@ -299,7 +297,7 @@
 
     onMount(() => {
         loadPrefs();
-        openWs();
+        logsConnection.connect();
         refreshFiles();
         const updateIsMobile = () => {
             isMobile = window.innerWidth < 640; // Tailwind sm breakpoint
@@ -309,7 +307,10 @@
         };
         updateIsMobile();
         window.addEventListener("resize", updateIsMobile);
-        return () => window.removeEventListener("resize", updateIsMobile);
+        return () => {
+            logsConnection.disconnect();
+            window.removeEventListener("resize", updateIsMobile);
+        };
     });
 
     $effect(() => {

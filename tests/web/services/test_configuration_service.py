@@ -36,11 +36,17 @@ def _runtime_config(text: str):
     return configuration_service_module.AnibridgeConfig.model_validate(payload)
 
 
+def _staged_config_files(path: Path) -> list[Path]:
+    return list(path.glob(".config.yaml.*.tmp"))
+
+
 class _SchedulerStub:
     def __init__(self) -> None:
         self.removed_profiles: list[str] = []
         self.reinitialized_profiles: list[str] = []
         self.database_sync_sources: list[str] = []
+        self.reinitialize_error: Exception | None = None
+        self.database_sync_error: Exception | None = None
         self.shared_animap_client = type(
             "Animap",
             (),
@@ -55,9 +61,13 @@ class _SchedulerStub:
 
     async def reinitialize_profile(self, profile_name: str) -> None:
         self.reinitialized_profiles.append(profile_name)
+        if self.reinitialize_error is not None:
+            raise self.reinitialize_error
 
     async def trigger_database_sync(self, source: str = "manual:database") -> None:
         self.database_sync_sources.append(source)
+        if self.database_sync_error is not None:
+            raise self.database_sync_error
 
 
 def test_load_document_text_reports_missing_file(tmp_path: Path):
@@ -390,6 +400,127 @@ async def test_save_document_text_adds_and_removes_profiles_live(
     assert sorted(runtime_config.profiles) == ["alpha", "gamma"]
     assert scheduler.removed_profiles == ["beta"]
     assert scheduler.reinitialized_profiles == ["gamma"]
+
+
+@pytest.mark.asyncio
+async def test_save_document_text_rolls_back_reinitialize_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed profile reinitialization should preserve disk and runtime state."""
+    config_path = tmp_path / "config.yaml"
+    initial_text = _config_text()
+    updated_text = _config_text(
+        profiles=(
+            "profiles:\n"
+            "  default:\n"
+            "    library_provider: mocklib\n"
+            "    list_provider: mocklist\n"
+            "    scan_interval: 120\n"
+        )
+    )
+    config_path.write_text(initial_text, encoding="utf-8")
+    service = ConfigurationService(config_path=config_path)
+    runtime_config = _runtime_config(initial_text)
+    scheduler = _SchedulerStub()
+    scheduler.reinitialize_error = RuntimeError("reinitialize failed")
+
+    monkeypatch.setattr(
+        configuration_service_module, "get_config", lambda: runtime_config
+    )
+    monkeypatch.setattr(
+        configuration_service_module,
+        "get_app_state",
+        lambda: type("State", (), {"scheduler": scheduler})(),
+    )
+
+    with pytest.raises(RuntimeError, match="reinitialize failed"):
+        await service.save_document_text(updated_text)
+
+    assert config_path.read_text(encoding="utf-8") == initial_text
+    assert runtime_config.profiles["default"].scan_interval != 120
+    assert _staged_config_files(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_save_document_text_rolls_back_mapping_refresh_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed mapping refresh should restore disk and mapping source URLs."""
+    config_path = tmp_path / "config.yaml"
+    initial_text = _config_text(mappings_url="https://example.com/old.json")
+    updated_text = _config_text(mappings_url="https://example.com/new.json")
+    config_path.write_text(initial_text, encoding="utf-8")
+    service = ConfigurationService(config_path=config_path)
+    runtime_config = _runtime_config(initial_text)
+    scheduler = _SchedulerStub()
+    scheduler.shared_animap_client.upstream_url = runtime_config.mappings_url
+    scheduler.shared_animap_client.mappings_client.upstream_url = (
+        runtime_config.mappings_url
+    )
+    scheduler.database_sync_error = RuntimeError("mapping refresh failed")
+
+    monkeypatch.setattr(
+        configuration_service_module, "get_config", lambda: runtime_config
+    )
+    monkeypatch.setattr(
+        configuration_service_module,
+        "get_app_state",
+        lambda: type("State", (), {"scheduler": scheduler})(),
+    )
+
+    with pytest.raises(RuntimeError, match="mapping refresh failed"):
+        await service.save_document_text(updated_text)
+
+    assert config_path.read_text(encoding="utf-8") == initial_text
+    assert runtime_config.mappings_url == "https://example.com/old.json"
+    assert scheduler.shared_animap_client.upstream_url == runtime_config.mappings_url
+    assert (
+        scheduler.shared_animap_client.mappings_client.upstream_url
+        == runtime_config.mappings_url
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_document_text_rolls_back_atomic_replace_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed atomic replacement should restore the previous runtime state."""
+    config_path = tmp_path / "config.yaml"
+    initial_text = _config_text()
+    updated_text = _config_text(
+        profiles=(
+            "profiles:\n"
+            "  default:\n"
+            "    library_provider: mocklib\n"
+            "    list_provider: mocklist\n"
+            "    scan_interval: 120\n"
+        )
+    )
+    config_path.write_text(initial_text, encoding="utf-8")
+    service = ConfigurationService(config_path=config_path)
+    runtime_config = _runtime_config(initial_text)
+    scheduler = _SchedulerStub()
+
+    monkeypatch.setattr(
+        configuration_service_module, "get_config", lambda: runtime_config
+    )
+    monkeypatch.setattr(
+        configuration_service_module,
+        "get_app_state",
+        lambda: type("State", (), {"scheduler": scheduler})(),
+    )
+
+    def _fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(configuration_service_module.os, "replace", _fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        await service.save_document_text(updated_text)
+
+    assert config_path.read_text(encoding="utf-8") == initial_text
+    assert runtime_config.profiles["default"].scan_interval != 120
+    assert _staged_config_files(tmp_path) == []
 
 
 def test_configuration_service_exposes_config_path_and_mtime(tmp_path: Path) -> None:

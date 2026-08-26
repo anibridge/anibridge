@@ -1,6 +1,8 @@
 """Utilities for reading and writing AniBridge configuration documents."""
 
 import asyncio
+import os
+import tempfile
 from collections.abc import Mapping
 from operator import attrgetter
 from pathlib import Path
@@ -140,7 +142,79 @@ class ConfigurationService:
             "settings_error": settings_error,
         }
 
-    async def _apply_runtime_config(self, next_config: AnibridgeConfig) -> bool:
+    def _restore_runtime_values(
+        self,
+        runtime_config: AnibridgeConfig,
+        snapshot: AnibridgeConfig,
+    ) -> None:
+        """Restore the live-mutable subset of the runtime configuration."""
+        runtime_config.global_config = snapshot.global_config.model_copy(deep=True)
+        runtime_config.mappings_url = snapshot.mappings_url
+        runtime_config.web.allow_config_without_auth = (
+            snapshot.web.allow_config_without_auth
+        )
+        runtime_config.profiles.clear()
+        for profile_name, profile_config in snapshot.profiles.items():
+            profile = profile_config.model_copy(deep=True)
+            profile._parent = runtime_config
+            runtime_config.profiles[profile_name] = profile
+
+    async def _restore_runtime_snapshot(
+        self,
+        snapshot: AnibridgeConfig,
+        attempted_config: AnibridgeConfig,
+    ) -> None:
+        """Best-effort restoration after a failed live configuration update."""
+        runtime_config = get_config()
+        scheduler = get_app_state().scheduler
+        self._restore_runtime_values(runtime_config, snapshot)
+
+        if scheduler is None:
+            return
+
+        scheduler.shared_animap_client.upstream_url = snapshot.mappings_url
+        scheduler.shared_animap_client.mappings_client.upstream_url = (
+            snapshot.mappings_url
+        )
+
+        current_profiles = {
+            name: _normalize_value(profile)
+            for name, profile in snapshot.profiles.items()
+        }
+        attempted_profiles = {
+            name: _normalize_value(profile)
+            for name, profile in attempted_config.profiles.items()
+        }
+        added_profiles = sorted(set(attempted_profiles) - set(current_profiles))
+        restore_profiles = sorted(
+            name
+            for name, profile in current_profiles.items()
+            if attempted_profiles.get(name) != profile
+        )
+
+        for profile_name in added_profiles:
+            try:
+                await scheduler.remove_profile(profile_name)
+            except Exception:
+                log.exception(
+                    "Failed to remove profile '%s' while rolling back configuration",
+                    profile_name,
+                )
+
+        for profile_name in restore_profiles:
+            try:
+                await scheduler.reinitialize_profile(profile_name)
+            except Exception:
+                log.exception(
+                    "Failed to restore profile '%s' while rolling back configuration",
+                    profile_name,
+                )
+
+    async def _apply_runtime_config(
+        self,
+        next_config: AnibridgeConfig,
+        previous_config: AnibridgeConfig,
+    ) -> bool:
         runtime_config = get_config()
         scheduler = get_app_state().scheduler
 
@@ -191,25 +265,73 @@ class ConfigurationService:
         if scheduler is None:
             return requires_restart
 
-        for profile_name in removed_profiles:
-            await scheduler.remove_profile(profile_name)
+        try:
+            for profile_name in removed_profiles:
+                await scheduler.remove_profile(profile_name)
 
-        for profile_name in changed_profiles:
-            await scheduler.reinitialize_profile(profile_name)
+            for profile_name in changed_profiles:
+                await scheduler.reinitialize_profile(profile_name)
 
-        if mappings_url_changed:
-            scheduler.shared_animap_client.upstream_url = next_config.mappings_url
-            scheduler.shared_animap_client.mappings_client.upstream_url = (
-                next_config.mappings_url
-            )
-            try:
+            if mappings_url_changed:
+                scheduler.shared_animap_client.upstream_url = next_config.mappings_url
+                scheduler.shared_animap_client.mappings_client.upstream_url = (
+                    next_config.mappings_url
+                )
                 await scheduler.trigger_database_sync(source="api:config:mappings_url")
-            except TimeoutError as exc:
-                raise SchedulerUnavailableError(
-                    "Timed out while refreshing mappings after config update"
-                ) from exc
+        except TimeoutError as exc:
+            await self._restore_runtime_snapshot(previous_config, next_config)
+            raise SchedulerUnavailableError(
+                "Timed out while refreshing mappings after config update"
+            ) from exc
+        except BaseException:
+            await self._restore_runtime_snapshot(previous_config, next_config)
+            raise
 
         return requires_restart
+
+    def _stage_content(self, content: str) -> Path:
+        """Write and flush a candidate config beside the destination."""
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, staged_name = tempfile.mkstemp(
+            dir=self._config_path.parent,
+            prefix=f".{self._config_path.name}.",
+            suffix=".tmp",
+        )
+        staged_path = Path(staged_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as staged_file:
+                staged_file.write(content)
+                staged_file.flush()
+                os.fsync(staged_file.fileno())
+        except BaseException:
+            staged_path.unlink(missing_ok=True)
+            raise
+        return staged_path
+
+    async def _persist_config(
+        self,
+        config: AnibridgeConfig,
+        content: str,
+    ) -> tuple[AnibridgeConfig, bool, int | None]:
+        """Apply a validated candidate and atomically persist it on success."""
+        staged_path = self._stage_content(content)
+        previous_config = get_config().model_copy(deep=True)
+        try:
+            requires_restart = await self._apply_runtime_config(config, previous_config)
+            try:
+                os.replace(staged_path, self._config_path)
+            except BaseException:
+                await self._restore_runtime_snapshot(previous_config, config)
+                raise
+        finally:
+            staged_path.unlink(missing_ok=True)
+
+        log.info(
+            "Configuration updated with %s profile(s) at %s",
+            len(config.profiles),
+            self._config_path,
+        )
+        return config, requires_restart, self._get_mtime_ms()
 
     async def save_document_text(
         self, content: str, *, expected_mtime: int | None = None
@@ -226,16 +348,8 @@ class ConfigurationService:
             payload = self._parse_yaml(content)
             config = self._build_config_instance(payload)
 
-            self._config_path.parent.mkdir(parents=True, exist_ok=True)
             normalized_content = content if content.endswith("\n") else f"{content}\n"
-            self._config_path.write_text(normalized_content, encoding="utf-8")
-            log.info(
-                f"Configuration updated with {len(config.profiles)} profile(s) at "
-                f"{self._config_path}",
-            )
-
-            requires_restart = await self._apply_runtime_config(config)
-            return config, requires_restart, self._get_mtime_ms()
+            return await self._persist_config(config, normalized_content)
 
     async def save_settings_payload(
         self,
@@ -256,15 +370,7 @@ class ConfigurationService:
             config = self._build_config_instance(payload)
             rendered = self._render_settings_payload(payload)
 
-            self._config_path.parent.mkdir(parents=True, exist_ok=True)
-            self._config_path.write_text(rendered, encoding="utf-8")
-            log.info(
-                f"Configuration updated with {len(config.profiles)} profile(s) at "
-                f"{self._config_path}",
-            )
-
-            requires_restart = await self._apply_runtime_config(config)
-            return config, requires_restart, self._get_mtime_ms()
+            return await self._persist_config(config, rendered)
 
 
 @cache

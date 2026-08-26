@@ -51,11 +51,11 @@ class AppState:
             await asyncio.wait_for(self._status_changed.wait(), timeout=max_wait)
         self._status_changed.clear()
 
-    def set_scheduler(self, scheduler: SchedulerClient) -> None:
+    def set_scheduler(self, scheduler: SchedulerClient | None) -> None:
         """Set the scheduler client.
 
         Args:
-            scheduler (SchedulerClient): The scheduler client instance to set.
+            scheduler (SchedulerClient | None): The scheduler client instance to set.
         """
         self.scheduler = scheduler
 

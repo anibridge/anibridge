@@ -754,10 +754,11 @@ class HistoryService:
             if row.after_state
             else None
         )
+        list_media_key = row.list_media_key
 
         if not row.before_state and not after_snapshot:
             raise HistoryPermissionError("History item does not contain undo data")
-        if not before_snapshot and not row.list_media_key:
+        if not before_snapshot and not list_media_key:
             raise HistoryItemNotFoundError(
                 "Cannot undo history item without list media key"
             )
@@ -769,17 +770,18 @@ class HistoryService:
 
         async def _apply_provider_undo() -> None:
             if before_snapshot is None:
+                assert list_media_key is not None
                 log.success(
                     "Deleting list entry %s as part of undo",
-                    row.list_media_key,
+                    list_media_key,
                 )
                 if bridge.profile_config.dry_run:
                     log.info(
                         "Dry run enabled; skipping deletion of list entry %s",
-                        row.list_media_key,
+                        list_media_key,
                     )
                 else:
-                    await list_provider.delete_entry(row.list_media_key)
+                    await list_provider.delete_entry(list_media_key)
             else:
                 log.success(
                     "Restoring list entry %s to previous state",

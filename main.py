@@ -19,6 +19,46 @@ from anibridge.app.web.state import get_app_state
 
 log = get_logger(APP_LOGGER_NAME)
 
+_WILDCARD_HOSTS = {"", "0.0.0.0", "::", "[::]"}
+
+
+def _warn_for_unauthenticated_public_bind(config) -> None:
+    """Warn when the web UI is exposed broadly without authentication."""
+    if config.web.host in _WILDCARD_HOSTS and not config.web.has_auth:
+        log.warning(
+            "Web UI is binding to all interfaces without authentication; "
+            "configure Basic Auth or restrict web.host"
+        )
+
+
+async def _wait_for_runtime(
+    scheduler: SchedulerClient,
+    server_task: asyncio.Task | None,
+) -> None:
+    """Wait for scheduler completion while supervising the web server task."""
+    if server_task is None:
+        await scheduler.wait_for_completion()
+        return
+
+    scheduler_task = asyncio.create_task(scheduler.wait_for_completion())
+    done, _ = await asyncio.wait(
+        {scheduler_task, server_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if server_task in done:
+        scheduler_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduler_task
+
+        if server_task.cancelled():
+            raise RuntimeError("Web server task was cancelled unexpectedly")
+        server_error = server_task.exception()
+        if server_error is not None:
+            raise RuntimeError("Web server stopped unexpectedly") from server_error
+        raise RuntimeError("Web server stopped unexpectedly")
+
+    await scheduler_task
+
 
 async def run() -> int:
     """Main application entry point.
@@ -47,6 +87,7 @@ async def run() -> int:
         log.info("\n" + ANIBDRIGE_HEADER)
 
         if config.web.enabled:
+            _warn_for_unauthenticated_public_bind(config)
             app = create_app()
             uv_config = uvicorn.Config(
                 app,
@@ -82,7 +123,7 @@ async def run() -> int:
 
         _setup_signal_handlers_for_scheduler(app_scheduler)
 
-        await app_scheduler.wait_for_completion()
+        await _wait_for_runtime(app_scheduler, server_task)
     except KeyboardInterrupt:
         log.info("Keyboard interrupt received, shutting down")
     except ValidationError as e:

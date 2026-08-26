@@ -49,6 +49,7 @@ class MappingsClient:
         self._provenance: dict[str, list[str]] = {}
         self._session: aiohttp.ClientSession | None = None
         self._content_hash = md5()  # tracks raw content hashes during loading
+        self._snapshot_complete = True
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the aiohttp session."""
@@ -71,6 +72,10 @@ class MappingsClient:
         self._provenance.clear()
         self._loaded_sources.clear()
         self._content_hash = md5()
+
+    def is_snapshot_complete(self) -> bool:
+        """Return whether every source in the current snapshot loaded successfully."""
+        return self._snapshot_complete
 
     async def __aenter__(self) -> MappingsClient:
         """Context manager enter method.
@@ -125,6 +130,7 @@ class MappingsClient:
                 payload = zstd.decompress(payload)
                 suffixes = suffixes[:-1]
             except zstd.ZstdError:
+                self._snapshot_complete = False
                 log.error(
                     "Error decompressing Zstandard payload $$'%s'$$",
                     src,
@@ -132,6 +138,7 @@ class MappingsClient:
                 log.exception("Zstandard decompression error details")
                 return {}
             except Exception:
+                self._snapshot_complete = False
                 log.error(
                     "Unexpected error decompressing Zstandard payload $$'%s'$$",
                     src,
@@ -144,19 +151,28 @@ class MappingsClient:
         suffix = suffixes[-1] if suffixes else ""
         try:
             if suffix in {".yaml", ".yml"}:
-                return yaml.load(payload.decode(), Loader=YamlLoader)
-            if suffix == ".json":
-                return msgspec.json.decode(payload)
+                decoded = yaml.load(payload.decode(), Loader=YamlLoader)
+            else:
+                if suffix != ".json":
+                    log.warning(
+                        "Unknown file type for $$'%s'$$, defaulting to JSON parsing",
+                        src,
+                    )
+                decoded = msgspec.json.decode(payload)
 
-            log.warning(
-                "Unknown file type for $$'%s'$$, defaulting to JSON parsing",
-                src,
-            )
-            return msgspec.json.decode(payload)
+            if decoded is None:
+                return {}
+            if not isinstance(decoded, dict):
+                self._snapshot_complete = False
+                log.error("Mappings file $$'%s'$$ must contain an object", src)
+                return {}
+            return cast(AnimapDict, decoded)
         except msgspec.DecodeError, yaml.YAMLError:
+            self._snapshot_complete = False
             log.error("Error decoding file $$'%s'$$", src)
             log.exception("Decode error details")
         except Exception:
+            self._snapshot_complete = False
             log.error("Unexpected error reading file $$'%s'$$", src)
             log.exception("Unexpected decode error details")
         return {}
@@ -272,6 +288,7 @@ class MappingsClient:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
+                self._snapshot_complete = False
                 log.error("Failed to load include: %s", result)
                 try:
                     raise result
@@ -290,6 +307,7 @@ class MappingsClient:
         try:
             payload = await file_path.read_bytes()
         except Exception:
+            self._snapshot_complete = False
             log.error(
                 "Unexpected error reading file $$'%s'$$",
                 str(file_path),
@@ -330,6 +348,7 @@ class MappingsClient:
             log.exception("Mappings URL error details")
 
         if mappings_raw is None:
+            self._snapshot_complete = False
             return {}
 
         mappings = self._decode_mappings(mappings_raw, url)
@@ -359,6 +378,7 @@ class MappingsClient:
             log.info("Loading mappings from URL $$'%s'$$", src)
             return await self._load_mappings_url(src, loaded_chain)
         else:
+            self._snapshot_complete = False
             log.warning("Invalid mappings source: $$'%s'$$, skipping", src)
             return {}
 
@@ -389,6 +409,7 @@ class MappingsClient:
         self._loaded_sources = set()
         self._provenance = {}
         self._content_hash = md5()
+        self._snapshot_complete = True
 
         if self.upstream_url is not None:
             log.debug(
@@ -459,6 +480,7 @@ class MappingsClient:
         self._loaded_sources = set()
         self._provenance = {}
         self._content_hash = md5()
+        self._snapshot_complete = True
         return await self._load_mappings(src)
 
     def get_content_hash(self) -> str:

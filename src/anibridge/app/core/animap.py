@@ -380,6 +380,14 @@ class AnimapClient:
     async def sync_db(self) -> None:
         """Synchronize the local database with the upstream mappings."""
         mappings = await self.mappings_client.load_mappings()
+        if not self.mappings_client.is_snapshot_complete():
+            log.error("Mappings refresh was incomplete; keeping the existing database")
+            del mappings
+            self.mappings_client.clear_cache()
+            await self.mappings_client.close()
+            release_memory()
+            return
+
         provenance_by_descriptor = self.mappings_client.get_provenance()
 
         curr_mappings_hash = self.mappings_client.get_content_hash()

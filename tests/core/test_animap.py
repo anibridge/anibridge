@@ -26,10 +26,12 @@ class FakeMappingsClient:
         self,
         mappings: dict[str, Any],
         provenance: dict[str, list[str]],
+        snapshot_complete: bool = True,
     ) -> None:
         """Initialize the fake client with predefined mappings and provenance."""
         self.mappings = mappings
         self.provenance = provenance
+        self.snapshot_complete = snapshot_complete
         self.load_calls = 0
         self._content_hash: str = ""
 
@@ -46,6 +48,10 @@ class FakeMappingsClient:
     def get_content_hash(self) -> str:
         """Return a hash of the mappings."""
         return self._content_hash
+
+    def is_snapshot_complete(self) -> bool:
+        """Return whether the predefined snapshot loaded completely."""
+        return self.snapshot_complete
 
     def get_provenance(self) -> dict[str, list[str]]:
         """Return the predefined provenance."""
@@ -278,6 +284,70 @@ def test_sync_db_refreshes_provenance_when_hash_matches(
         "/extra.json",
     ]
     assert [row.n for row in provenance_rows] == [0, 1]
+
+
+def test_sync_db_preserves_existing_data_after_incomplete_refresh(
+    animap_client: AnimapClient, in_memory_db: AnibridgeDb
+) -> None:
+    """An incomplete refresh should not replace mappings or housekeeping hashes."""
+    fake_client = FakeMappingsClient(
+        mappings={"anilist:1": {"tmdb:1": {"1": "1"}}},
+        provenance={"anilist:1": ["/initial.json"]},
+    )
+    animap_client.mappings_client = cast(MappingsClient, fake_client)
+    asyncio.run(animap_client.sync_db())
+
+    with in_memory_db as ctx:
+        initial_entries = ctx.session.execute(select(AnimapEntry)).scalars().all()
+        initial_mapping_hash = ctx.session.get(Housekeeping, "animap_mappings_hash")
+        initial_provenance_hash = ctx.session.get(
+            Housekeeping, "animap_provenance_hash"
+        )
+        assert initial_mapping_hash is not None
+        assert initial_provenance_hash is not None
+        initial_entry_keys = {
+            (entry.provider, entry.entry_id, entry.entry_scope)
+            for entry in initial_entries
+        }
+        initial_hashes = (initial_mapping_hash.value, initial_provenance_hash.value)
+
+    fake_client.mappings = {}
+    fake_client.provenance = {}
+    fake_client.snapshot_complete = False
+    asyncio.run(animap_client.sync_db())
+
+    with in_memory_db as ctx:
+        entries = ctx.session.execute(select(AnimapEntry)).scalars().all()
+        mapping_hash = ctx.session.get(Housekeeping, "animap_mappings_hash")
+        provenance_hash = ctx.session.get(Housekeeping, "animap_provenance_hash")
+
+    assert {
+        (entry.provider, entry.entry_id, entry.entry_scope) for entry in entries
+    } == initial_entry_keys
+    assert mapping_hash is not None
+    assert provenance_hash is not None
+    assert (mapping_hash.value, provenance_hash.value) == initial_hashes
+
+
+def test_sync_db_accepts_complete_empty_snapshot(
+    animap_client: AnimapClient, in_memory_db: AnibridgeDb
+) -> None:
+    """A successfully loaded empty snapshot should remove stale mappings."""
+    fake_client = FakeMappingsClient(
+        mappings={"anilist:1": {"tmdb:1": {"1": "1"}}},
+        provenance={"anilist:1": ["/initial.json"]},
+    )
+    animap_client.mappings_client = cast(MappingsClient, fake_client)
+    asyncio.run(animap_client.sync_db())
+
+    fake_client.mappings = {}
+    fake_client.provenance = {}
+    asyncio.run(animap_client.sync_db())
+
+    with in_memory_db as ctx:
+        entries = ctx.session.execute(select(AnimapEntry)).scalars().all()
+
+    assert entries == []
 
 
 def test_sync_db_skips_work_when_hashes_match(

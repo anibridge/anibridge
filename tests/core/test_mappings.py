@@ -232,6 +232,7 @@ async def test_load_mappings_url_retries(
 
     assert result == {}
     assert calls["count"] == 3
+    assert client.is_snapshot_complete() is False
 
 
 def test_decode_mappings_handles_yaml(tmp_path: Path) -> None:
@@ -251,6 +252,17 @@ def test_decode_mappings_invalid_json_returns_empty(tmp_path: Path) -> None:
     result = client._decode_mappings(b"{", "mappings.json")
 
     assert result == {}
+    assert client.is_snapshot_complete() is False
+
+
+def test_decode_mappings_empty_object_is_complete(tmp_path: Path) -> None:
+    """A valid empty object should remain an authoritative snapshot."""
+    client = _make_client(tmp_path)
+
+    result = client._decode_mappings(b"{}", "mappings.json")
+
+    assert result == {}
+    assert client.is_snapshot_complete() is True
 
 
 def test_decode_mappings_zstd_payload(tmp_path: Path) -> None:
@@ -277,6 +289,7 @@ async def test_load_includes_handles_exceptions(tmp_path: Path) -> None:
     result = await client._load_includes(["bad.json"], set(), "root.json")
 
     assert result == {}
+    assert client.is_snapshot_complete() is False
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,8 @@ __all__ = ["AnilistClient"]
 
 log = get_logger(__name__)
 
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
+
 
 class AnilistClient:
     """Client for interacting with the AniList GraphQL API.
@@ -55,7 +57,10 @@ class AnilistClient:
             if self.anilist_token:
                 headers["Authorization"] = f"Bearer {self.anilist_token}"
 
-            self._session = aiohttp.ClientSession(headers=headers)
+            self._session = aiohttp.ClientSession(
+                headers=headers,
+                timeout=_HTTP_TIMEOUT,
+            )
 
         return self._session
 

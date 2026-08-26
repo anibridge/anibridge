@@ -370,10 +370,12 @@ async def test_make_request_retries_on_bad_gateway(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [aiohttp.ClientConnectionError, TimeoutError])
 async def test_make_request_retries_until_failure(
     monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
 ) -> None:
-    """Repeated client errors should raise after max attempts."""
+    """Repeated transport failures should raise after max attempts."""
     client = AnilistClient(anilist_token=None)
 
     class DummySession:
@@ -382,7 +384,7 @@ async def test_make_request_retries_until_failure(
 
         def post(self, _url: str, **_kwargs):
             self.calls += 1
-            raise aiohttp.ClientConnectionError("boom")
+            raise error_type("boom")
 
     session = DummySession()
 
@@ -473,8 +475,9 @@ async def test_make_request_logs_response_errors(
 
 
 def test_get_session_sets_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Session creation should include auth headers when token is present."""
+    """Session creation should include auth headers and bounded timeouts."""
     headers_seen = {}
+    timeout_seen: aiohttp.ClientTimeout | None = None
 
     class DummySession:
         def __init__(self, headers: dict) -> None:
@@ -484,8 +487,10 @@ def test_get_session_sets_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
         async def close(self) -> None:
             self.closed = True
 
-    def _client_session(*, headers: dict):
+    def _client_session(*, headers: dict, timeout: aiohttp.ClientTimeout):
+        nonlocal timeout_seen
         headers_seen.update(headers)
+        timeout_seen = timeout
         return DummySession(headers)
 
     monkeypatch.setattr(
@@ -497,6 +502,10 @@ def test_get_session_sets_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert session.headers["Authorization"] == "Bearer token"
     assert headers_seen["User-Agent"].startswith("AniBridge/")
+    assert timeout_seen is not None
+    assert timeout_seen.total == 60
+    assert timeout_seen.connect == 10
+    assert timeout_seen.sock_read == 30
 
 
 async def _clear_search_media_ids_cache(client: AnilistClient) -> None:

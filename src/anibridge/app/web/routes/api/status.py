@@ -111,6 +111,16 @@ class ProfileConfigModel(msgspec.Struct):
         ]
         | None
     ) = None
+    batch_requests: (
+        Annotated[
+            bool,
+            msgspec.Meta(
+                description="Whether provider updates are submitted in batches.",
+                examples=[True],
+            ),
+        ]
+        | None
+    ) = None
 
 
 class ProfileRuntimeStatusModel(msgspec.Struct):
@@ -241,6 +251,7 @@ def construct_profile_status(data: dict[str, Any]) -> ProfileStatusModel:
             scan_modes=list(cfg.get("scan_modes") or []),
             full_scan=cfg.get("full_scan"),
             destructive_sync=cfg.get("destructive_sync"),
+            batch_requests=cfg.get("batch_requests"),
         ),
         status=ProfileRuntimeStatusModel(
             running=bool(st.get("running")),

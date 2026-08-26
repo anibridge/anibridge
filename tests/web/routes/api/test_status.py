@@ -35,6 +35,7 @@ async def test_status_route_serializes_scheduler_payload(patch_app_state) -> Non
                         "scan_modes": ["poll", "periodic"],
                         "full_scan": True,
                         "destructive_sync": False,
+                        "batch_requests": True,
                     },
                     "status": {
                         "running": True,
@@ -53,6 +54,7 @@ async def test_status_route_serializes_scheduler_payload(patch_app_state) -> Non
     profile = response.profiles["primary"]
     assert profile.config.library_namespace == "plex"
     assert profile.config.scan_modes == ["poll", "periodic"]
+    assert profile.config.batch_requests is True
     assert profile.status.current_sync == {"state": "running"}
     assert response.scheduler == {"coordinator": {"running": True}}
 

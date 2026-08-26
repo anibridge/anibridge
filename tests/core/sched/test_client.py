@@ -27,6 +27,7 @@ class FakeProfileConfig:
     scan_modes: list[ScanMode] = field(default_factory=list)
     full_scan: bool = False
     destructive_sync: bool = False
+    batch_requests: bool = False
 
     def __post_init__(self) -> None:
         if self.scan_modes is None:
@@ -669,6 +670,7 @@ async def test_scheduler_get_status(tmp_path: Path) -> None:
     status = await scheduler.get_status()
 
     assert status["one"]["config"]["library_namespace"] == "Lib"
+    assert status["one"]["config"]["batch_requests"] is False
     assert status["one"]["status"]["last_synced"] == "2025-01-01T00:00:00+00:00"
     assert status["one"]["status"]["initialization_error"] is None
     assert status["broken"]["config"]["library_namespace"] == "Jellyfin"

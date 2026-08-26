@@ -394,6 +394,7 @@ class SchedulerClient:
                     "scan_modes": [m.value for m in profile_config.scan_modes],
                     "full_scan": profile_config.full_scan,
                     "destructive_sync": profile_config.destructive_sync,
+                    "batch_requests": profile_config.batch_requests,
                 },
                 "status": {
                     "running": scheduler is not None and scheduler._running

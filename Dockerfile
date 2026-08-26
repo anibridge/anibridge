@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock,ro \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml,ro \
     uv sync --frozen --no-dev && \
-    find /venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; true
+    find /venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null
 
 FROM --platform=$BUILDPLATFORM node:25-alpine AS node-builder
 

@@ -11,6 +11,7 @@
         "clean": "rm -rf build",
         "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
         "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+        "test": "vitest run",
         "format": "prettier --write .",
         "lint": "prettier --check . && eslint ."
     },
@@ -40,7 +41,8 @@
         "typescript": "6.0.3",
         "typescript-eslint": "^8.67.0",
         "vite": "8.0.10",
-        "vite-plugin-compression2": "^2.5.3"
+        "vite-plugin-compression2": "^2.5.3",
+        "vitest": "^4.1.11"
     },
     "dependencies": {
         "@shikijs/monaco": "^4.4.3",

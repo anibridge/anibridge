@@ -1,6 +1,6 @@
 [project]
 name = "anibridge"
-version = "2.1.4"
+version = "2.2.0"
 description = "The smart way to keep your anime lists perfectly synchronized."
 license = "MIT"
 license-files = ["LICENSE"]

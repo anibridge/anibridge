@@ -230,6 +230,47 @@ async def test_sync_runs_immediately_without_worker(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("dead_worker", [False, True])
+async def test_sync_fallback_serializes_overlapping_requests(
+    profile_scheduler: ProfileScheduler,
+    monkeypatch: pytest.MonkeyPatch,
+    dead_worker: bool,
+) -> None:
+    if dead_worker:
+        profile_scheduler._running = True
+        profile_scheduler._worker_task = asyncio.create_task(asyncio.sleep(0))
+        await profile_scheduler._worker_task
+
+    active = 0
+    max_active = 0
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def sync(*, poll: bool, library_keys: Sequence[str] | None) -> None:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            first_started.set()
+            await release_first.wait()
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(profile_scheduler.bridge_client, "sync", sync)
+    first = asyncio.create_task(profile_scheduler.sync(source="webhook:scrobble"))
+    await first_started.wait()
+    second = asyncio.create_task(profile_scheduler.sync(source="webhook:stop"))
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    finally:
+        release_first.set()
+        await asyncio.gather(first, second)
+
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
 async def test_start_and_stop_manage_worker_and_loops(
     monkeypatch: pytest.MonkeyPatch,
     profile_scheduler_factory,

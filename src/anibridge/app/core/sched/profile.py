@@ -75,6 +75,7 @@ class ProfileScheduler:
         self.stop_event = stop_event or asyncio.Event()
 
         self._running = False
+        self._sync_lock = asyncio.Lock()
         self._current_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
         self._worker_task: asyncio.Task | None = None
@@ -88,6 +89,14 @@ class ProfileScheduler:
         self._last_sync_sources: tuple[str, ...] = tuple()
 
     async def _execute_sync(
+        self,
+        poll: bool,
+        library_keys: Sequence[str] | None,
+    ) -> None:
+        async with self._sync_lock:
+            await self._run_sync(poll=poll, library_keys=library_keys)
+
+    async def _run_sync(
         self,
         poll: bool,
         library_keys: Sequence[str] | None,

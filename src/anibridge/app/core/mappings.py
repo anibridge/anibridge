@@ -11,10 +11,14 @@ import aiohttp
 import anyio
 import msgspec.json
 import yaml
-from yaml import CSafeLoader as YamlLoader
 
 from anibridge.app import __version__
 from anibridge.app.logging import get_logger
+
+try:
+    from yaml import CSafeLoader as YamlLoader
+except ImportError:
+    from yaml import SafeLoader as YamlLoader
 
 __all__ = ["AnimapDict", "MappingsClient"]
 

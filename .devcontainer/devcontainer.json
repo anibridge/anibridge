@@ -9,7 +9,9 @@
         "ghcr.io/devcontainers-extra/features/apt-packages:1": {
             "packages": "ripgrep,sqlite3"
         },
-        "ghcr.io/devcontainers-extra/features/uv:1": {}
+        "ghcr.io/devcontainers-extra/features/uv:1": {
+            "version": "0.13.4"
+        }
     },
     "customizations": {
         "vscode": {

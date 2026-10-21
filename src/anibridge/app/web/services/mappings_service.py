@@ -95,7 +95,7 @@ class MappingsService:
         self.upstream_url: str | None = get_config().mappings_url
 
     @staticmethod
-    def _fetch_ids(ctx: AnibridgeDb, stmt: Select[tuple[int]]) -> set[int]:
+    def _fetch_ids(ctx: AnibridgeDb, stmt: Select[int]) -> set[int]:
         """Execute a statement and return integer identifiers."""
         return {int(val) for val in ctx.session.execute(stmt).scalars()}
 
@@ -214,7 +214,7 @@ class MappingsService:
             return {spec.anilist_field: text}
 
         if spec.kind == QueryFieldKind.ANILIST_ENUM:
-            allowed = spec.values or ()
+            allowed = tuple(spec.values or ())
             if not allowed:
                 raise AniListFilterError(
                     f"AniList filter '{spec.key}' is not configured with values"

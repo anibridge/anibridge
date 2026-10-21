@@ -597,7 +597,7 @@ def _build_config_template_model(model_cls: type[BaseModel]) -> BaseModel:
         if field.default is not PydanticUndefined:
             value = field.default
         elif field.default_factory is not None:
-            value = field.default_factory()
+            value = field.get_default(call_default_factory=True, validated_data=payload)
         else:
             value = "..."
         payload[name] = value

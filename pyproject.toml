@@ -5,7 +5,7 @@ description = "The smart way to keep your anime lists perfectly synchronized."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 
 authors = [
     { name = "Elias Benbourenane", email = "eliasbenbourenane@gmail.com" },
@@ -29,35 +29,35 @@ keywords = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Operating System :: OS Independent",
 ]
 
 dependencies = [
-    "aiohttp>=3.13.3",
-    "alembic>=1.18.4",
-    "anibridge-anilist-provider>=0.2.0",
-    "anibridge-emby-provider>=0.2.0",
-    "anibridge-jellyfin-provider>=0.2.0",
+    "aiohttp>=3.14.5",
+    "alembic>=1.20.0",
+    "anibridge-anilist-provider>=0.2.2",
+    "anibridge-emby-provider>=0.2.3",
+    "anibridge-jellyfin-provider>=0.2.3",
     "anibridge-library-base>=0.2.1,<1.0.0",
     "anibridge-list-base>=0.2.0,<1.0.0",
-    "anibridge-mal-provider>=0.2.0",
-    "anibridge-plex-provider>=0.2.0",
-    "anibridge-utils>=0.2.1,<1.0.0",
+    "anibridge-mal-provider>=0.2.2",
+    "anibridge-plex-provider>=0.2.2",
+    "anibridge-utils>=0.2.2,<1.0.0",
     "bcrypt>=5.0.0",
     "colorama>=0.4.6",
-    "croniter>=6.2.2",
-    "litestar>=2.21.1",
-    "msgspec>=0.21.1",
+    "croniter>=6.2.4",
+    "litestar>=2.25.0",
+    "msgspec>=0.22.0",
     "psutil>=7.2.2",
-    "pydantic-settings>=2.13.1",
-    "pydantic>=2.12.5",
-    "pyparsing>=3.3.2",
-    "python-multipart>=0.0.26",
+    "pydantic-settings>=2.16.1",
+    "pydantic>=2.14.1",
+    "pyparsing>=3.3.3",
+    "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
-    "rapidfuzz>=3.14.3",
-    "sqlalchemy>=2.0.47",
-    "uvicorn[standard]>=0.44.0",
+    "rapidfuzz>=3.14.6",
+    "sqlalchemy>=2.1.6",
+    "uvicorn[standard]>=0.50.1",
 ]
 
 [project.scripts]
@@ -137,19 +137,17 @@ anibridge-list-base = { git = "https://github.com/anibridge/anibridge-list-base.
 anibridge-mal-provider = { git = "https://github.com/anibridge/anibridge-mal-provider.git", tag = "main" }
 anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-provider.git", tag = "main" }
 anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
-py-spy = { git = "https://github.com/czardoz/py-spy.git" }                                                           # Until upstream suports Python 3.14
 
 [build-system]
-requires = ["uv_build>=0.11.0,<0.12.0"]
+requires = ["uv_build>=0.13.4,<0.14.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "memray>=1.19.1",
-    "py-spy",
-    "pytest-asyncio>=1.3.0",
-    "pytest-cov>=7.0.0",
-    "pytest>=9.0.2",
-    "ruff>=0.15.5",
-    "ty>=0.0.22",
+    "memray>=1.20.0",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "ty>=0.0.90",
 ]

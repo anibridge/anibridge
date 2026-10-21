@@ -1,15 +1,12 @@
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import * as monaco from "monaco-editor/editor/editor.api.js";
+import editorWorker from "monaco-editor/editor/editor.worker?worker";
 
-import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js";
-import "monaco-editor/min/vs/editor/editor.main.css";
-import "monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js";
-import "monaco-editor/esm/vs/editor/contrib/contextmenu/browser/contextmenu.js";
-import "monaco-editor/esm/vs/editor/contrib/hover/browser/hoverContribution.js";
-import "monaco-editor/esm/vs/editor/contrib/snippet/browser/snippetController2.js";
-import "monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js";
-import "monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
-import "monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css";
+import "monaco-editor/languages/definitions/yaml/register.js";
+import "monaco-editor/editor/contrib/clipboard/browser/clipboard.js";
+import "monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js";
+import "monaco-editor/editor/contrib/hover/browser/hoverContribution.js";
+import "monaco-editor/editor/contrib/snippet/browser/snippetController2.js";
+import "monaco-editor/editor/contrib/suggest/browser/suggestController.js";
 
 import {
     clearYamlSchemaForModel,

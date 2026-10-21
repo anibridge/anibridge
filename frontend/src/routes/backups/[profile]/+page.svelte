@@ -10,7 +10,7 @@
     import { humanDuration, humanSize } from "$lib/utils/human";
     import { toast } from "$lib/utils/notify";
 
-    const { params } = $props<{ params: { profile: string } }>();
+    const { params }: { params: { profile: string } } = $props();
 
     let backups: BackupMeta[] = $state([]);
     let loading = $state(true);

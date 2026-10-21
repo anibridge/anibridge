@@ -379,8 +379,9 @@ def lint() -> None:
                 print_success(f"{package_dir.name} linting passed!")
 
         if target in ("both", "frontend"):
-            print_info("Running pnpm lint on frontend code...")
+            print_info("Running pnpm lint and type checks on frontend code...")
             subprocess.run(["pnpm", "lint"], cwd=ROOT_DIR / "frontend", check=True)
+            subprocess.run(["pnpm", "check"], cwd=ROOT_DIR / "frontend", check=True)
             print_success("Frontend code linting passed!")
 
         print_success(f"{target.capitalize()} linting checks completed successfully!")

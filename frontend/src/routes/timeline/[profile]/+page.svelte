@@ -30,7 +30,7 @@
     import { toast } from "$lib/utils/notify";
     import { createReconnectableWebSocket } from "$lib/utils/reconnectable-websocket";
 
-    const { params } = $props<{ params: { profile: string } }>();
+    const { params }: { params: { profile: string } } = $props();
 
     let items: HistoryItem[] = $state([]);
     let stats: Record<string, number> = $state({});

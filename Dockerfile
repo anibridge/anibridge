@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev && \
     find /venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null
 
-FROM --platform=$BUILDPLATFORM node:25-alpine AS node-builder
+FROM --platform=$BUILDPLATFORM node:26.12.1-alpine@sha256:9bd229b644e391df00fb989efa732335aefc6170a05d8c163c5c8ca9870da401 AS node-builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ ENV CI=1 \
     PNPM_STORE_DIR=/pnpm/store
 ENV PATH="$PNPM_HOME:$PATH"
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@12.14.0
 
 RUN --mount=type=bind,source=frontend/pnpm-lock.yaml,target=/app/pnpm-lock.yaml,ro \
     --mount=type=bind,source=frontend/package.json,target=/app/package.json,ro \

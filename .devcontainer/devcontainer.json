@@ -3,7 +3,8 @@
     "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
     "features": {
         "ghcr.io/devcontainers/features/node:2": {
-            "version": "25"
+            "version": "26.12.1",
+            "pnpmVersion": "12.14.0"
         },
         "ghcr.io/devcontainers/features/github-cli:1": {},
         "ghcr.io/devcontainers-extra/features/apt-packages:1": {

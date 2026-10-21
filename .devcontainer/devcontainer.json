@@ -1,6 +1,6 @@
 {
     "name": "anibridge",
-    "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu26.04@sha256:91eff046d5c12318fc98e59258982b87ba896c467427ed8b5dab5a02107a5db7",
     "features": {
         "ghcr.io/devcontainers/features/node:2": {
             "version": "26.12.1",
@@ -47,6 +47,7 @@
             "onAutoForward": "notify"
         }
     },
+    "remoteUser": "vscode",
     "postCreateCommand": "CI=1 uv run ab-deps-install",
     "containerEnv": {
         "PYTHON_JIT": "1",

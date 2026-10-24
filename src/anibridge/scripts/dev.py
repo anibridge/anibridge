@@ -16,7 +16,7 @@ def _resolve_root_dir() -> Path:
     """Resolve repository root for script command execution."""
     cwd = Path.cwd().resolve()
     for candidate in (cwd, *cwd.parents):
-        if (candidate / "pyproject.toml").exists():
+        if (candidate / "src/anibridge/scripts/dev.py").is_file():
             return candidate
 
     return Path(scripts_file).resolve().parents[3]
@@ -110,13 +110,13 @@ def print_info(message: str) -> None:
     )
 
 
-def parse_target_args(argv=None) -> str:
+def parse_target_args(argv=None, *, default: str = "both") -> str:
     """Parse command line arguments for target selection."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "target",
         nargs="?",
-        default="both",
+        default=default,
         choices=["both", "backend", "frontend"],
         help="Target to operate on: both, backend, or frontend",
     )
@@ -463,27 +463,26 @@ def meta_setup() -> None:
 
 
 def test() -> None:
-    """Run the backend test suite."""
+    """Run the selected backend and frontend test suites, defaulting to both."""
     target = parse_target_args()
 
-    if target == "frontend":
-        print_error("Frontend does not have a pytest suite to run.")
-        sys.exit(1)
-
-    print_task("Running backend tests with pytest...")
+    print_task(f"Running {target} tests...")
 
     try:
-        subprocess.run([sys.executable, "-m", "pytest"], cwd=ROOT_DIR, check=True)
-        print_success("Pytest suite completed successfully!")
+        if target in ("both", "backend"):
+            for project_dir in [ROOT_DIR, *_iter_testable_package_dirs()]:
+                print_info(f"Running pytest in {project_dir.name}...")
+                _run_python_command(
+                    [sys.executable, "-m", "pytest"],
+                    cwd=project_dir,
+                    success_message=f"{project_dir.name} tests completed successfully!",
+                    failure_message=f"{project_dir.name} tests failed!",
+                )
 
-        for package_dir in _iter_testable_package_dirs():
-            print_info(f"Running pytest in {package_dir.name}...")
-            _run_python_command(
-                [sys.executable, "-m", "pytest"],
-                cwd=package_dir,
-                success_message=f"{package_dir.name} tests completed successfully!",
-                failure_message=f"{package_dir.name} tests failed!",
-            )
+        if target in ("both", "frontend"):
+            print_info("Running frontend tests with Vitest...")
+            subprocess.run(["pnpm", "test"], cwd=ROOT_DIR / "frontend", check=True)
+            print_success("Frontend tests completed successfully!")
     except subprocess.CalledProcessError:
         print_error("Tests failed! Please fix the issues above.")
         sys.exit(1)
@@ -574,13 +573,15 @@ def main() -> None:
     parser.add_argument(
         "target",
         nargs="?",
-        default="both",
+        default=None,
         choices=["both", "backend", "frontend"],
         help="Target to operate on: both, backend, or frontend",
     )
     args = parser.parse_args()
 
-    sys.argv = [sys.argv[0], args.target]  # Pass target to functions
+    sys.argv = [sys.argv[0]]
+    if args.target is not None:
+        sys.argv.append(args.target)
 
     match args.command:
         case "build":

@@ -51,10 +51,9 @@ class MappingsClient:
         """
         self.data_path = data_path
         self.upstream_url = upstream_url
-        self._loaded_sources: set[str] = set()
         self._provenance: dict[str, list[str]] = {}
         self._session: aiohttp.ClientSession | None = None
-        self._content_hash = md5()  # tracks raw content hashes during loading
+        self._source_hashes: dict[str, str] = {}
         self._snapshot_complete = True
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -80,8 +79,7 @@ class MappingsClient:
     def clear_cache(self) -> None:
         """Release loaded mapping data to free memory."""
         self._provenance.clear()
-        self._loaded_sources.clear()
-        self._content_hash = md5()
+        self._source_hashes.clear()
 
     def is_snapshot_complete(self) -> bool:
         """Return whether every source in the current snapshot loaded successfully."""
@@ -134,7 +132,8 @@ class MappingsClient:
 
     def _decode_mappings(self, payload: bytes, src: str) -> AnimapDict:
         """Decode a raw JSON/YAML payload from a given source."""
-        suffixes = [suffix.lower() for suffix in Path(src).suffixes]
+        source_path = urlparse(src).path if self._is_url(src) else src
+        suffixes = [suffix.lower() for suffix in Path(source_path).suffixes]
         if suffixes and suffixes[-1] == ".zst":
             try:
                 payload = zstd.decompress(payload)
@@ -156,12 +155,21 @@ class MappingsClient:
                 log.exception("Zstandard decompression error details")
                 return {}
 
-        self._content_hash.update(payload)
+        self._source_hashes[src] = md5(payload).hexdigest()
 
         suffix = suffixes[-1] if suffixes else ""
         try:
             if suffix in {".yaml", ".yml"}:
-                decoded = yaml.load(payload.decode(), Loader=YamlLoader)
+                text = payload.decode()
+                decoded = yaml.load(text, Loader=YamlLoader)
+                if decoded is None:
+                    node = yaml.compose(text, Loader=YamlLoader)
+                    if node is None or (
+                        isinstance(node, yaml.ScalarNode)
+                        and node.value == ""
+                        and node.start_mark.index == node.end_mark.index
+                    ):
+                        return {}
             else:
                 if suffix != ".json":
                     log.warning(
@@ -170,11 +178,13 @@ class MappingsClient:
                     )
                 decoded = msgspec.json.decode(payload)
 
-            if decoded is None:
-                return {}
             if not isinstance(decoded, dict):
                 self._snapshot_complete = False
                 log.error("Mappings file $$'%s'$$ must contain an object", src)
+                return {}
+            if any(not isinstance(key, str) for key in decoded):
+                self._snapshot_complete = False
+                log.error("Mappings file $$'%s'$$ must use string keys", src)
                 return {}
             return cast(AnimapDict, decoded)
         except msgspec.DecodeError, yaml.YAMLError:
@@ -191,18 +201,26 @@ class MappingsClient:
         self, src: str, mappings: AnimapDict, loaded_chain: set[str]
     ) -> AnimapDict:
         """Merge includes and track provenance for a decoded source payload."""
-        self._loaded_sources.add(src)
-
         if not mappings:
             log.warning("No mappings found in $$'%s'$$", src)
             return {}
 
-        includes_value: dict | list = mappings.get("$includes", [])
+        includes_value: object = mappings.get("$includes", [])
         if isinstance(includes_value, list):
-            includes = [str(item) for item in includes_value]
+            includes = []
+            for item in includes_value:
+                if not isinstance(item, str) or not item.strip():
+                    self._snapshot_complete = False
+                    log.error(
+                        "The $includes key in $$'%s'$$ must contain non-empty strings",
+                        src,
+                    )
+                    continue
+                includes.append(item.strip())
         else:
             includes = []
-            log.warning(
+            self._snapshot_complete = False
+            log.error(
                 "The $includes key in $$'%s'$$ is not a list, ignoring all entries",
                 src,
             )
@@ -230,24 +248,11 @@ class MappingsClient:
         Returns:
             str: Resolved path
         """
-        is_url = self._is_url(include_path)
-        is_file = self._is_file(include_path)
-        is_parent_url = self._is_url(str(parent_path))
-        is_parent_file = self._is_file(parent_path)
-
-        # Absolute URL or absolute path
-        if is_url or (is_file and Path(parent_path).is_absolute()):
+        if self._is_url(include_path):
             return include_path
-        # Relative URL
-        if is_parent_url:
+        if self._is_url(parent_path):
             return urljoin(parent_path, include_path)
-        # Relative path
-        if is_parent_file:
-            parent_dir = Path(parent_path).parent
-            resolved_path = (parent_dir / include_path).resolve()
-            return resolved_path.as_posix()
-        # Invalid path
-        return include_path
+        return (Path(parent_path).parent / include_path).resolve().as_posix()
 
     async def _load_includes(
         self, includes: list[str], loaded_chain: set[str], parent: str
@@ -283,13 +288,6 @@ class MappingsClient:
                     resolved_include,
                 )
                 continue
-            if resolved_include in self._loaded_sources:
-                log.info(
-                    "Skipping already loaded include: $$'%s'$$",
-                    resolved_include,
-                )
-                continue
-
             tasks.append(asyncio.create_task(_load_one(resolved_include)))
 
         if not tasks:
@@ -377,6 +375,8 @@ class MappingsClient:
         Returns:
             AnimapDict: Mappings loaded from the file or URL
         """
+        if not self._is_url(src):
+            src = (await anyio.Path(src).resolve()).as_posix()
         if loaded_chain is None:
             loaded_chain = set()
         loaded_chain = loaded_chain | {src}
@@ -416,9 +416,7 @@ class MappingsClient:
         Returns:
             AnimapDict: Merged mappings with system keys removed
         """
-        self._loaded_sources = set()
-        self._provenance = {}
-        self._content_hash = md5()
+        self.clear_cache()
         self._snapshot_complete = True
 
         if self.upstream_url is not None:
@@ -477,9 +475,8 @@ class MappingsClient:
     async def load_source(self, src: str) -> AnimapDict:
         """Load mappings from a single source without merging.
 
-        This resets internal provenance and loaded-source tracking so callers can
-        inspect the raw payload and provenance produced by that specific source
-        (plus any of its includes).
+        This resets provenance and source fingerprints so callers can inspect the
+        payload and provenance produced by that source and its includes.
 
         Args:
             src (str): File path or URL to load.
@@ -487,16 +484,15 @@ class MappingsClient:
         Returns:
             AnimapDict: Parsed mapping payload, or an empty dict on failure.
         """
-        self._loaded_sources = set()
-        self._provenance = {}
-        self._content_hash = md5()
+        self.clear_cache()
         self._snapshot_complete = True
         return await self._load_mappings(src)
 
     def get_content_hash(self) -> str:
-        """Return the hex digest of all raw payloads decoded in the last load."""
-        return self._content_hash.hexdigest()
+        """Fingerprint source contents independently of download completion order."""
+        sources = sorted(self._source_hashes.items())
+        return md5(msgspec.json.encode(sources)).hexdigest()
 
     def get_provenance(self) -> dict[str, list[str]]:
-        """Return a copy of the provenance map collected during the last load."""
-        return {str(k): list(v) for k, v in self._provenance.items()}
+        """Return provenance with sources ordered independently of completion time."""
+        return {str(k): sorted(v) for k, v in self._provenance.items()}

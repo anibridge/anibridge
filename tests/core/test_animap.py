@@ -7,6 +7,7 @@ from hashlib import md5
 from pathlib import Path
 from typing import Any, cast
 
+import msgspec.json
 import pytest
 from sqlalchemy.sql import select
 
@@ -192,7 +193,14 @@ def test_sync_db_creates_entries_mappings_and_provenance(
     asyncio.run(animap_client.sync_db())
 
     expected_hash = md5(
-        json.dumps(mapping_data, sort_keys=True).encode("utf-8")
+        msgspec.json.encode(
+            [
+                (
+                    str(mappings_path.resolve()),
+                    md5(mappings_path.read_bytes()).hexdigest(),
+                )
+            ]
+        )
     ).hexdigest()
 
     with in_memory_db as ctx:
@@ -327,6 +335,57 @@ def test_sync_db_preserves_existing_data_after_incomplete_refresh(
     assert mapping_hash is not None
     assert provenance_hash is not None
     assert (mapping_hash.value, provenance_hash.value) == initial_hashes
+
+
+@pytest.mark.parametrize(
+    "payload", [b"null", b'{"$includes": "missing.json"}', b'{"$includes": [null]}']
+)
+def test_sync_db_preserves_existing_snapshot_after_malformed_source(
+    animap_client: AnimapClient,
+    tmp_path: Path,
+    in_memory_db: AnibridgeDb,
+    payload: bytes,
+) -> None:
+    mapping_path = _write_mapping_file(tmp_path, _mapping_data())
+    asyncio.run(animap_client.sync_db())
+
+    def snapshot():
+        with in_memory_db as ctx:
+            return _fetch_edges(ctx), {
+                row.key: row.value
+                for row in ctx.session.execute(select(Housekeeping)).scalars()
+            }
+
+    original_snapshot = snapshot()
+    assert original_snapshot[0]
+    mapping_path.write_bytes(payload)
+
+    asyncio.run(animap_client.sync_db())
+
+    assert snapshot() == original_snapshot
+
+
+@pytest.mark.parametrize("payload", [b"", b"# no custom mappings\n", b"---\n...\n"])
+def test_sync_db_accepts_empty_yaml_snapshot(
+    animap_client: AnimapClient,
+    tmp_path: Path,
+    in_memory_db: AnibridgeDb,
+    payload: bytes,
+) -> None:
+    mapping_path = _write_mapping_file(tmp_path, _mapping_data()).rename(
+        tmp_path / "mappings.yaml"
+    )
+    asyncio.run(animap_client.sync_db())
+    with in_memory_db as ctx:
+        assert _fetch_edges(ctx)
+
+    mapping_path.write_bytes(payload)
+    asyncio.run(animap_client.sync_db())
+
+    assert animap_client.mappings_client.is_snapshot_complete()
+    with in_memory_db as ctx:
+        assert _fetch_edges(ctx) == []
+        assert ctx.session.execute(select(AnimapEntry)).scalars().all() == []
 
 
 def test_sync_db_accepts_complete_empty_snapshot(

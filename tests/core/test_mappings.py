@@ -1,5 +1,6 @@
 """Tests for the core mappings client (descriptor graph)."""
 
+import asyncio
 import json
 from compression import zstd
 from pathlib import Path
@@ -16,6 +17,50 @@ from anibridge.app.core.mappings import MappingsClient
 
 def _make_client(tmp_path: Path) -> MappingsClient:
     return MappingsClient(data_path=tmp_path, upstream_url=None)
+
+
+def test_content_hash_is_independent_of_source_completion_order(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    first = b'{"anilist:1": {"tmdb:2": {"1": null}}}'
+    second = b'{"anilist:3": {"tmdb:4": {"1": null}}}'
+    client._decode_mappings(first, "first.json")
+    client._decode_mappings(second, "second.json")
+    expected = client.get_content_hash()
+
+    client.clear_cache()
+    client._decode_mappings(second, "second.json")
+    client._decode_mappings(first, "first.json")
+
+    assert client.get_content_hash() == expected
+
+
+def test_content_hash_tracks_source_content_and_resets(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    empty_hash = client.get_content_hash()
+    client._decode_mappings(b"{}", "source.json")
+    first_hash = client.get_content_hash()
+    client._decode_mappings(b'{"anilist:1": {}}', "source.json")
+
+    assert client.get_content_hash() != first_hash
+    assert first_hash != empty_hash
+
+    client.clear_cache()
+
+    assert client.get_content_hash() == empty_hash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sources", [("a.json", "b.json"), ("b.json", "a.json")])
+async def test_provenance_is_independent_of_source_completion_order(
+    tmp_path: Path, sources: tuple[str, str]
+) -> None:
+    client = _make_client(tmp_path)
+    for source in sources:
+        await client._finalize_mappings(
+            source, {"anilist:1": {"tmdb:2": {"1": None}}}, set()
+        )
+
+    assert client.get_provenance() == {"anilist:1": ["a.json", "b.json"]}
 
 
 @pytest.mark.asyncio
@@ -114,6 +159,45 @@ def test_resolve_path_handles_relative_paths_and_urls(tmp_path: Path) -> None:
     assert resolved_url == "https://example.com/mappings/child.json"
 
 
+def test_resolve_path_does_not_use_working_directory_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "child.json").write_text("{}", encoding="utf-8")
+    parent = tmp_path / "nested/root.json"
+
+    client = _make_client(tmp_path)
+
+    assert client._resolve_path("child.json", str(parent)) == str(
+        tmp_path / "nested/child.json"
+    )
+    assert client._resolve_path(str(tmp_path / "missing.json"), str(parent)) == str(
+        tmp_path / "missing.json"
+    )
+
+
+@pytest.mark.parametrize("suffix", ["json.zst", "yaml", "yml.zst"])
+def test_decode_mappings_uses_url_path_for_format_detection(
+    tmp_path: Path, suffix: str
+) -> None:
+    expected = {"anilist:1": {"tmdb:2": {"1": None}}}
+    payload = (
+        json.dumps(expected).encode()
+        if suffix.startswith("json")
+        else b"anilist:1:\n  tmdb:2:\n    '1': null\n"
+    )
+    if suffix.endswith("zst"):
+        payload = zstd.compress(payload)
+    client = _make_client(tmp_path)
+
+    result = client._decode_mappings(
+        payload, f"https://example.com/mappings.{suffix}?token=example#download"
+    )
+
+    assert result == expected
+    assert client.is_snapshot_complete()
+
+
 @pytest.mark.asyncio
 async def test_get_provenance_preservesdescriptor_keys(tmp_path: Path) -> None:
     """Getting provenance preserves the original descriptor keys."""
@@ -173,7 +257,7 @@ def test_decode_mappings_unknown_extension_defaults_to_json(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_finalize_mappings_with_invalid_includes(tmp_path: Path) -> None:
-    """Non-list includes should be ignored while provenance is tracked."""
+    """Malformed includes must not authorize replacing the mapping snapshot."""
     client = _make_client(tmp_path)
     mappings = {"$includes": "bad", "anilist:1": {"tmdb:2": {"1": None}}}
 
@@ -183,21 +267,82 @@ async def test_finalize_mappings_with_invalid_includes(tmp_path: Path) -> None:
 
     assert "anilist:1" in merged
     assert client.get_provenance() == {"anilist:1": ["source.json"]}
+    assert client.is_snapshot_complete() is False
 
 
 @pytest.mark.asyncio
-async def test_load_includes_skips_loaded_and_circular(tmp_path: Path) -> None:
-    """Includes already loaded or in the chain should be skipped."""
+@pytest.mark.parametrize("include", [None, 1, {}, "", "   "])
+async def test_finalize_mappings_rejects_invalid_include_entries(
+    tmp_path: Path, include: object
+) -> None:
     client = _make_client(tmp_path)
-    client._loaded_sources.add("included.json")
+
+    await client._finalize_mappings(
+        "source.json",
+        cast(mappings_module.AnimapDict, {"$includes": [include]}),
+        set(),
+    )
+
+    assert client.is_snapshot_complete() is False
+
+
+@pytest.mark.asyncio
+async def test_load_includes_skips_circular_sources(tmp_path: Path) -> None:
+    """Includes already in the current chain should be skipped."""
+    client = _make_client(tmp_path)
 
     result = await client._load_includes(
-        ["included.json", "circular.json"],
-        loaded_chain={"circular.json"},
-        parent="root.json",
+        ["circular.json"],
+        loaded_chain={str(tmp_path / "circular.json")},
+        parent=str(tmp_path / "root.json"),
     )
 
     assert result == {}
+    assert client.is_snapshot_complete()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delayed_source", ["a.json", "b.json"])
+async def test_shared_include_inheritance_is_independent_of_completion_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delayed_source: str
+) -> None:
+    sources = {
+        "root.json": {"$includes": ["a.json", "b.json"]},
+        "a.json": {
+            "$includes": ["shared.json"],
+            "anilist:1": {"tvdb:2": {"1": "7"}},
+        },
+        "b.json": {
+            "$includes": ["shared.json"],
+            "anilist:1": {"tmdb:2": {"1": "2"}},
+        },
+        "shared.json": {"anilist:1": {"tmdb:2": {"1": "1"}}},
+    }
+    for name, payload in sources.items():
+        (tmp_path / name).write_text(json.dumps(payload), encoding="utf-8")
+
+    client = _make_client(tmp_path)
+    sibling_finished = asyncio.Event()
+    original_load = client._load_mappings
+
+    async def ordered_load(src: str, loaded_chain: set[str] | None = None):
+        name = Path(src).name
+        if name == delayed_source:
+            await sibling_finished.wait()
+        result = await original_load(src, loaded_chain)
+        if name in {"a.json", "b.json"} and name != delayed_source:
+            sibling_finished.set()
+        return result
+
+    monkeypatch.setattr(client, "_load_mappings", ordered_load)
+
+    result = await client.load_source(str(tmp_path / "root.json"))
+
+    assert result["anilist:1"] == {
+        "tmdb:2": {"1": "1"},
+        "tvdb:2": {"1": "7"},
+    }
+    assert client.is_snapshot_complete()
 
 
 @pytest.mark.asyncio
@@ -322,6 +467,43 @@ def test_decode_mappings_empty_object_is_complete(tmp_path: Path) -> None:
 
     assert result == {}
     assert client.is_snapshot_complete() is True
+
+
+@pytest.mark.parametrize(
+    "payload", [b"", b" \n", b"# empty document\n", b"---\n# empty document\n...\n"]
+)
+@pytest.mark.parametrize("suffix", ["yaml", "yml", "yaml.zst"])
+def test_decode_mappings_accepts_empty_yaml_documents(
+    tmp_path: Path, payload: bytes, suffix: str
+) -> None:
+    client = _make_client(tmp_path)
+    if suffix.endswith("zst"):
+        payload = zstd.compress(payload)
+
+    assert client._decode_mappings(payload, f"mappings.{suffix}") == {}
+    assert client.is_snapshot_complete()
+
+
+@pytest.mark.parametrize(
+    ("payload", "source"),
+    [
+        (b"null", "mappings.json"),
+        (b"null", "mappings.yaml"),
+        (b"", "mappings.json"),
+        (b"~", "mappings.yaml"),
+        (b"!!null", "mappings.yaml"),
+        (b'!!null ""', "mappings.yaml"),
+        (b"1: {}", "mappings.yaml"),
+        (b"[]", "mappings.json"),
+    ],
+)
+def test_decode_mappings_rejects_non_mapping_documents(
+    tmp_path: Path, payload: bytes, source: str
+) -> None:
+    client = _make_client(tmp_path)
+
+    assert client._decode_mappings(payload, source) == {}
+    assert client.is_snapshot_complete() is False
 
 
 def test_decode_mappings_zstd_payload(tmp_path: Path) -> None:

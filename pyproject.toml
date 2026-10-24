@@ -129,14 +129,14 @@ module-name = "anibridge"
 namespace = true
 
 [tool.uv.sources]
-anibridge-anilist-provider = { git = "https://github.com/anibridge/anibridge-anilist-provider.git", tag = "main" }
-anibridge-emby-provider = { git = "https://github.com/anibridge/anibridge-emby-provider.git", tag = "main" }
-anibridge-jellyfin-provider = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git", tag = "main" }
-anibridge-library-base = { git = "https://github.com/anibridge/anibridge-library-base.git", tag = "main" }
-anibridge-list-base = { git = "https://github.com/anibridge/anibridge-list-base.git", tag = "main" }
-anibridge-mal-provider = { git = "https://github.com/anibridge/anibridge-mal-provider.git", tag = "main" }
-anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-provider.git", tag = "main" }
-anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
+# anibridge-anilist-provider = { git = "https://github.com/anibridge/anibridge-anilist-provider.git", tag = "main" }
+# anibridge-emby-provider = { git = "https://github.com/anibridge/anibridge-emby-provider.git", tag = "main" }
+# anibridge-jellyfin-provider = { git = "https://github.com/anibridge/anibridge-jellyfin-provider.git", tag = "main" }
+# anibridge-library-base = { git = "https://github.com/anibridge/anibridge-library-base.git", tag = "main" }
+# anibridge-list-base = { git = "https://github.com/anibridge/anibridge-list-base.git", tag = "main" }
+# anibridge-mal-provider = { git = "https://github.com/anibridge/anibridge-mal-provider.git", tag = "main" }
+# anibridge-plex-provider = { git = "https://github.com/anibridge/anibridge-plex-provider.git", tag = "main" }
+# anibridge-utils = { git = "https://github.com/anibridge/anibridge-utils.git", tag = "main" }
 
 [build-system]
 requires = ["uv_build>=0.13.4,<0.14.0"]

@@ -85,20 +85,20 @@ def _register_classes(class_paths: Iterable[str]) -> None:
         _LOADED_CLASSES.add(class_path)
 
 
-def _collect_class_overrides(config: AnibridgeConfig) -> set[str]:
-    """Gather class paths requested globally and by the profile."""
-    classes: set[str] = set(config.provider_classes or [])
-    if not config.provider_classes:
-        return classes
-    classes.update(config.provider_classes)
-    return classes
+def _collect_class_overrides(config: AnibridgeConfig) -> tuple[str, ...]:
+    """Gather unique configured class paths in registration order."""
+    return tuple(dict.fromkeys(config.provider_classes or ()))
 
 
-def _ensure_default_provider(namespace: str) -> None:
+def _ensure_default_provider(
+    namespace: str,
+    registry: ProviderRegistry[LibraryProvider] | ProviderRegistry[ListProvider],
+    defaults: dict[str, str],
+) -> None:
     """Import the default provider class for a namespace if not yet loaded."""
-    class_path = _DEFAULT_LIBRARY_CLASSES_BY_NS.get(
-        namespace
-    ) or _DEFAULT_LIST_CLASSES_BY_NS.get(namespace)
+    if namespace in registry:
+        return
+    class_path = defaults.get(namespace)
     if class_path and class_path not in _LOADED_CLASSES:
         _register_classes((class_path,))
 
@@ -113,25 +113,21 @@ def build_library_provider(profile: AnibridgeProfileConfig) -> LibraryProvider:
         LibraryProvider: The instantiated library provider.
     """
     _register_classes(_collect_class_overrides(profile.parent))
-    _ensure_default_provider(profile.library_provider)
+    _ensure_default_provider(
+        profile.library_provider, library_registry, _DEFAULT_LIBRARY_CLASSES_BY_NS
+    )
 
     namespace = profile.library_provider
     config = profile.library_provider_config.get(namespace)
     try:
         provider_cls = library_registry.get(namespace)
-    except LookupError:
-        logger = log
-    else:
-        logger = get_logger(provider_cls.__module__)
-
-    try:
-        return library_registry.create(namespace, logger=logger, config=config)
     except LookupError as exc:
         raise ProfileConfigError(
             f"No library provider registered for namespace '{namespace or 'None'}'. "
             "Ensure the provider package is installed and listed under "
             "provider_classes."
         ) from exc
+    return provider_cls(logger=get_logger(provider_cls.__module__), config=config)
 
 
 def build_list_provider(profile: AnibridgeProfileConfig) -> ListProvider:
@@ -144,22 +140,18 @@ def build_list_provider(profile: AnibridgeProfileConfig) -> ListProvider:
         ListProvider: The instantiated list provider.
     """
     _register_classes(_collect_class_overrides(profile.parent))
-    _ensure_default_provider(profile.list_provider)
+    _ensure_default_provider(
+        profile.list_provider, list_registry, _DEFAULT_LIST_CLASSES_BY_NS
+    )
 
     namespace = profile.list_provider
     config = profile.list_provider_config.get(namespace)
     try:
         provider_cls = list_registry.get(namespace)
-    except LookupError:
-        logger = log
-    else:
-        logger = get_logger(provider_cls.__module__)
-
-    try:
-        return list_registry.create(namespace, logger=logger, config=config)
     except LookupError as exc:
         raise ProfileConfigError(
             f"No list provider registered for namespace '{namespace}'. "
             "Ensure the provider package is installed and listed under "
             "provider_classes."
         ) from exc
+    return provider_cls(logger=get_logger(provider_cls.__module__), config=config)

@@ -271,6 +271,61 @@ async def test_sync_fallback_serializes_overlapping_requests(
 
 
 @pytest.mark.asyncio
+async def test_stop_joins_idle_worker_wait_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_scheduler: ProfileScheduler,
+) -> None:
+    waiting = asyncio.Event()
+    wait_tasks: set[asyncio.Task] = set()
+    original_wait = asyncio.wait
+
+    async def tracked_wait(tasks, **kwargs):
+        wait_tasks.update(tasks)
+        waiting.set()
+        return await original_wait(tasks, **kwargs)
+
+    monkeypatch.setattr(asyncio, "wait", tracked_wait)
+    await profile_scheduler.start()
+    await waiting.wait()
+
+    try:
+        await profile_scheduler.stop(set_stop_event=False)
+
+        assert len(wait_tasks) == 2
+        assert all(task.done() for task in wait_tasks)
+    finally:
+        for task in wait_tasks:
+            task.cancel()
+        await asyncio.gather(*wait_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_worker_cancellation_cancels_dequeued_request(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_scheduler: ProfileScheduler,
+) -> None:
+    original_wait = asyncio.wait
+
+    async def cancel_after_dequeue(tasks, **kwargs):
+        result = await original_wait(tasks, **kwargs)
+        worker = asyncio.current_task()
+        assert worker is not None
+        worker.cancel()
+        return result
+
+    monkeypatch.setattr(asyncio, "wait", cancel_after_dequeue)
+    future = await profile_scheduler._enqueue_sync()
+    profile_scheduler._running = True
+    worker = asyncio.create_task(profile_scheduler._sync_worker())
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+
+    assert future.cancelled()
+    assert _get_bridge(profile_scheduler).calls == []
+
+
+@pytest.mark.asyncio
 async def test_start_and_stop_manage_worker_and_loops(
     monkeypatch: pytest.MonkeyPatch,
     profile_scheduler_factory,

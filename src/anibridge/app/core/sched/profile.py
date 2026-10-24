@@ -196,14 +196,23 @@ class ProfileScheduler:
             while self._running and not self.stop_event.is_set():
                 wait_task = asyncio.create_task(self.stop_event.wait())
                 queue_task = asyncio.create_task(self._request_queue.get())
-                done, pending = await asyncio.wait(
-                    {wait_task, queue_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in pending:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
+                try:
+                    try:
+                        done, _ = await asyncio.wait(
+                            {wait_task, queue_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        for task in (wait_task, queue_task):
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(
+                            wait_task, queue_task, return_exceptions=True
+                        )
+                except asyncio.CancelledError:
+                    if queue_task.done() and not queue_task.cancelled():
+                        queue_task.result().future.cancel()
+                    raise
 
                 if wait_task in done and self.stop_event.is_set():
                     if queue_task in done:

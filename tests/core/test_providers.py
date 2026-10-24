@@ -1,10 +1,10 @@
 """Tests for provider loader helpers."""
 
-from logging import Logger
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from anibridge.utils.registry import ProviderRegistry
 
 import anibridge.app.core.providers as providers_module
 from anibridge.app.exceptions import ProfileConfigError
@@ -17,25 +17,31 @@ class DummyConfig(SimpleNamespace):
         super().__init__(provider_classes=provider_classes)
 
 
+@pytest.fixture(autouse=True)
+def reset_provider_registries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(providers_module, "library_registry", ProviderRegistry())
+    monkeypatch.setattr(providers_module, "list_registry", ProviderRegistry())
+    monkeypatch.setattr(providers_module, "_LOADED_CLASSES", set())
+
+
 def test_collect_class_overrides_returns_empty_for_none() -> None:
-    """No provider_classes should yield an empty override set."""
+    """No provider_classes should yield no overrides."""
     config = DummyConfig(provider_classes=None)
 
     assert (
         providers_module._collect_class_overrides(
             cast("providers_module.AnibridgeConfig", config)
         )
-        == set()
+        == ()
     )
 
 
-def test_collect_class_overrides_returns_set_for_values() -> None:
-    """Provider class overrides should be returned as a set."""
-    config = DummyConfig(provider_classes=["pkg.a.A", "pkg.b.B"])
+def test_collect_class_overrides_preserves_unique_registration_order() -> None:
+    config = DummyConfig(provider_classes=["pkg.b.B", "pkg.a.A", "pkg.b.B"])
 
     assert providers_module._collect_class_overrides(
         cast("providers_module.AnibridgeConfig", config)
-    ) == {"pkg.a.A", "pkg.b.B"}
+    ) == ("pkg.b.B", "pkg.a.A")
 
 
 def test_register_classes_skips_duplicates_and_blanks(
@@ -83,11 +89,6 @@ def test_build_library_provider_raises_when_missing(
         parent=DummyConfig(provider_classes=[]),
     )
 
-    def fake_create(_namespace: str, logger: Logger, config=None):
-        raise LookupError("missing")
-
-    monkeypatch.setattr(providers_module.library_registry, "create", fake_create)
-
     with pytest.raises(ProfileConfigError):
         providers_module.build_library_provider(
             cast("providers_module.AnibridgeProfileConfig", profile)
@@ -104,15 +105,72 @@ def test_build_list_provider_raises_when_missing(
         parent=DummyConfig(provider_classes=[]),
     )
 
-    def fake_create(_namespace: str, logger: Logger, config=None):
-        raise LookupError("missing")
-
-    monkeypatch.setattr(providers_module.list_registry, "create", fake_create)
-
     with pytest.raises(ProfileConfigError):
         providers_module.build_list_provider(
             cast("providers_module.AnibridgeProfileConfig", profile)
         )
+
+
+@pytest.mark.parametrize(("kind", "namespace"), [("library", "plex"), ("list", "mal")])
+def test_configured_provider_takes_precedence_over_default(
+    monkeypatch: pytest.MonkeyPatch, kind: str, namespace: str
+) -> None:
+    provider_base = type("ProviderBase", (), {})
+
+    class CustomProvider(provider_base):
+        NAMESPACE = namespace
+
+        def __init__(self, *, logger, config):
+            self.config = config
+
+    monkeypatch.setattr(
+        providers_module,
+        "LibraryProvider" if kind == "library" else "ListProvider",
+        provider_base,
+    )
+    imports: list[str] = []
+
+    def fake_import(module: str) -> SimpleNamespace:
+        imports.append(module)
+        return SimpleNamespace(Provider=CustomProvider)
+
+    monkeypatch.setattr(providers_module, "import_module", fake_import)
+    profile = SimpleNamespace(
+        parent=DummyConfig(provider_classes=["custom.Provider"]),
+        **{
+            f"{kind}_provider": namespace,
+            f"{kind}_provider_config": {namespace: {"x": 1}},
+        },
+    )
+    build = getattr(providers_module, f"build_{kind}_provider")
+
+    instance = build(profile)
+
+    assert isinstance(instance, CustomProvider)
+    assert instance.config == {"x": 1}
+    assert imports == ["custom"]
+
+
+@pytest.mark.parametrize(("kind", "namespace"), [("library", "plex"), ("list", "mal")])
+def test_provider_constructor_lookup_errors_are_not_registration_errors(
+    kind: str, namespace: str
+) -> None:
+    class BrokenProvider:
+        NAMESPACE = namespace
+
+        def __init__(self, **kwargs):
+            raise LookupError("provider initialization failed")
+
+    registry = getattr(providers_module, f"{kind}_registry")
+    registry.register(BrokenProvider)
+    profile = SimpleNamespace(
+        parent=DummyConfig(provider_classes=[]),
+        **{f"{kind}_provider": namespace, f"{kind}_provider_config": {}},
+    )
+    build = getattr(providers_module, f"build_{kind}_provider")
+
+    with pytest.raises(LookupError, match="provider initialization failed"):
+        build(profile)
 
 
 @pytest.mark.parametrize(

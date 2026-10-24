@@ -7,6 +7,8 @@ from typing import Any, cast
 
 import aiohttp
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 import anibridge.app.core.mappings as mappings_module
 from anibridge.app.core.mappings import MappingsClient
@@ -14,6 +16,36 @@ from anibridge.app.core.mappings import MappingsClient
 
 def _make_client(tmp_path: Path) -> MappingsClient:
     return MappingsClient(data_path=tmp_path, upstream_url=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redirect", [False, True])
+async def test_load_mappings_url_accepts_large_response_headers(
+    tmp_path: Path, redirect: bool
+) -> None:
+    expected = {"anilist:1": {"tmdb:2": {"1": None}}}
+    payload = zstd.compress(json.dumps(expected).encode())
+    headers = {"Content-Security-Policy": "a" * (16 * 1024)}
+
+    async def download(_request: web.Request) -> web.Response:
+        if redirect:
+            raise web.HTTPFound("/asset.json.zst", headers=headers)
+        return web.Response(body=payload, headers=headers)
+
+    async def asset(_request: web.Request) -> web.Response:
+        return web.Response(body=payload)
+
+    app = web.Application()
+    app.router.add_get("/mappings.json.zst", download)
+    app.router.add_get("/asset.json.zst", asset)
+
+    async with TestServer(app) as server, _make_client(tmp_path) as client:
+        result = await client._load_mappings_url(
+            str(server.make_url("/mappings.json.zst")), set()
+        )
+
+        assert result == expected
+        assert client.is_snapshot_complete()
 
 
 @pytest.mark.asyncio

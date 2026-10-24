@@ -68,6 +68,7 @@ class MappingsClient:
             self._session = aiohttp.ClientSession(
                 headers=headers,
                 timeout=_HTTP_TIMEOUT,
+                max_field_size=64 * 1024,
             )
         return self._session
 
